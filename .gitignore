@@ -1,2 +1,5 @@
 # Database backups
 db-backup/
+
+# Prompt files
+docs/prompts/
