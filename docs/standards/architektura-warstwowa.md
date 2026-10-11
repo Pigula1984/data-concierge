@@ -19,13 +19,15 @@ To nie jest klasyczny CRUD, dlatego controllery są dwa rodzaje:
 1. **Controller zewnętrzny**: endpoint HTTP i CLI `ask(prompt, user, session_id?) → Response`. Buduje `RequestContext`, woła `AskService`, zamienia wyjątki na status `error`.
 2. **Narzędzia agenta (Pydantic AI tools)**: dla modelu są punktami wejścia tak samo jak endpoint dla klienta HTTP. Dlatego traktujemy je jak controllery: są **cienkie**, przyjmują i walidują argumenty od modelu, wołają serwis i zwracają DTO (`ResultSummary`) albo czytelny błąd do poprawki przez model. Logika (walidacja parametrów procedury, wstrzykiwanie `@UserId`, zapis do magazynu, proweniencja) siedzi w serwisach.
 
-Serwisy nie znają Pydantic AI, więc to warstwa narzędzi tłumaczy błędy domenowe (`SpecValidationError`, `ProcedureError`) na `ModelRetry`. Dzięki temu model dostaje komunikat jako błąd narzędzia i może poprawić wywołanie. Robi to wspólny dekorator `retry_on_domain_error` ([wzorce-projektowe.md, sekcja 10.2](wzorce-projektowe.md)), a nie `try/except` w każdym narzędziu. Tak samo endpoint tłumaczy wyjątki na status `error` w odpowiedzi.
+Serwisy nie znają Pydantic AI, więc to warstwa narzędzi tłumaczy błędy domenowe na wyjątki Pydantic AI. Błędy wejścia (`ParameterValidationError`, `SpecValidationError`, `UnknownHandleError`) stają się `ModelRetry`: model dostaje komunikat jako błąd narzędzia i może poprawić wywołanie. Błędy wykonania (`ProcedureError`, `ProcedureTimeoutError`) stają się `ToolFailed`, który nie zużywa budżetu ponowień i mówi modelowi, żeby nie powtarzał tego samego wywołania. Robi to wspólny dekorator `retry_on_domain_error` ([wzorce-projektowe.md, sekcja 10.2](wzorce-projektowe.md)), a nie `try/except` w każdym narzędziu. Tak samo endpoint tłumaczy wyjątki na status `error` w odpowiedzi.
+
+Narzędzia są funkcjami synchronicznymi. Pydantic AI uruchamia je w wątkach roboczych, więc serwisy, z których korzystają, muszą być bezpieczne przy wywołaniu z innego wątku (sekcja 11.2 architektury).
 
 ```python
 # controller: thin tool, delegates to the service; the decorator maps domain errors for the model
 @agent.tool
 @retry_on_domain_error
-async def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSummary:
+def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSummary:
     return ctx.deps.transform_service.apply(spec, ctx.deps.request)
 ```
 
@@ -33,9 +35,9 @@ async def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSu
 
 | Moduł | controller | service | repository |
 |-------|------------|---------|------------|
-| `api` | endpoint HTTP, CLI | `AskService` (fasada), `SessionService` | `SessionRepository` (historia rozmowy) |
-| `agent` | narzędzia: `transform`, `describe_result`, narzędzia procedur | `AgentService` (konfiguracja i uruchomienie pętli), `ResponseAssembler` | — |
-| `catalog` | — | `CatalogService` (walidacja YAML z metadanymi przy starcie), `ToolRegistry` | `CatalogRepository` (YAML), `ProcedureMetadataRepository` (metadane SQL Server) |
+| `api` | endpoint HTTP, CLI | `AskService` (fasada) | `SessionRepository` (sesje w pamięci procesu: historia rozmowy i połączenie DuckDB) |
+| `agent` | narzędzia: `transform`, `describe_result`, narzędzia procedur | `AgentService` (konfiguracja i uruchomienie pętli), `ResponseAssembler` (`AgentAnswer` → `Response`), `ToolRegistry` | — |
+| `catalog` | — | `CatalogService` (walidacja YAML z metadanymi przy starcie, zakresy danych) | `CatalogRepository` (YAML), `ProcedureMetadataRepository` (metadane SQL Server) |
 | `procedures` | — | `ProcedureService` (walidacja parametrów, `inject`, limity, proweniencja) | `ProcedureRepository` (adapter SQL Server) |
 | `results` | — | `ResultService` (zapis, odczyt i opis uchwytów: schemat, statystyki, podgląd) | `ResultStore` (tabele DuckDB pod uchwytami) |
 | `transform` | — | `TransformService` (walidacja specyfikacji → wykonanie → fakty) | `TransformExecutor` (DuckDB, później Polars) |
@@ -51,42 +53,48 @@ Silnik przekształceń trafia do warstwy repository, bo to on wykonuje zapytania
 - Moduł udostępnia na zewnątrz **serwisy i DTO** (przez `__init__.py`), nie repozytoria. Inny moduł nie sięga do cudzego repozytorium bezpośrednio.
 - Serwis może wołać serwis innego modułu (np. `ProcedureService` korzysta z `CatalogService`), ale bez cykli. Cykl oznacza, że granica modułów jest źle postawiona.
 - Wspólne typy domenowe (`TableSchema`, `ColumnType`, `ColumnRole`) i hierarchia wyjątków żyją w module `core`, który nie zależy od żadnego innego modułu.
-- Konfiguracja jest wczytywana raz i wstrzykiwana (propozycja: `pydantic-settings`). Żaden moduł nie czyta zmiennych środowiskowych samodzielnie.
+- Konfiguracja (`Settings` z `pydantic-settings`, moduł `core`) jest wczytywana raz w composition root i wstrzykiwana. Żaden moduł nie czyta zmiennych środowiskowych samodzielnie.
 
-## 5. Proponowany układ katalogów
+## 5. Układ katalogów
 
 ```
 src/data_concierge/
 ├── core/                  # shared domain types, errors, settings
-│   ├── types.py
+│   ├── types.py           # ColumnType, ColumnRole, TableSchema
 │   ├── errors.py
-│   └── settings.py
+│   ├── settings.py
+│   └── context.py         # RequestContext
 ├── catalog/
 │   ├── models.py          # CatalogEntry, ParamSpec, ColumnSpec
 │   ├── repository.py      # CatalogRepository, ProcedureMetadataRepository
-│   └── service.py         # CatalogService, ToolRegistry
+│   └── service.py         # CatalogService
 ├── procedures/
 │   ├── models.py
 │   ├── repository.py      # ProcedureRepository protocol + SqlServer adapter
 │   └── service.py         # ProcedureService
 ├── results/
-│   ├── models.py          # Handle, ResultTable, ResultSummary
+│   ├── models.py          # Handle, ResultTable, ResultSummary, Lineage
 │   ├── repository.py      # ResultStore protocol + DuckDB implementation (owns the connection)
 │   └── service.py         # ResultService
 ├── transform/
 │   ├── spec.py            # TransformSpec, step classes (discriminated union)
+│   ├── validator.py       # semantic validation, step by step
 │   ├── compiler.py        # SqlQueryBuilder, spec -> CompiledQuery
 │   ├── executor.py        # TransformExecutor protocol, DuckDBExecutor
 │   └── service.py         # TransformService
 ├── agent/
 │   ├── deps.py            # AgentDeps
 │   ├── tools.py           # tools = controllers for the model
-│   ├── service.py         # AgentService, ResponseAssembler
-│   └── prompts.py
+│   ├── registry.py        # ProcedureToolFactory, ToolRegistry
+│   ├── prompts.py
+│   ├── service.py         # AgentService
+│   └── assembler.py       # ResponseAssembler: AgentAnswer -> Response
 ├── api/
-│   ├── controller.py      # HTTP endpoint / CLI
+│   ├── controller.py      # HTTP endpoint
+│   ├── cli.py
 │   ├── schemas.py         # Response, request DTOs
-│   └── service.py         # AskService, SessionService
+│   ├── sessions.py        # SessionRepository
+│   └── service.py         # AskService
 └── bootstrap.py           # composition root: wires everything together
 
 tests/                     # mirrors src/data_concierge/

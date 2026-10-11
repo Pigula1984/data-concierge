@@ -13,7 +13,7 @@ execution: code
 
 - **Objective:** Właściciel projektu wysyła do backendu prośbę w języku naturalnym (P1–P4 z architektury) i dostaje JSON z danymi policzonymi deterministycznie, krótkim komentarzem i proweniencją. Po każdym etapie w repozytorium jest działający, przetestowany fragment systemu.
 - **Means:** sześć etapów, od deterministycznego rdzenia obliczeń bez bazy i modelu, przez SQL Server i agenta, do API i zestawu ewaluacyjnego (KTD1, KTD2).
-- **Authority:** `docs/architektura/001-architektura-data-concierge.md` jest źródłem prawdy o projekcie systemu. Ten plan ustala kolejność prac i decyzje techniczne. `CLAUDE.md` i `docs/standardy/` ustalają sposób pisania kodu. Gdy plan i architektura się rozjadą, najpierw aktualizujemy dokument architektury (wymóg `CLAUDE.md`), potem plan.
+- **Authority:** `docs/architecture/001-architektura-data-concierge.md` jest źródłem prawdy o projekcie systemu. Ten plan ustala kolejność prac i decyzje techniczne. `CLAUDE.md` i `docs/standards/` ustalają sposób pisania kodu. Gdy plan i architektura się rozjadą, najpierw aktualizujemy dokument architektury (wymóg `CLAUDE.md`), potem plan.
 - **Execution profile:** każdy etap to osobne uruchomienie `ce-work` na podstawie tego planu. Etap kończy się, gdy spełnia swoje kryteria z sekcji Definition of Done. Commity i PR robi się tylko na prośbę użytkownika.
 - **Stop conditions:** przerwij i zapytaj użytkownika, gdy:
   - sprawdzenie prototypowe obali decyzję techniczną (np. Haiku 5.5 odrzuca tryb `strict` albo ścieżka `DECIMAL` gubi precyzję),
@@ -214,7 +214,7 @@ src/data_concierge/
 tests/                        # mirrors src/data_concierge/, plus tests/evals/
 ```
 
-Układ modułów i warstw pochodzi z `docs/standardy/architektura-warstwowa.md` (sekcja 5). Różnice: `transform/validator.py` jako osobna klasa, `agent/registry.py` i `agent/assembler.py` jako osobne pliki, `api/sessions.py` i `api/cli.py`.
+Układ modułów i warstw pochodzi z `docs/standards/architektura-warstwowa.md` (sekcja 5). Różnice: `transform/validator.py` jako osobna klasa, `agent/registry.py` i `agent/assembler.py` jako osobne pliki, `api/sessions.py` i `api/cli.py`.
 
 ### Sequencing
 
@@ -233,8 +233,8 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
 
 ### Sources & Research
 
-- `docs/architektura/001-architektura-data-concierge.md`: projekt systemu (sekcje 1–13).
-- `docs/standardy/`: zasady kodu, warstwy i wzorce.
+- `docs/architecture/001-architektura-data-concierge.md`: projekt systemu (sekcje 1–13).
+- `docs/standards/`: zasady kodu, warstwy i wzorce.
 - Research bibliotek z 2026-10-11, testy na Pythonie 3.14.3 i lokalnym SQL Server z ODBC Driver 18:
   - Pydantic AI, narzędzia i `strict`: https://pydantic.dev/docs/ai/tools-toolsets/tools-advanced/
   - Pydantic AI, model Anthropic i wiązanie bloków myślenia: https://pydantic.dev/docs/ai/models/anthropic/
@@ -251,7 +251,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
 
 | U-ID | Tytuł | Główne pliki | Zależy od |
 |------|-------|--------------|-----------|
-| U1 | Aktualizacja architektury i standardów | `docs/architektura/001-architektura-data-concierge.md`, `docs/standardy/` | — |
+| U1 | Aktualizacja architektury i standardów | `docs/architecture/001-architektura-data-concierge.md`, `docs/standards/` | — |
 | U2 | Zależności, narzędzia, szkielet pakietu | `pyproject.toml`, `tests/conftest.py` | U1 |
 | U3 | Moduł core | `src/data_concierge/core/` | U2 |
 | U4 | Katalog agenta | `src/data_concierge/catalog/`, `catalog/agent-procedures.yaml` | U3 |
@@ -278,10 +278,10 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
 - **Requirements:** R6, R8, R9, R12, R15
 - **Dependencies:** brak
 - **Files:**
-  - `docs/architektura/001-architektura-data-concierge.md`
-  - `docs/standardy/architektura-warstwowa.md`
-  - `docs/standardy/wzorce-projektowe.md`
-  - `docs/standardy/python-czysty-kod.md`
+  - `docs/architecture/001-architektura-data-concierge.md`
+  - `docs/standards/architektura-warstwowa.md`
+  - `docs/standards/wzorce-projektowe.md`
+  - `docs/standards/python-czysty-kod.md`
 - **Approach:**
   1. Architektura v3.4, z wpisem w historii zmian. Sekcja 5.2: `data_range` wskazuje procedurę zakresu (KTD15). Sekcja 5.4: dochodzi `api.SalesOrder_DataRange`. Sekcja 5.5: same uprawnienia `EXECUTE` (KTD16), wymóg trybu mieszanego dla loginu SQL (KTD24) i `TrustServerCertificate` tylko lokalnie. Sekcja 6.1: polityka `strict` i jej budżet (KTD9). Sekcja 6.3: Pydantic AI obsługuje `defer_loading` na bezpośrednim Claude API, co jest kandydatem zamiast `find_procedures`. Sekcja 7.4: typy wynikowe `avg` i dzielenia (KTD7), `to_arrow_table()`, jawna rejestracja. Sekcja 11.2: `retries`, `ToolFailed`, kształt asynchroniczny (KTD12), limity czasu (KTD13). Sekcja 11.3: data w wiadomości użytkownika i wiązanie bloków myślenia (KTD11). Sekcja 13: odhaczone pozycje sprawdzone w researchu.
   2. Dalsze zmiany w architekturze. Sekcje 4, 6.2 i 11.2: agent zwraca `AgentAnswer`, a `ResponseAssembler` buduje `Response` (KTD17). Sekcje 4 i 7.6: proweniencja żyje przy uchwytach i nie jest osobnym komponentem (KTD18). Sekcja 7.2: `pivot` jako ostatni krok, reguła nazw nadawanych przez model i zakaz agregacji obciętych wyników (KTD22, KTD23). Sekcja 7.4: pełna kolejność wierszy (KTD21) i kompilacja `pivot` (KTD22).
@@ -327,7 +327,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   2. Hierarchia wyjątków od `DataConciergeError`: `ConfigurationError`, `CatalogError`, `ParameterValidationError`, `ProcedureError`, `ProcedureTimeoutError`, `SpecValidationError`, `UnknownHandleError`.
   3. `Settings` (pydantic-settings, prefiks zmiennych `DC_`): połączenie SQL, `TrustServerCertificate`, model, `effort`, przełącznik `strict`, limity z R9.
   4. `RequestContext`: `user_id`, `role`, `correlation_id`.
-- **Patterns to follow:** `docs/standardy/python-czysty-kod.md` (sekcje 2, 5, 6) i `docs/standardy/wzorce-projektowe.md` (sekcja 8).
+- **Patterns to follow:** `docs/standards/python-czysty-kod.md` (sekcje 2, 5, 6) i `docs/standards/wzorce-projektowe.md` (sekcja 8).
 - **Test scenarios:**
   - `ColumnType.parse("decimal(19,4)")` daje precyzję 19 i skalę 4 oraz typ Arrow `decimal128(19,4)`.
   - `ColumnType.parse("decimal(19)")` i `ColumnType.parse("money")` zgłaszają `CatalogError` z nazwą typu w komunikacie.
@@ -355,7 +355,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   1. Modele `Catalog`, `CatalogEntry`, `ParamSpec`, `ColumnSpec`, `DataRangeSpec`, `Example` odpowiadają polom z sekcji 5.2 architektury. `ParamSpec` ma `required` albo `inject`, a nigdy oba naraz.
   2. `YamlCatalogRepository.load()` czyta plik ścieżką z konfiguracji.
   3. Wpisy w pliku: `customer_search`, `customer_list`, `sales_order_list`, `sales_order_line_list`, `product_search`, `sales_order_data_range` (bez narzędzia dla modelu, tylko dla `data_range`, KTD15), `get_bill_of_materials`, `get_where_used_product`, `get_employee_managers`, `get_manager_employees`. Kolumny procedur `dbo.*` biorą się z ich obecnej definicji. Kolumny procedur `api.*` muszą zgadzać się ze skryptami z U8. Zgodność sprawdza U10.
-- **Patterns to follow:** Repository z `docs/standardy/wzorce-projektowe.md` (sekcja 1).
+- **Patterns to follow:** Repository z `docs/standards/wzorce-projektowe.md` (sekcja 1).
 - **Test scenarios:**
   - Plik katalogu z repozytorium wczytuje się bez błędów i ma unikalne nazwy narzędzi.
   - Wpis z parametrem oznaczonym jednocześnie `inject` i `required` zgłasza `CatalogError`.
@@ -381,7 +381,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   3. `ResultService.summarize(handle)` buduje `ResultSummary` z flagą `truncated` dziedziczoną z przodków (KTD23). Kolumny `time` i `measure` dostają min/max. Kolumny `dimension` dostają listę wartości, gdy jest ich najwyżej 20, a w przeciwnym razie liczbę różnych wartości. Podgląd ma do 10 wierszy, a przy wyniku do 50 wierszy cały wynik (R9).
   4. `ResultService.export(handle, max_rows)` zwraca dane tabeli dla odpowiedzi: wartości dziesiętne jako tekst ze skalą, daty w ISO, flaga `truncated` przy więcej niż 10 000 wierszy.
 - **Execution note:** zacznij od testu ścieżki `decimal128(19,4)` → DuckDB → Arrow → tekst JSON (KTD4). Jeśli skala się zmieni albo wartość przestanie być dokładna, zatrzymaj etap. Poszerzenie precyzji do 38 po agregacji jest znane z KTD6 i nie jest warunkiem stopu.
-- **Patterns to follow:** Repository i Value Object z `docs/standardy/wzorce-projektowe.md`.
+- **Patterns to follow:** Repository i Value Object z `docs/standards/wzorce-projektowe.md`.
 - **Test scenarios:**
   - Tabela z `Decimal("1234567.8900")` w kolumnie `decimal(19,4)` po zapisie i eksporcie daje tekst `"1234567.8900"`, a typ kolumny w DuckDB to `DECIMAL(19,4)`.
   - Kolejne zapisy w jednej sesji dostają uchwyty `r1`, `r2`, `r3`. Nowa sesja zaczyna od `r1`.
@@ -410,7 +410,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   3. Komunikat błędu podaje krok, kolumnę i dostępne alternatywy, zgodnie z przykładem z sekcji 7.3 architektury.
   4. `pivot` musi być ostatnim krokiem. Po nim wolno tylko `sort` po kolumnie wierszy i `limit`, a fakty nie mogą odwoływać się do kolumn obrotu (KTD22). Gdy statystyki źródła już pokazują więcej różnych wartości niż limit kolumn, walidator odrzuca `pivot` od razu. Pełne sprawdzenie limitu robi kompilator (U7).
   5. Nazwy nadawane przez model (aliasy w `derive` i `aggregate`, nazwy faktów) muszą pasować do `^[a-z][a-z0-9_]*$` (KTD22).
-- **Patterns to follow:** unia dyskryminowana z `docs/standardy/wzorce-projektowe.md` (sekcja 5). Walidacja należy do kroków, kompilacja do wykonawcy (wariant Visitor).
+- **Patterns to follow:** unia dyskryminowana z `docs/standards/wzorce-projektowe.md` (sekcja 5). Walidacja należy do kroków, kompilacja do wykonawcy (wariant Visitor).
 - **Test scenarios:**
   - Specyfikacja raportu miesięcznego z sekcji 10 architektury (P3) przechodzi walidację, a schemat końcowy to `month: date`, `net_sales: decimal(38,4)`, `order_count: int`.
   - `sum` na `CustomerName` zgłasza błąd z nazwą kroku i listą miar (`SubTotal`, `TotalDue`).
@@ -443,7 +443,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   3. `pivot` w dwóch zapytaniach według KTD22. Liczba wartości ponad limit zgłasza `SpecValidationError`.
   4. `DuckDBExecutor` implementuje `TransformExecutor` z sekcji 3 wzorców.
   5. `TransformService.apply(spec)`: odrzucenie operacji agregujących na obciętym źródle (KTD23), walidacja, kompilacja, wykonanie, zapis pod nowy uchwyt z `Lineage` (źródło, specyfikacja, SQL, `truncated`), wyliczenie faktów, zwrot `TransformSummary`.
-- **Patterns to follow:** Builder i Strategy z `docs/standardy/wzorce-projektowe.md` (sekcje 3 i 6). SQL z sekcji 7.4 architektury jako wzorzec wyniku dla P3.
+- **Patterns to follow:** Builder i Strategy z `docs/standards/wzorce-projektowe.md` (sekcje 3 i 6). SQL z sekcji 7.4 architektury jako wzorzec wyniku dla P3.
 - **Test scenarios:**
   - Raport P3 na syntetycznej tabeli zamówień z lukami w lutym i grudniu daje 12 wierszy, z zerami w pustych miesiącach i sumami równymi sumom liczonym ręcznie na `Decimal`.
   - SQL dla P3 zawiera tylko identyfikatory ze schematu w cudzysłowach, a daty jako parametry.
@@ -514,7 +514,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   3. Konwerter wyjściowy dla `datetimeoffset` (typ ODBC -155).
   4. `SqlServerMetadataRepository` czyta `sys.parameters` i `sys.dm_exec_describe_first_result_set_for_object` dla procedur z katalogu.
 - **Execution note:** zacznij od testu ścieżki `money` → `Decimal` → `decimal128(19,4)` na prawdziwej procedurze (KTD4).
-- **Patterns to follow:** Adapter z `docs/standardy/wzorce-projektowe.md` (sekcja 2).
+- **Patterns to follow:** Adapter z `docs/standards/wzorce-projektowe.md` (sekcja 2).
 - **Test scenarios (integracyjne):**
   - `sales_order_list` za styczeń 2024 zwraca tabelę z `SubTotal` jako `decimal128(19,4)` i `OrderDate` jako `date32`, z sumą równą zapytaniu kontrolnemu.
   - `max_rows` 100 dla wyniku 14 244 wierszy daje 100 wierszy i `truncated: true`.
@@ -583,7 +583,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   2. `strict` według ustawienia (KTD9). Narzędzie woła `ProcedureService` przez `ctx.deps` i jest opakowane dekoratorem z U13.
   3. `ToolRegistry` zwraca narzędzia w stałej kolejności (KTD11), bez wpisów, które nie są przeznaczone dla modelu (np. procedura zakresu).
 - **Execution note:** pierwszy test sprawdza, czy model parametrów utworzony w domknięciu daje poprawny schemat przy leniwych adnotacjach. Jeśli nie, przejdź na wariant zapasowy z KTD8.
-- **Patterns to follow:** Registry i Factory z `docs/standardy/wzorce-projektowe.md` (sekcja 4).
+- **Patterns to follow:** Registry i Factory z `docs/standards/wzorce-projektowe.md` (sekcja 4).
 - **Test scenarios:**
   - Schemat `sales_order_list` (odczytany przez `FunctionModel` z `info.function_tools`) ma `date_from`, `date_to`, `customer_id`, nie ma `user_id`, a `additionalProperties` ma wartość `false`.
   - `customer_id` ma postać `anyOf` z `integer` i `null`.
@@ -607,7 +607,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   1. `AgentDeps`: `RequestContext`, serwisy procedur, przekształceń i wyników sesji.
   2. `transform(spec)` deleguje do `TransformService`, a `describe_result(handle)` do `ResultService`.
   3. `retry_on_domain_error` według KTD10.
-- **Patterns to follow:** przykład narzędzia z `docs/standardy/architektura-warstwowa.md` (sekcja 2).
+- **Patterns to follow:** przykład narzędzia z `docs/standards/architektura-warstwowa.md` (sekcja 2).
 - **Test scenarios:**
   - `transform` ze specyfikacją z `sum` na kolumnie tekstowej kończy się `ModelRetry` z komunikatem walidatora.
   - `transform` na nieistniejącym uchwycie kończy się `ModelRetry` z listą uchwytów.
@@ -683,7 +683,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
   1. `SessionRepository` w pamięci (KTD19): historia wiadomości i magazyn wyników sesji. Nowy `session_id` jako UUID, gdy go brak. Nieznany `session_id` daje status `error` z informacją, że sesja wygasła, bo kontynuacja bez historii dałaby modelowi sam fragment rozmowy.
   2. Asynchroniczna metoda `AskService.ask` (KTD12) buduje `RequestContext`, dokleja datę bieżącą do promptu (KTD11), uruchamia agenta, składa odpowiedź i zapisuje historię.
   3. `bootstrap.build_app(settings)` składa obiekty: konfiguracja, repozytoria, walidacja katalogu (U10), serwisy, agent. Błąd walidacji zatrzymuje start.
-- **Patterns to follow:** Facade i Composition Root z `docs/standardy/wzorce-projektowe.md` (sekcje 7 i 9).
+- **Patterns to follow:** Facade i Composition Root z `docs/standards/wzorce-projektowe.md` (sekcje 7 i 9).
 - **Test scenarios:**
   - `ask` bez `session_id` zwraca nowy `session_id`, a drugie `ask` z nim widzi historię i uchwyty pierwszej tury.
   - Covers R2. `FunctionModel` odgrywa P2: pierwsza tura kończy się `needs_clarification`, a druga, z wybranym CustomerID, wywołaniem `sales_order_list` z tym id.
@@ -759,7 +759,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
 **Globalnie:**
 
 - Wszystkie bramki z Verification Contract właściwe dla etapu przechodzą.
-- Kod spełnia `docs/standardy/`: warstwy, `Protocol`, wstrzykiwanie przez konstruktor, nazwy i komentarze po angielsku.
+- Kod spełnia `docs/standards/`: warstwy, `Protocol`, wstrzykiwanie przez konstruktor, nazwy i komentarze po angielsku.
 - Dokument architektury zgadza się z kodem. Każde odejście zaczyna się od zmiany dokumentu.
 - W zmianach nie zostaje kod z porzuconych prób, zakomentowany kod ani nieużywane zależności.
 

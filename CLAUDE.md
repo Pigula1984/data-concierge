@@ -1,6 +1,6 @@
 # Data Concierge
 
-Backend asystenta AI: przyjmuje prompt użytkownika, wybiera procedurę składowaną z katalogu, wywołuje ją, deterministycznie liczy zestawienia (DuckDB) i zwraca JSON. Projekt systemu: [`docs/architektura/001-architektura-data-concierge.md`](docs/architektura/001-architektura-data-concierge.md). To źródło prawdy o architekturze; zmiany projektu zaczynamy od aktualizacji tego dokumentu.
+Backend asystenta AI: przyjmuje prompt użytkownika, wybiera procedurę składowaną z katalogu, wywołuje ją, deterministycznie liczy zestawienia (DuckDB) i zwraca JSON. Projekt systemu: [`docs/architecture/001-architektura-data-concierge.md`](docs/architecture/001-architektura-data-concierge.md). To źródło prawdy o architekturze; zmiany projektu zaczynamy od aktualizacji tego dokumentu.
 
 ## Język
 
@@ -27,12 +27,12 @@ Nie commitujemy bez prośby użytkownika.
 
 ## Kod: Python, obiektowo, czysto
 
-Obowiązują zasady z [`docs/standardy/`](docs/standardy/README.md). Najważniejsze:
+Obowiązują zasady z [`docs/standards/`](docs/standards/README.md). Najważniejsze:
 
 - Kod obiektowy: klasy z jedną odpowiedzialnością, zależności wstrzykiwane przez konstruktor, interfejsy jako `typing.Protocol`.
 - Czysty kod i DRY: małe funkcje, czytelne nazwy, brak duplikacji logiki, pełne type hints.
 - Modele danych i DTO na granicach warstw: Pydantic (niemutowalne, `frozen=True`, tam gdzie to możliwe).
-- Wzorce projektowe tylko tam, gdzie rozwiązują konkretny problem. Katalog wzorców dla tego projektu: [`docs/standardy/wzorce-projektowe.md`](docs/standardy/wzorce-projektowe.md).
+- Wzorce projektowe tylko tam, gdzie rozwiązują konkretny problem. Katalog wzorców dla tego projektu: [`docs/standards/wzorce-projektowe.md`](docs/standards/wzorce-projektowe.md).
 
 ## Architektura: controller → service → repository
 
@@ -42,7 +42,7 @@ Usługa jest modułowa (moduły według funkcji: `core`, `catalog`, `procedures`
 - **service**: logika biznesowa i orkiestracja.
 - **repository**: dostęp do danych (procedury składowane, magazyn wyników DuckDB, katalog YAML).
 
-Zależności idą tylko w jedną stronę: controller → service → repository. Szczegóły i przykłady: [`docs/standardy/architektura-warstwowa.md`](docs/standardy/architektura-warstwowa.md).
+Zależności idą tylko w jedną stronę: controller → service → repository. Szczegóły i przykłady: [`docs/standards/architektura-warstwowa.md`](docs/standards/architektura-warstwowa.md).
 
 ## Python, uv i ruff
 
