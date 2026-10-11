@@ -76,19 +76,16 @@ class ProcedureService:
 | Wersja Pythona | 3.14 (`requires-python = ">=3.14"`, `.python-version`) | `uv python pin 3.14` |
 | Zależności i środowisko | uv | `uv add`, `uv sync`, `uv run` |
 | Formatowanie i lint | ruff | `uv run ruff format`, `uv run ruff check --fix` |
+| Konfiguracja | pydantic-settings | `Settings` z prefiksem zmiennych `DC_`, wczytywane raz w composition root |
+| Typy | mypy w trybie strict z wtyczką Pydantic | `uv run mypy` (sprawdza `src` i `tests`) |
+| Testy | pytest | `uv run pytest` (domyślnie bez markerów `integration` i `eval`) |
+
+Testy integracyjne (`uv run pytest -m integration`) wymagają lokalnego SQL Server z wdrożoną bazą. Ewaluacja (`uv run pytest -m eval`) woła prawdziwe Claude API i wymaga klucza, więc nie działa w domyślnym przebiegu.
 
 **Ruff** to jedyne narzędzie do formatowania, sortowania importów i lintu (zastępuje black, isort, flake8). Konfiguracja w `pyproject.toml` (`[tool.ruff]`). Zasady:
 
 - Kod przed commitem przechodzi `uv run ruff format` i `uv run ruff check` bez błędów.
 - Nie wyłączamy reguł w kodzie (`# noqa`) bez komentarza, dlaczego. Wyjątki dla całych katalogów (np. `tests/`) ustawiamy w `per-file-ignores`.
 - Zestaw reguł rozszerzamy świadomie w `pyproject.toml`, a nie lokalnie w plikach.
-
-**Propozycje do zatwierdzenia:**
-
-| Cel | Narzędzie | Uruchomienie |
-|-----|-----------|--------------|
-| Konfiguracja | pydantic-settings | wczytywana raz w composition root |
-| Typy | mypy lub pyright | `uv run mypy src` |
-| Testy | pytest | `uv run pytest` |
 
 Narzędzia deweloperskie instalujemy jako zależności deweloperskie (`uv add --dev`), konfiguracja w `pyproject.toml`.

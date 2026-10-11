@@ -1,7 +1,7 @@
 # Data Concierge: opis architektury backendu (wersja 3, happy-flow tylko do odczytu)
 
-Status: opis koncepcji, bez implementacji. Data: 2026-10-10.
-Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (sekcja 14), sprawdzenie danych i metadanych w lokalnej bazie AdventureWorks2025.
+Status: opis koncepcji, implementacja w toku według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.4, data: 2026-10-11.
+Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (sekcja 14), research bibliotek z 2026-10-11, sprawdzenie danych i metadanych w lokalnej bazie AdventureWorks2025.
 
 > **Historia zmian.**
 > **v2:** źródłem danych jest katalog procedur składowanych, a nie zbiory danych sprzedaży. Stack: Python. Modele: wyłącznie Anthropic.
@@ -9,6 +9,7 @@ Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (
 > **v3.1:** model `claude-haiku-5-5` z `effort: medium`; specyfikacja obliczeń niezależna od silnika (DuckDB teraz, Polars jako możliwa wersja alternatywna); komentarz w v1 pisany przez model swobodnie, bez placeholderów i bez kontroli liczb (do zrobienia później, razem z ochroną przed prompt injection); projekt testowy z jednym właścicielem.
 > **v3.2:** pętla agenta na **Pydantic AI** zamiast samego Anthropic SDK (kod od razu gotowy na inne modele); filtrowanie po pobraniu w DuckDB/Polars jako przewidziane rozszerzenie (nie w v1); dedykowane konto SQL z minimalnymi uprawnieniami (sekcja 5.5); wyjaśnienie, czy DuckDB to sandbox (sekcja 7.4a).
 > **v3.3:** nazwy kolumn tworzonych w specyfikacji przekształceń (aliasy, fakty) po angielsku, np. `month`, `net_sales`; instalacja zależności przez uv.
+> **v3.4:** wnioski z researchu bibliotek (Pydantic AI 2.55.0, DuckDB 1.5.6, pyodbc 5.3.0, testy na lokalnym SQL Server) i z planu wdrożenia: (1) agent kończy turę wynikiem `AgentAnswer`, a `Response` składa `ResponseAssembler`; (2) proweniencja żyje przy uchwytach w magazynie wyników; (3) sesje w pamięci procesu za `SessionRepository`; (4) `data_range` czytany procedurą `api.SalesOrder_DataRange`; (5) konto `agent_reader` to login SQL (instancja w trybie mieszanym), a same uprawnienia `EXECUTE` wystarczają także do walidacji katalogu; (6) tryb `strict` tylko dla narzędzi procedur, z budżetem Anthropic; (7) `avg` i dzielenie rzutowane na `DECIMAL(38,6)`, pełna kolejność wierszy, kompilacja `pivot`, zakaz agregacji obciętych wyników; (8) narzędzia synchroniczne, limity czasu w sterownikach, błędy mapowane na `ModelRetry` albo `ToolFailed`; (9) stały początek rozmowy i data bieżąca w wiadomości użytkownika; (10) `find_procedures` poza v1, kandydatem na później jest `defer_loading`.
 
 ## 1. Cel i zakres
 
@@ -48,13 +49,14 @@ Poza zakresem v1: frontend, zapisy, procesy w tle, strażnicy, zatwierdzanie, ob
 | Decyzja | Wybór dla v1 | Dlaczego |
 |---------|--------------|----------|
 | Skąd agent wie o procedurach | **Osobny plik YAML z opisami pisanymi pod agenta** (kiedy użyć, kiedy nie, przykłady, powiązania), walidowany przy starcie z metadanymi bazy | Wąski, opisany kontekst poprawia trafność [1]. Opis techniczny procedury i opis dla agenta to różne rzeczy (sekcja 5.1). |
-| Jak model wywołuje procedury | Jedno narzędzie na procedurę, generowane z YAML, ze ścisłym schematem parametrów | Typowane parametry, walidacja przed wywołaniem, model nie wymyśla nazw [2]. |
-| Duża liczba procedur | Własne narzędzie `find_procedures` przeszukujące YAML | Działa z każdym modelem. Tool search z Claude API byłby wygodniejszy, ale jest specyficzny dla Anthropic (sekcja 6.3). |
+| Jak model wywołuje procedury | Jedno narzędzie na procedurę, generowane z YAML, ze ścisłym schematem parametrów. Tryb `strict` dostawcy tylko dla narzędzi procedur, sterowany ustawieniem. | Typowane parametry, walidacja przed wywołaniem, model nie wymyśla nazw [2]. Budżet trybu `strict` w Anthropic nie mieści specyfikacji `transform` (sekcja 6.1). |
+| Duża liczba procedur | W v1 bez wyszukiwania narzędzi: wszystkie definicje w kontekście | Przy kilkunastu procedurach to wystarcza. Gdy katalog urośnie: tool search Claude API (`defer_loading`, obsługiwany przez Pydantic AI) albo własne `find_procedures` (sekcja 6.3). |
 | Gdzie są dane | W magazynie wyników backendu, pod uchwytami. Model widzi schemat, statystyki i kilka wierszy. | Koszt, opóźnienie, limit kontekstu [4][5]. |
 | Jak liczyć | Model pisze **deklaratywną specyfikację przekształcenia** (JSON), backend ją waliduje, tłumaczy na SQL i wykonuje w **DuckDB**. Specyfikacja nie zależy od silnika, więc później można dodać wykonawcę w Polars. | Ten sam wynik dla tych samych danych i tej samej specyfikacji. Model wybiera „co”, kod liczy „ile”. |
 | Liczby w komentarzu | v1: model pisze komentarz swobodnie, korzystając z faktów policzonych przez backend. Bez kontroli. | Prostota na start. Ryzyko pomyłki przy przepisywaniu liczb jest znane i odłożone na później (sekcja 7.5). |
 | Pętla agenta | **Pydantic AI** z modelem `anthropic:claude-haiku-5-5` | Jeden kod dla wielu dostawców (zmiana modelu = zmiana konfiguracji) [6]. Vercel AI SDK jest w TypeScript, więc nie pasuje do backendu w Pythonie (sekcja 11). |
-| Uprawnienia DB | Dedykowane konto SQL z samym `EXECUTE` na wybranych procedurach, bez dostępu do tabel, od v1 | Przy dostępie wyłącznie przez procedury kosztuje to tyle samo co konto read-only (sekcja 5.5). |
+| Koniec tury | Model zwraca `AgentAnswer` (status, komentarz, uchwyty, założenia, pytanie), a `ResponseAssembler` dokleja dane uchwytów i proweniencję | Model nie przepisuje danych tabel, więc nie może ich przekłamać (sekcje 6.2 i 9). |
+| Uprawnienia DB | Dedykowany login SQL `agent_reader` z samym `EXECUTE` na wybranych procedurach, bez dostępu do tabel, od v1 | Przy dostępie wyłącznie przez procedury kosztuje to tyle samo co konto read-only. Te same uprawnienia wystarczają do walidacji katalogu przy starcie (sekcja 5.5). |
 
 ## 4. Komponenty
 
@@ -68,10 +70,9 @@ flowchart LR
     CAT["Katalog agenta<br/>(YAML + walidacja z metadanymi DB)"]
     EXE["Wykonawca procedur<br/>(adapter per silnik)"]
     DB[("Baza<br/>procedury, konto EXECUTE")]
-    RS["Magazyn wyników<br/>(uchwyty, tabele DuckDB)"]
+    RS["Magazyn wyników<br/>(uchwyty, tabele DuckDB,<br/>pochodzenie uchwytów)"]
     TR["Silnik przekształceń<br/>(walidacja → SQL → DuckDB)"]
-    OUT["Składanie odpowiedzi<br/>(komentarz, dane, proweniencja)"]
-    PROV["Proweniencja"]
+    OUT["Składanie odpowiedzi<br/>(AgentAnswer → Response)"]
 
     C --> API --> LOOP
     LOOP <--> LLM
@@ -83,22 +84,20 @@ flowchart LR
     LOOP --> OUT
     OUT --> RS
     OUT --> API
-    EXE --> PROV
-    TR --> PROV
-    PROV --> OUT
 ```
 
 | Komponent | Odpowiedzialność |
 |-----------|------------------|
-| **Backend API** | `ask(prompt, user, session_id?) → Response`. Buduje `RequestContext` (user_id, role, id korelacji), trzyma historię sesji (potrzebna przy pytaniach doprecyzowujących). W v1 może to być funkcja Pythona i cienki endpoint HTTP. |
-| **Pętla agenta** | Agent Pydantic AI: wysyła rozmowę do modelu, wykonuje wywołania narzędzi, pilnuje limitu kroków, kończy wynikiem `present_result` (typ `Response`). Bez logiki biznesowej. |
+| **Backend API** | `ask(prompt, user, session_id?) → Response`. Buduje `RequestContext` (user_id, role, id korelacji). Trzyma sesje w pamięci procesu za interfejsem `SessionRepository`: sesja ma historię wiadomości Pydantic AI i własne połączenie DuckDB z uchwytami, więc uchwyty z poprzedniej tury są dostępne po pytaniu doprecyzowującym. Restart procesu czyści sesje. W v1 to funkcja Pythona, CLI i cienki endpoint HTTP. |
+| **Pętla agenta** | Agent Pydantic AI: wysyła rozmowę do modelu, wykonuje wywołania narzędzi, pilnuje limitu kroków, kończy wynikiem `present_result` (typ `AgentAnswer`). Bez logiki biznesowej. |
 | **Katalog agenta** | Plik YAML: opisy procedur pod agenta, parametry, kolumny wyniku z typami i rolami (sekcja 5). |
 | **Rejestr narzędzi** | Generuje definicje narzędzi z YAML, waliduje parametry, dokleja parametry wstrzykiwane przez backend (np. `@UserId`). |
 | **Wykonawca procedur** | `EXEC` z parametrami, limit wierszy i czasu, zamiana wyniku na tabelę z typami z katalogu (bez utraty precyzji), zapis do magazynu. Jedyny komponent zależny od silnika bazy. |
-| **Magazyn wyników** | Wyniki sesji pod uchwytami `r1`, `r2`… jako tabele w DuckDB (w pamięci procesu), ze schematem i statystykami. |
+| **Magazyn wyników** | Wyniki sesji pod uchwytami `r1`, `r2`… jako tabele w DuckDB (w pamięci procesu), ze schematem, statystykami i pochodzeniem każdego uchwytu: wywołaniem procedury albo krokiem `transform` ze źródłem, specyfikacją i SQL. |
 | **Silnik przekształceń** | Waliduje specyfikację względem schematu uchwytu, tłumaczy ją na SQL DuckDB i wykonuje (sekcja 7). |
-| **Składanie odpowiedzi** | Łączy komentarz modelu z pełnymi danymi wskazanych uchwytów i proweniencją. Docelowo także kontrola liczb w komentarzu (sekcja 7.5). |
-| **Proweniencja** | Zapisuje każde wywołanie procedury, każdą specyfikację i wygenerowany SQL. Pozwala odtworzyć wynik bez modelu. Zalążek logu audytowego. |
+| **Składanie odpowiedzi** | `ResponseAssembler`: z `AgentAnswer` od modelu buduje `Response` (sekcja 9). Dokleja pełne dane wskazanych uchwytów i proweniencję, czyli łańcuch pochodzenia tych uchwytów. Docelowo także kontrola liczb w komentarzu (sekcja 7.5). |
+
+Proweniencja nie jest osobnym komponentem. Magazyn wyników zapisuje pochodzenie przy każdym uchwycie, a składanie odpowiedzi odczytuje łańcuch zwracanych uchwytów (sekcja 7.6). Ten łańcuch pozwala odtworzyć wynik bez modelu i jest zalążkiem logu audytowego.
 
 ## 5. Katalog agenta (YAML)
 
@@ -154,7 +153,7 @@ Dokumentacja techniczna procedury („zwraca nagłówki zamówień z kolumnami�
     - {name: Territory,    type: string,        role: dimension}
     - {name: SubTotal,     type: decimal(19,4), role: measure,   hint: Sprzedaż netto, bez podatku i frachtu, default_for: [sprzedaż]}
     - {name: TotalDue,     type: decimal(19,4), role: measure,   hint: Kwota z podatkiem i frachtem}
-  data_range: {column: OrderDate}           # min/max odczytywane przy starcie
+  data_range: {procedure: api.SalesOrder_DataRange}  # min/max read once at startup
   examples:
     - prompt: "sprzedaż za I kwartał 2025"
       call: {date_from: 2025-01-01, date_to: 2025-04-01, customer_id: null}
@@ -170,7 +169,7 @@ Pola istotne dla agenta:
 - **`role` kolumny** (`id`, `dimension`, `measure`, `time`) mówi silnikowi przekształceń, co wolno z kolumną zrobić: sumować można tylko `measure`, ziarno czasu stosować tylko do `time`.
 - **`default_for`** rozstrzyga typowe niejednoznaczności („sprzedaż” = SubTotal). Agent pokazuje to w `assumptions`.
 - **`inject`** oznacza parametry doklejane przez backend (tożsamość). Model ich nie widzi ani nie ustawia.
-- **`data_range`** trafia do kontekstu modelu. Względne okresy poza zakresem danych kończą się statusem `no_data` z informacją o dostępnym zakresie.
+- **`data_range`** wskazuje procedurę zakresu, która zwraca min/max dat. Konto agenta nie ma `SELECT` na tabelach, więc zakresu nie da się odczytać z kolumny. Zakres jest wspólny dla wszystkich użytkowników i czytany raz przy starcie, bez kontekstu żądania. Trafia do kontekstu modelu. Względne okresy poza zakresem danych kończą się statusem `no_data` z informacją o dostępnym zakresie.
 - **`examples`** to przykłady pytanie → wywołanie. Pełnią rolę few-shot, podobnie jak przykłady w Fabric data agent [1], i od razu nadają się do zestawu testów.
 
 Każdy filtr potrzebny użytkownikom musi istnieć jako parametr procedury. Gdy agent dostaje prośbę z filtrem, którego żadna procedura nie obsługuje, zwraca `unsupported` z wyjaśnieniem. Lista takich odmów to gotowa informacja, jakie parametry warto dodać do procedur.
@@ -179,11 +178,13 @@ Każdy filtr potrzebny użytkownikom musi istnieć jako parametr procedury. Gdy 
 
 | Element | Źródło w bazie | Uwagi |
 |---------|----------------|-------|
-| Parametry (nazwa, typ) | `sys.parameters` | Sprawdzone: działa dla wszystkich procedur w bazie. |
-| Kolumny wyniku (nazwa, typ) | `sys.dm_exec_describe_first_result_set_for_object` | Sprawdzone na `dbo.uspGetEmployeeManagers` (zwraca 7 kolumn z typami). Nie działa dla procedur z tabelami tymczasowymi, dynamicznym SQL lub wieloma zestawami wyników. Wtedy obowiązuje lista z YAML, sprawdzana przy pierwszym wywołaniu. |
+| Parametry (nazwa, typ) | `sys.parameters` | Sprawdzone: działa dla wszystkich procedur w bazie. `has_default_value` jest dla procedur T-SQL zawsze 0, więc o tym, który parametr jest opcjonalny, rozstrzyga YAML. |
+| Kolumny wyniku (nazwa, typ) | `sys.dm_exec_describe_first_result_set_for_object` | Sprawdzone na `dbo.uspGetEmployeeManagers` (zwraca 7 kolumn z typami). Nie działa dla procedur z tabelami tymczasowymi, dynamicznym SQL lub wieloma zestawami wyników. Nowe procedury `api.*` piszemy bez nich. Dla istniejących procedur, których nie da się opisać, obowiązuje lista z YAML, sprawdzana przy pierwszym wywołaniu. |
 | Opisy pod agenta | tylko YAML | W bazie procedury nie mają `MS_Description` (0 extended properties). |
 
-Przy starcie backend porównuje YAML z bazą. Brakująca procedura, inny typ parametru albo niezgodna lista kolumn to błąd konfiguracji, a nie niespodzianka w rozmowie. Ten sam mechanizm może wygenerować szkielet wpisu YAML dla nowej procedury (parametry i kolumny), a człowiek dopisuje opisy pod agenta.
+Typy z bazy porównujemy z typami z YAML przez jedną tabelę równoważności, np. `money` = `decimal(19,4)`, `smallmoney` = `decimal(10,4)`, `smallint` = `int`, `nvarchar(n)` = `string`, `datetime2` = `datetime`. Typ bez odpowiednika (np. `xml`) to błąd katalogu.
+
+Przy starcie backend porównuje YAML z bazą. Brakująca procedura, inny typ parametru albo niezgodna lista kolumn to błąd konfiguracji, a nie niespodzianka w rozmowie. Ten sam mechanizm mógłby wygenerować szkielet wpisu YAML dla nowej procedury (parametry i kolumny), a człowiek dopisałby opisy pod agenta. W v1 tego nie budujemy, bo przy kilkunastu procedurach wpisy pisze się ręcznie.
 
 ### 5.4. Zestaw procedur do testów na AdventureWorks2025
 
@@ -200,6 +201,7 @@ W bazie są 4 procedury zwracające dane i 6 procedur zapisu lub pomocniczych. D
 | `api.SalesOrder_List(@DateFrom, @DateTo, @CustomerID)` | nowa | nagłówki zamówień z klientem i terytorium |
 | `api.SalesOrderLine_List(@DateFrom, @DateTo, @CustomerID, @ProductCategoryID)` | nowa | pozycje z produktem, podkategorią i kategorią |
 | `api.Product_Search(@Name)` | nowa | produkty pasujące do nazwy (potrzebne do P4) |
+| `api.SalesOrder_DataRange()` | nowa | min/max `OrderDate` zamówień dla `data_range`. Jedyna procedura bez `@UserId`, bo zakres jest wspólny i czytany przy starcie. |
 | `uspUpdateEmployee*`, `uspLogError`, `uspPrintError` | pominięte | zapis lub obsługa błędów (`access: write`, poza v1) |
 
 Fakty z bazy, które wpływają na projekt:
@@ -211,19 +213,23 @@ Fakty z bazy, które wpływają na projekt:
 
 ### 5.5. Konto bazodanowe agenta
 
-Backend łączy się z SQL Server dedykowanym kontem (np. login i użytkownik `agent_reader`), używanym tylko przez agenta:
+Backend łączy się z SQL Server dedykowanym kontem, używanym tylko przez agenta: login SQL z hasłem i użytkownik w bazie, oba o nazwie `agent_reader`.
 
+- Login SQL wymaga instancji w trybie mieszanym (`SERVERPROPERTY('IsIntegratedSecurityOnly') = 0`). Skrypt wdrożeniowy sprawdza tryb i kończy się czytelnym komunikatem, gdy instancja przyjmuje tylko logowanie Windows.
 - `GRANT EXECUTE ON SCHEMA::api TO agent_reader` dla nowych procedur oraz `GRANT EXECUTE` osobno na każdą z czterech istniejących procedur odczytu w `dbo`.
 - Brak `SELECT` na tabelach i widokach, brak ról typu `db_datareader`, brak uprawnień do procedur zapisu.
 - Procedury i tabele mają tego samego właściciela (`dbo`), więc procedura czyta tabele dzięki mechanizmowi ownership chaining, choć konto samo nie ma do nich dostępu. Wyjątek: procedury z dynamicznym SQL (`sp_executesql`) przerywają ten łańcuch i wymagałyby `EXECUTE AS` lub podpisu certyfikatem. Nowe procedury piszemy więc bez dynamicznego SQL.
 - Hasło lub inny sekret konta trzymamy w konfiguracji backendu, nigdy w prompcie. Model nie zna danych logowania i nie ma narzędzia, które by je ujawniało.
-- Do walidacji katalogu przy starcie (sekcja 5.3) potrzebny jest odczyt metadanych procedur. Najprościej użyć do tego osobnego konta technicznego albo dać `VIEW DEFINITION` na schemacie `api`. Do sprawdzenia w prototypie, co minimalnie wystarcza.
+- Do walidacji katalogu przy starcie (sekcja 5.3) wystarczą same uprawnienia `EXECUTE`. Sprawdzone na lokalnym SQL Server: użytkownik z samym `EXECUTE` widzi `sys.parameters` i wynik `sys.dm_exec_describe_first_result_set_for_object` dla procedur, które może wykonać. Osobne konto techniczne ani `VIEW DEFINITION` nie są potrzebne.
+- ODBC Driver 18 domyślnie szyfruje połączenie i sprawdza certyfikat serwera. `TrustServerCertificate=yes` (zaufanie do certyfikatu samopodpisanego) włącza ustawienie konfiguracji i używamy go tylko lokalnie.
 
 ## 6. Narzędzia widziane przez model
 
 ### 6.1. Narzędzia procedur (generowane)
 
-Każda procedura z katalogu to osobne narzędzie, np. `sales_order_list`. Opis narzędzia składa się z `summary`, `use_when`, `not_for`, `grain` i zakresu danych. Schemat parametrów pochodzi z `params` i jest ścisły (`additionalProperties: false`, a jeśli framework i model na to pozwalają, także tryb `strict` dostawcy). Backend i tak sprawdza zakresy i wartości, a błąd wraca do modelu jako `tool_result` z `is_error` i czytelnym opisem.
+Każda procedura z katalogu to osobne narzędzie, np. `sales_order_list`. Opis narzędzia składa się z `summary`, `use_when`, `not_for`, `grain` i zakresu danych. Parametry opisuje model Pydantic budowany z `params` (`pydantic.create_model`) dla każdego wpisu katalogu. Ten sam model daje schemat narzędzia (`additionalProperties: false`) i walidację argumentów, a błąd walidacji Pydantic AI sam odsyła do modelu jako prośbę o poprawkę. Parametry `inject` nie trafiają do schematu. Pola opcjonalne mają kształt `anyOf` z `null` i wartość domyślną `null`. Backend dodatkowo sprawdza zakresy i wartości, a błąd wraca do modelu jako błąd narzędzia z czytelnym opisem (sekcja 11.2).
+
+**Tryb `strict` dostawcy** włączamy tylko dla narzędzi procedur, przełącznikiem w konfiguracji. Anthropic dopuszcza w jednym żądaniu 20 narzędzi `strict`, 24 parametry opcjonalne i 16 parametrów z unią, liczone łącznie dla wszystkich narzędzi `strict`. Unia kroków specyfikacji przekroczyłaby ten budżet, więc `transform` i `present_result` nie są `strict`. Tryb `strict` nie egzekwuje też `const`, `minimum` ani `maxLength`, dlatego walidacja w backendzie jest obowiązkowa niezależnie od trybu. Przekroczenie budżetu kończy każde żądanie błędem 400, więc test jednostkowy sprawdza budżet na katalogu z repozytorium.
 
 ```json
 {
@@ -235,9 +241,9 @@ Każda procedura z katalogu to osobne narzędzie, np. `sales_order_list`. Opis n
     "properties": {
       "date_from":   {"type": "string", "format": "date", "description": "Początek okresu, włącznie. Dla „2024” podaj 2024-01-01."},
       "date_to":     {"type": "string", "format": "date", "description": "Koniec okresu, wyłącznie. Dla „2024” podaj 2025-01-01."},
-      "customer_id": {"type": ["integer", "null"], "description": "Id klienta wyłącznie z wyniku customer_search."}
+      "customer_id": {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": null, "description": "Id klienta wyłącznie z wyniku customer_search."}
     },
-    "required": ["date_from", "date_to", "customer_id"],
+    "required": ["date_from", "date_to"],
     "additionalProperties": false
   }
 }
@@ -263,13 +269,13 @@ Wynik wywołania procedury zwracany modelowi (nie pełne dane):
 |-----------|------|
 | `transform` | Przyjmuje specyfikację przekształcenia (sekcja 7) dla uchwytu i zwraca nowy uchwyt z podglądem i faktami. |
 | `describe_result` | Pełny schemat i statystyki uchwytu (gdy podgląd nie wystarcza). |
-| `present_result` | Koniec tury: status, komentarz, uchwyty do zwrócenia, założenia, ewentualne pytanie doprecyzowujące (sekcja 9). W Pydantic AI to nie zwykłe narzędzie, tylko **typ wyniku agenta** (`output_type`): framework udostępnia go modelowi jako specjalne narzędzie wyjściowe (nazwę `present_result` można mu nadać przez `ToolOutput`) i sam prosi o poprawkę, gdy odpowiedź nie pasuje do schematu [6]. |
+| `present_result` | Koniec tury: wynik `AgentAnswer` ze statusem, komentarzem, uchwytami do zwrócenia (z tytułami tabel), założeniami i ewentualnym pytaniem doprecyzowującym. W Pydantic AI to nie zwykłe narzędzie, tylko **typ wyniku agenta** (`output_type=ToolOutput(AgentAnswer, name="present_result")`): framework udostępnia go modelowi jako specjalne narzędzie wyjściowe i sam prosi o poprawkę, gdy odpowiedź nie pasuje do schematu [6]. `AgentAnswer` nie zawiera danych tabel. Pełną odpowiedź (sekcja 9) buduje z niego `ResponseAssembler`. |
 
 ### 6.3. Gdy procedur jest dużo
 
-Dopóki procedur jest kilkanaście, wszystkie definicje mieszczą się w kontekście i są cache'owane (prompt caching). Gdy katalog urośnie, model dostaje na start tylko narzędzie `find_procedures(query)`, które przeszukuje `summary`, `use_when` i `synonyms` z YAML i zwraca kilka pasujących procedur. Narzędzia znalezionych procedur są udostępniane w kolejnym kroku (zestaw narzędzi ustalany dynamicznie, do sprawdzenia, jak najprościej zrobić to w Pydantic AI). Rozwiązanie działa z każdym modelem.
+Dopóki procedur jest kilkanaście, wszystkie definicje mieszczą się w kontekście i są cache'owane (prompt caching). W v1 nie budujemy wyszukiwania narzędzi.
 
-Claude API ma do tego wbudowany **tool search** (`defer_loading`) [8], ale dokumentacja Pydantic AI opisuje tool search tylko dla Claude na Bedrock, a nie dla bezpośredniego Claude API. Na teraz zostajemy przy własnym `find_procedures`. Próg przełączenia trzeba zmierzyć na zestawie testowym.
+Gdy katalog urośnie, kandydatem jest wbudowany **tool search** Claude API (`defer_loading`) [8]. Research z 2026-10-11 potwierdził, że Pydantic AI obsługuje `defer_loading` także na bezpośrednim Claude API, a nie tylko na Bedrock. Dla dostawców bez tool search zostaje własne narzędzie `find_procedures(query)`, które przeszukuje `summary`, `use_when` i `synonyms` z YAML i zwraca kilka pasujących procedur, a ich narzędzia są udostępniane w kolejnym kroku. Próg przełączenia trzeba zmierzyć na zestawie ewaluacyjnym.
 
 ## 7. Deterministyczne obliczenia: jak to zrobić
 
@@ -294,15 +300,21 @@ Specyfikacja to lista kroków nad jednym uchwytem. Zestaw kroków jest zamknięt
 | `sort`, `limit` | Kolejność i top N (np. 10 najlepszych klientów) | `{"by": [{"column": "net_sales", "dir": "desc"}]}`, `{"n": 10}` |
 | `select` | Wybór i zmiana nazw kolumn w wyniku | `{"columns": {"CustomerName": "Customer"}}` |
 
-Do tego sekcja `facts`, czyli nazwane wartości skalarne liczone z wyniku (`sum`, `avg`, `min`, `max`, `argmax`, `count`). Tylko z nich model może korzystać w komentarzu.
+Do tego sekcja `facts`, czyli nazwane wartości skalarne liczone z wyniku (`sum`, `avg`, `min`, `max`, `argmax`, `count`). Tylko z nich model może korzystać w komentarzu. `argmax` przy remisie zwraca najmniejszą wartość kolumny `return`, więc wynik nie zależy od kolejności wierszy.
+
+Reguły języka:
+
+- **Nazwy nadawane przez model** (aliasy w `derive` i `aggregate`, nazwy faktów) muszą pasować do `^[a-z][a-z0-9_]*$`.
+- **`pivot` jest ostatnim krokiem.** Po nim wolno tylko `sort` po kolumnie wierszy i `limit`. Nazwy kolumn obrotu pochodzą z wartości danych, więc walidator nie zna ich przed wykonaniem.
+- **Obcięty wynik procedury nie trafia do agregacji.** Flaga `truncated` przechodzi na każdy uchwyt pochodny. `aggregate`, `pivot`, `fill_periods` i `facts` na uchwycie z obciętym przodkiem kończą się błędem walidacji z prośbą o zawężenie parametrów procedury. Suma z obciętych danych wyglądałaby na pełną, a np. wszystkie pozycje zamówień z całego zakresu (121 317) przekraczają domyślne `max_rows` 100 000. Pozostałe kroki przenoszą flagę do wyniku i do `truncated` tabeli w odpowiedzi.
 
 **Przewidziane rozszerzenie: `filter`.** Filtr wierszy na pobranych danych (porównania, `in`, `between`, `is_null`, łączone `and`/`or`), np. `{"column": "CustomerType", "in": ["store"]}`, dla filtrów, których procedura nie ma jako parametru. Wchodzi do języka specyfikacji bez zmian w architekturze: walidacja sprawdza kolumny i typy, a wykonawca dodaje `WHERE` (DuckDB) lub `.filter()` (Polars). W YAML procedura dostanie wtedy listę kolumn, po których wolno filtrować w backendzie (`app_filters`). Warunek: procedura nadal musi mieć sensowne parametry zawężające (np. okres), bo filtr w backendzie oznacza pobranie większej liczby wierszy, a `max_rows` i flaga `truncated` pilnują, żeby wynik nie był po cichu niepełny. W v1 krok `filter` jest wyłączony. Nie ma też `join` dwóch uchwytów. Oba dojdą, gdy konkretna prośba będzie ich wymagać.
 
 ### 7.3. Walidacja przed wykonaniem
 
-1. **Schemat:** specyfikacja jest modelem Pydantic (unia dyskryminowana po `op`). Z niego generowany jest `input_schema` narzędzia `transform`. Czy cały schemat mieści się w ograniczeniach trybu `strict`, trzeba sprawdzić w prototypie. Jeśli nie, zostaje walidacja Pydantic po stronie backendu.
-2. **Semantyka, krok po kroku:** walidator śledzi schemat po każdym kroku. Sprawdza, czy kolumna istnieje (także ta utworzona w poprzednim kroku), czy `sum`/`avg` dotyczy kolumny `measure` o typie liczbowym, czy `date_trunc` dotyczy kolumny `time` i czy `pivot` nie wygeneruje setek kolumn (limit).
-3. **Błąd wraca do modelu** jako `tool_result` z `is_error: true` i konkretnym komunikatem, np. „`sum` wymaga kolumny liczbowej; `CustomerName` to `string`. Dostępne miary: SubTotal, TotalDue”. Model poprawia specyfikację w kolejnym kroku pętli.
+1. **Schemat:** specyfikacja jest modelem Pydantic (unia dyskryminowana po `op`). Z niego generowany jest `input_schema` narzędzia `transform`. Narzędzie `transform` nie używa trybu `strict`, bo unia kroków przekracza budżet Anthropic (sekcja 6.1). Walidację schematu robi Pydantic po stronie backendu.
+2. **Semantyka, krok po kroku:** walidator śledzi schemat i typy kolumn po każdym kroku. Sprawdza, czy kolumna istnieje (także ta utworzona w poprzednim kroku), czy `sum`/`avg` dotyczy kolumny `measure` o typie liczbowym, czy `date_trunc` dotyczy kolumny `time`, czy nazwy nadane przez model są poprawne, czy `pivot` jest ostatnim krokiem i czy uchwyt źródłowy nie ma obciętego przodka (reguły z sekcji 7.2). Limit kolumn `pivot` sprawdza kompilator, gdy pobierze wartości kolumny obrotu (sekcja 7.4).
+3. **Błąd wraca do modelu** jako błąd narzędzia z prośbą o poprawkę (`ModelRetry`, sekcja 11.2) i konkretnym komunikatem, np. „`sum` wymaga kolumny liczbowej; `CustomerName` to `string`. Dostępne miary: SubTotal, TotalDue”. Model poprawia specyfikację w kolejnym kroku pętli.
 
 ### 7.4. Silnik: DuckDB
 
@@ -324,9 +336,28 @@ Polars jest bardzo szybki i popularny, ale na start nie daje nic ponad DuckDB, a
 
 **Jak to działa w praktyce:**
 
-1. Wykonawca procedur odbiera wiersze (pyodbc zwraca `Decimal` dla `money`/`decimal` i `date`/`datetime` dla dat), buduje tabelę z typami z katalogu (np. Arrow z `decimal128(19,4)`) i rejestruje ją w DuckDB jako `r1`.
-2. Silnik przekształceń tłumaczy zwalidowaną specyfikację na zapytanie. Nazwy kolumn pochodzą wyłącznie ze schematu uchwytu (biała lista, cytowane identyfikatory), a wartości idą jako parametry zapytania. Model nigdy nie dostarcza tekstu SQL.
-3. Wynik zapisuje się jako `r2`, razem z wygenerowanym SQL w proweniencji.
+1. Wykonawca procedur wywołuje procedurę przez pyodbc w postaci `SET NOCOUNT ON; EXEC <proc> @Name = ?, ...` i odbiera wiersze (pyodbc zwraca `Decimal` dla `money`/`decimal` i `date`/`datetime` dla dat). Z `fetchall()` buduje tabelę Arrow z typami z katalogu (np. `decimal128(19,4)`, `date32`). Odrzucona alternatywa: `arrow-odbc`, które przyjmuje parametry tylko jako tekst i otwiera połączenie z ciągu znaków przy każdym wywołaniu. Przy wynikach rzędu kilkudziesięciu tysięcy wierszy budowa kolumn z `fetchall()` wystarcza.
+2. Magazyn wyników zapisuje tabelę w DuckDB jako `r1`. Zablokowane połączenie nie skanuje zmiennych Pythona, więc rejestracja jest jawna: `register`, potem `CREATE TABLE r1 AS SELECT …`, potem `unregister`. DuckDB zachowuje `DECIMAL(19,4)`, a wynik odczytany przez `to_arrow_table()` ma typy dziesiętne, np. suma kwot `decimal128(38,4)` (sprawdzone na DuckDB 1.5.6).
+3. Silnik przekształceń tłumaczy zwalidowaną specyfikację na zapytanie. Nazwy kolumn pochodzą wyłącznie ze schematu uchwytu (biała lista, cytowane identyfikatory), a wartości idą jako parametry zapytania. Model nigdy nie dostarcza tekstu SQL.
+4. Wynik zapisuje się jako `r2`, a przy uchwycie jego pochodzenie: źródło, specyfikacja i wygenerowany SQL (sekcja 7.6).
+
+**Typy wynikowe.** Walidator liczy typ każdej kolumny wyniku. Operacje, które w DuckDB dają `DOUBLE`, kompilator rzutuje na `DECIMAL(38,6)`:
+
+```text
+aggregate.measures[i].fn:
+  sum | min | max          -> type of the source column (sum widens to DECIMAL(38,s))
+  count | count_distinct   -> int
+  avg                      -> DECIMAL(38,6)   # CAST added by the compiler
+derive.fn = arithmetic:
+  + | - | *                -> DECIMAL per DuckDB rules
+  /                        -> DECIMAL(38,6)   # CAST added by the compiler
+```
+
+Suma pod `avg` jest dokładna, więc wynik nie zależy od kolejności wierszy. Stała skala 6 wystarcza dla v1. Pole skali w specyfikacji dodamy, gdy zażąda tego konkretna prośba.
+
+**Pełna kolejność wierszy.** Kompilator dokleja do końcowego `ORDER BY`, po kluczach `sort` albo kluczach grupowania, wszystkie pozostałe kolumny wyniku w kolejności schematu. `limit` działa po tym porządku. Bez tego remisy w `sort` (np. trzech klientów „Mohamed Pal”, równe `net_sales`) dają przy `threads = 2` różną kolejność i różne top N między uruchomieniami.
+
+**Kompilacja `pivot`.** `pivot` to agregacja warunkowa z wartościami pobranymi w osobnym zapytaniu. Kompilator najpierw wykonuje `SELECT DISTINCT` kolumny obrotu na łańcuchu CTE przed `pivot`, z limitem kolumn plus jeden, żeby wykryć przekroczenie limitu. Potem tworzy jedną kolumnę `SUM(CASE WHEN <column> = ? THEN <measure> ELSE 0 END)` na każdą wartość, z wartością jako parametrem. Oba zapytania trafiają do proweniencji. Wszystkie identyfikatory, także nazwy kolumn z wartości danych, przechodzą przez jeden pomocnik cytowania, który podwaja znak `"`, bo w danych są np. nazwy z apostrofem („Margie's Travel”). Statystyki źródła nie wystarczą, bo nie znają kolumn utworzonych przez `derive` ani wartości wymiarów z ponad 20 wartościami.
 
 SQL wygenerowany dla raportu miesięcznego z sekcji 10 (sprawdzony na DuckDB na danych testowych: sumy wychodzą jako dokładny `DECIMAL`, puste miesiące jako 0):
 
@@ -345,13 +376,13 @@ SELECT p."month",
        COALESCE(s2."net_sales", 0)   AS "net_sales",
        COALESCE(s2."order_count", 0) AS "order_count"
 FROM periods p LEFT JOIN s2 USING ("month")
-ORDER BY p."month";
+ORDER BY p."month", "net_sales", "order_count";  -- sort keys, then remaining columns
 ```
 
 **Warunki deterministyczności:**
 
-- **Typy dokładne:** kwoty przez całą ścieżkę są `DECIMAL`. Rzutowanie na `float` daje sumy niedokładne i zależne od kolejności wierszy, czyli niedeterministyczne. Ścieżkę pyodbc → Arrow → DuckDB → JSON trzeba potwierdzić w prototypie.
-- **Kolejność:** SQL bez `ORDER BY` nie gwarantuje kolejności wierszy. Generator zawsze dodaje `ORDER BY` (po kluczach grupowania, jeśli specyfikacja nie podaje własnego).
+- **Typy dokładne:** kwoty przez całą ścieżkę są `DECIMAL`, a `avg` i dzielenie są rzutowane na `DECIMAL(38,6)`. Rzutowanie na `float` daje sumy niedokładne i zależne od kolejności wierszy, czyli niedeterministyczne. Odcinek Arrow → DuckDB → Arrow potwierdził research. Odcinek pyodbc → Arrow sprawdzamy na początku implementacji adaptera SQL Server, a wartości dziesiętne trafiają do JSON jako tekst (sekcja 9).
+- **Kolejność:** SQL bez `ORDER BY` nie gwarantuje kolejności wierszy. Generator zawsze dodaje pełne `ORDER BY`: klucze `sort` albo klucze grupowania, a po nich pozostałe kolumny wyniku.
 - **Brakujące okresy:** `fill_periods` korzysta z zakresu z prośby, a nie z min/max danych, bo miesiąc bez sprzedaży na początku lub końcu roku inaczej zniknąłby z raportu.
 - **Testy:** każdy `op` ma testy jednostkowe porównujące wynik z równoważnym zapytaniem w SQL Server na tych samych danych.
 
@@ -370,7 +401,7 @@ SET threads = 2;
 SET lock_configuration = true;           -- ustawień nie da się już zmienić w tym połączeniu
 ```
 
-Po tych ustawieniach `read_csv('C:/Windows/win.ini')` i `COPY ... TO 'x.csv'` kończą się błędem uprawnień, a próba ponownego włączenia dostępu zwraca błąd konfiguracji. Ładowanie danych z procedury przez parametryzowany `INSERT` działa normalnie (ścieżkę przez Arrow trzeba sprawdzić w prototypie). Każda sesja ma osobne połączenie, a długie zapytanie da się przerwać (`interrupt()`) po przekroczeniu limitu czasu.
+Po tych ustawieniach `read_csv('C:/Windows/win.ini')` i `COPY ... TO 'x.csv'` kończą się błędem uprawnień, a próba ponownego włączenia dostępu zwraca błąd konfiguracji. Wynik procedury trafia do bazy przez jawną rejestrację tabeli Arrow (sekcja 7.4), bo zablokowane połączenie nie skanuje zmiennych Pythona. Każda sesja ma osobne połączenie. Narzędzia działają w wątkach roboczych, więc każde wywołanie pracuje na własnym `cursor()` pod blokadą magazynu wyników. Długie zapytanie przerywa `interrupt()` wywołany z `threading.Timer` po przekroczeniu limitu czasu.
 
 Prawdziwy sandbox (osobny proces lub kontener z limitami) będzie potrzebny dopiero przy wariancie B lub C z sekcji 7.7, czyli gdy model sam pisze SQL lub kod.
 
@@ -388,7 +419,7 @@ Tabele w odpowiedzi liczy DuckDB, ale krótki komentarz tekstowy (np. „Sprzeda
 
 ### 7.6. Proweniencja
 
-Każdy wynik niesie łańcuch: procedura + parametry → uchwyt → specyfikacja + wygenerowany SQL → uchwyt. Backend zwraca go w odpowiedzi (pole `provenance`). Łańcuch:
+Każdy wynik niesie łańcuch: procedura + parametry → uchwyt → specyfikacja + wygenerowany SQL → uchwyt. Łańcuch żyje przy uchwytach: magazyn wyników zapisuje przy każdym uchwycie jego pochodzenie, czyli wywołanie procedury z parametrami i flagą `truncated` albo krok `transform` ze źródłem, specyfikacją i SQL (dla `pivot` także z zapytaniem o wartości kolumny obrotu). Backend zwraca w odpowiedzi (pole `provenance`) łańcuch pochodzenia zwracanych uchwytów, więc nie potrzeba osobnego komponentu proweniencji. Łańcuch:
 
 - pozwala sprawdzić decyzję modelu (np. suma `TotalDue` zamiast `SubTotal`),
 - pozwala odtworzyć wynik bez modelu (ponowne wykonanie zapisanego łańcucha),
@@ -448,11 +479,11 @@ Zasady ustalania parametrów:
 | Filtr, którego nie obsługuje żadna procedura | v1: `unsupported` z wyjaśnieniem, czego brakuje. Docelowo: krok `filter` w backendzie, jeśli kolumna jest na liście `app_filters`. |
 | Niejasna miara („sprzedaż”) | `default_for` z katalogu, nazwa kolumny w `assumptions`. |
 
-Limity v1 (propozycja): maks. 10 kroków pętli, `max_rows` z katalogu (domyślnie 100 000), 30 s na procedurę, podgląd dla modelu do 10 wierszy (cały wynik, jeśli ma do 50 wierszy, np. raport 12 miesięcy), maks. 10 000 wierszy na tabelę w odpowiedzi (z flagą `truncated`).
+Limity v1: maks. 10 kroków pętli, `max_rows` z katalogu (domyślnie 100 000), 30 s na procedurę, podgląd dla modelu do 10 wierszy (cały wynik, jeśli ma do 50 wierszy, np. raport 12 miesięcy), maks. 10 000 wierszy na tabelę w odpowiedzi (z flagą `truncated`). Limity są w konfiguracji backendu. Limit czasu egzekwują sterowniki (sekcja 11.2).
 
 ## 9. Kontrakt odpowiedzi backendu
 
-Pętla kończy się narzędziem `present_result`. Backend składa z niego odpowiedź i dołącza dane:
+Pętla kończy się wynikiem `AgentAnswer` (narzędzie wyjściowe `present_result`, sekcja 6.2). `ResponseAssembler` buduje z niego odpowiedź: dokleja pełne dane wskazanych uchwytów i łańcuch ich pochodzenia jako `provenance`:
 
 ```json
 {
@@ -465,7 +496,7 @@ Pętla kończy się narzędziem `present_result`. Backend składa z niego odpowi
       "title": "Sprzedaż netto po miesiącach, 2024",
       "columns": [
         {"name": "month", "type": "date"},
-        {"name": "net_sales", "type": "decimal(19,4)"},
+        {"name": "net_sales", "type": "decimal(38,4)"},
         {"name": "order_count", "type": "int"}
       ],
       "rows": [["2024-01-01", "1234567.8900", 1102], ["…"]],
@@ -561,21 +592,25 @@ Wariant „po miesiącach i kategoriach”: `sales_order_line_list` → `derive(
 
 ### 11.2. Jak to wygląda w Pydantic AI
 
-- **Agent:** `Agent('anthropic:claude-haiku-5-5', output_type=Response, tools=[…])`. Zmiana modelu to zmiana tego tekstu w konfiguracji.
-- **Narzędzia:** zwykłe funkcje Pythona z typowanymi parametrami. Narzędzia procedur są generowane z YAML. Walidacja parametrów, wywołanie procedury i zapis proweniencji dzieją się w ciele narzędzia, więc framework nie musi o nich wiedzieć.
-- **Kontekst żądania:** `RequestContext`, magazyn wyników i połączenie DuckDB trafiają do narzędzi przez mechanizm zależności Pydantic AI (`deps`), ten sam, którego przykład data-analyst używa do przechowywania DataFrame'ów [5].
-- **Wynik:** `output_type=Response` (sekcja 9) zastępuje własne narzędzie `present_result`. Framework sam prosi model o poprawkę, gdy odpowiedź nie pasuje do schematu [6].
+- **Agent:** `Agent('anthropic:claude-haiku-5-5', output_type=ToolOutput(AgentAnswer, name='present_result'), tools=[…])`. Tekst modelu pochodzi z konfiguracji, więc zmiana modelu to zmiana ustawienia.
+- **Narzędzia:** funkcje synchroniczne, które Pydantic AI uruchamia w wątkach roboczych. Narzędzia procedur to obiekty `Tool` generowane z YAML, z modelem parametrów z `pydantic.create_model` (sekcja 6.1). `Tool.from_schema` odpada, bo nie waliduje argumentów ani nie stosuje wartości domyślnych. Narzędzia są cienkie: walidacja parametrów, wywołanie procedury i zapis pochodzenia uchwytu dzieją się w serwisach.
+- **Błędy:** jeden dekorator `retry_on_domain_error` mapuje błędy domenowe. Błędy wejścia (zła wartość parametru, zła specyfikacja, nieznany uchwyt) zamienia na `ModelRetry`, czyli prośbę o poprawkę, która zużywa budżet ponowień (`retries`). Błędy wykonania (błąd procedury, przekroczenie czasu) zamienia na `ToolFailed`, który nie zużywa budżetu ponowień i mówi modelowi, żeby nie powtarzał tego samego wywołania.
+- **Kontekst żądania:** `RequestContext`, magazyn wyników i serwisy trafiają do narzędzi przez mechanizm zależności Pydantic AI (`deps`), ten sam, którego przykład data-analyst używa do przechowywania DataFrame'ów [5].
+- **Wynik:** `AgentAnswer` jako narzędzie wyjściowe `present_result` (sekcja 6.2). Framework sam prosi model o poprawkę, gdy odpowiedź nie pasuje do schematu [6]. `Response` (sekcja 9) składa `ResponseAssembler`.
 - **Historia sesji:** Pydantic AI zwraca listę wiadomości z przebiegu, którą zapisujemy w sesji i przekazujemy przy kolejnym `ask` (np. po pytaniu doprecyzowującym).
+- **Asynchroniczność:** asynchroniczna jest tylko ścieżka agenta (`AgentService.run`, `AskService.ask`). Endpoint HTTP woła `await AskService.ask(...)`, a CLI uruchamia ją przez `asyncio.run`, bo `run_sync` nie działa w uruchomionej pętli zdarzeń. Serwisy katalogu, procedur, przekształceń i wyników są synchroniczne. DuckDB pracuje przez `cursor()` na każde wywołanie pod blokadą magazynu wyników, a pyodbc otwiera połączenie na każde wywołanie (`threadsafety` 1).
+- **Limity czasu:** egzekwują je sterowniki, a nie Pydantic AI, bo timeout narzędzia w Pydantic AI nie zatrzymuje wątku. Procedura dostaje `connection.timeout = 30` ustawione przed utworzeniem kursora (błąd `HYT00`). DuckDB dostaje `interrupt()` z `threading.Timer`.
 
 **Ustawienia Claude dostępne w Pydantic AI** (według dokumentacji modelu Anthropic w Pydantic AI): `anthropic_thinking`, `anthropic_effort`, `anthropic_task_budget` oraz ustawienia cache (`anthropic_cache`, `anthropic_cache_instructions`, `anthropic_cache_tool_definitions`). Dla innego dostawcy te ustawienia się nie stosują, więc konfiguracja modelu jest per dostawca, a kod agenta wspólny.
 
-**Czego nie widać w dokumentacji Pydantic AI dla Claude API:** tool search z `defer_loading` (opisany tylko dla Bedrock), tryb `strict` dla zwykłych narzędzi (jest opcja strict dla narzędzia wyjściowego) i serwerowe `fallbacks`. Do sprawdzenia w prototypie. Żadna z tych rzeczy nie jest konieczna w v1.
+**Wyniki researchu z 2026-10-11 (Pydantic AI 2.55.0):** tool search z `defer_loading` działa także na bezpośrednim Claude API (sekcja 6.3). Tryb `strict` jest dostępny dla zwykłych narzędzi, a jego budżet i polityka są w sekcji 6.1. Serwerowe `fallbacks` nie są potrzebne w v1.
 
 ### 11.3. Model i ustawienia
 
-- **Model:** start na `claude-haiku-5-5` (następca Haiku 4.5) z `effort: medium`, ustawionym jawnie (`anthropic_effort`). Cena: $0,10 / $0,50 za milion tokenów wejścia/wyjścia przy promptach do 100 tys. tokenów, powyżej $0,50 / $2,50. Okno kontekstu 1M. Myślenie jest adaptacyjne i włączone domyślnie, a jego głębię steruje się `effort`. Bloki `thinking` muszą wracać do modelu bez zmian razem z wynikami narzędzi. Historią wiadomości zarządza framework, ale poprawność tego przy Haiku 5.5 sprawdzamy w prototypie. Gdy Haiku nie radzi sobie z wyborem procedury lub specyfikacją, kolejny krok to `anthropic:claude-sonnet-5-5`. Koszt liczyć na całe zadanie (cała pętla), a nie na pojedyncze wywołanie.
+- **Model:** start na `claude-haiku-5-5` (następca Haiku 4.5) z `effort: medium`, ustawionym jawnie (`anthropic_effort`). Cena: $0,10 / $0,50 za milion tokenów wejścia/wyjścia przy promptach do 100 tys. tokenów, powyżej $0,50 / $2,50. Okno kontekstu 1M. Myślenie jest adaptacyjne i włączone domyślnie, a jego głębię steruje się `effort`. Bloki `thinking` muszą wracać do modelu bez zmian razem z wynikami narzędzi. Historią wiadomości zarządza framework. Działanie `strict` i `effort: medium` z Haiku 5.5 potwierdza sprawdzenie na żywo w etapie 3 planu. Gdy Haiku nie radzi sobie z wyborem procedury lub specyfikacją, kolejny krok to `anthropic:claude-sonnet-5-5`. Koszt liczyć na całe zadanie (cała pętla), a nie na pojedyncze wywołanie.
 - **Odmowy:** odmowa modelu kończy się statusem `error`. Dla Haiku 5.5 nie ma automatycznego przełączenia na inny model po stronie serwera.
-- **Prompt caching:** stała część (definicje narzędzi w ustalonej kolejności, instrukcja systemowa, skrót katalogu) idzie na początek i jest cache'owana przez ustawienia `anthropic_cache*`. Data bieżąca i rzeczy zmienne trafiają na koniec.
+- **Stały początek rozmowy:** Haiku 5.5 wiąże bloki myślenia z niezmiennym początkiem rozmowy. Gdy zmieni się początek, który wytworzył blok, model odrzuca kontynuację, a Pydantic AI ponawia żądanie bez tego bloku, co kosztuje dodatkowe wywołanie i gubi rozumowanie. Dlatego instrukcje (reguły, skrót katalogu, zakresy danych) i zestaw narzędzi w stałej kolejności powstają raz przy starcie i nie zmieniają się w obrębie procesu. `block_binding.prefix_mismatch_behavior` ustawiamy jawnie na `drop_block`, a ostrzeżenie `AnthropicStaleThinkingBlockWarning` logujemy.
+- **Prompt caching:** stała część (definicje narzędzi w ustalonej kolejności, instrukcja systemowa, skrót katalogu) idzie na początek i jest cache'owana przez ustawienia `anthropic_cache*`. Data bieżąca trafia do wiadomości użytkownika, a nie do instrukcji, żeby początek rozmowy się nie zmieniał.
 - **Claude Agent SDK się nie nadaje.** To harness Claude Code z narzędziami do plików i powłoki, a tu potrzebne są wyłącznie nasze narzędzia.
 - **Co trafia do dostawcy modelu:** instrukcje, opisy procedur, parametry, schematy, statystyki i podglądy do 10 wierszy (lub małe wyniki zagregowane). Pełne zbiory danych zostają w backendzie. Przy późniejszej klasyfikacji danych wrażliwych da się to zawęzić, bo podgląd jest konfigurowany per kolumna.
 
@@ -600,14 +635,14 @@ Wariant „po miesiącach i kategoriach”: `sales_order_line_list` → `derive(
 
 Brak otwartych decyzji architektonicznych. Ustalone: projekt testowy z jednym właścicielem (YAML, prompt i testy), Python, Claude API (start: Haiku 5.5, `effort: medium`), DuckDB, komentarz w v1 bez kontroli liczb. Model i `effort` dobierane na bieżąco.
 
-**Do sprawdzenia w prototypie:**
+**Do sprawdzenia w prototypie** (stan po researchu z 2026-10-11):
 
-- Czy schemat specyfikacji (unia po `op`) przechodzi w trybie `strict`.
-- Ścieżka typu dziesiętnego: pyodbc → Arrow → DuckDB → JSON.
-- Jak model radzi sobie z wyborem procedury przy rosnącym katalogu i od jakiej liczby procedur włączyć `find_procedures`.
-- Pydantic AI z Haiku 5.5: przekazywanie bloków `thinking`, `anthropic_effort`, cache, typ wyniku jako narzędzie wyjściowe.
-- Minimalne uprawnienia konta agenta (sam `EXECUTE`) i osobne uprawnienia do odczytu metadanych.
-- Wczytanie wyniku procedury do zablokowanego DuckDB przez Arrow z zachowaniem `DECIMAL`.
+- [x] Czy schemat specyfikacji (unia po `op`) przechodzi w trybie `strict`. Nie: przekracza budżet Anthropic, więc `transform` działa bez `strict` z walidacją w backendzie (sekcja 6.1).
+- [ ] Ścieżka typu dziesiętnego: pyodbc → Arrow → DuckDB → JSON. Odcinek Arrow → DuckDB → Arrow potwierdzony. Odcinek pyodbc → Arrow sprawdzamy na początku implementacji adaptera SQL Server.
+- [ ] Jak model radzi sobie z wyborem procedury przy rosnącym katalogu i od jakiej liczby procedur włączyć wyszukiwanie narzędzi (`defer_loading` albo `find_procedures`). Poza v1, mierzy to zestaw ewaluacyjny.
+- [ ] Pydantic AI z Haiku 5.5: przekazywanie bloków `thinking`, `anthropic_effort`, cache, typ wyniku jako narzędzie wyjściowe. Wiązanie bloków myślenia z początkiem rozmowy jest rozpoznane (sekcja 11.3). Działanie na żywo potwierdza sprawdzenie w etapie 3 planu.
+- [x] Minimalne uprawnienia konta agenta. Sam `EXECUTE` wystarcza, także do odczytu metadanych procedur (sekcja 5.5).
+- [x] Wczytanie wyniku procedury do zablokowanego DuckDB przez Arrow z zachowaniem `DECIMAL`. Działa przez jawną rejestrację (sekcja 7.4).
 
 **Zestaw ewaluacyjny:** 30–50 próśb z oczekiwaną procedurą i parametrami, oczekiwanym wynikiem (liczonym ręcznie SQL-em w SQL Server) i oczekiwanym statusem. Część przypadków pochodzi wprost z `examples` w YAML. Grupy: listy z filtrem (miasto, typ klienta), sprzedaż za okres, sprzedaż klienta, raporty po czasie i pivoty, inne dziedziny (BOM, przełożeni). Przypadki trudne: okres względny, okres poza danymi, niejednoznaczny klient lub produkt, miasto w kilku regionach, „sprzedaż” bez miary, filtr bez parametru w procedurze (`unsupported`). Ponieważ backend zwraca JSON, testy porównują odpowiedź z oczekiwaną automatycznie. Zestaw uruchamiamy przy każdej zmianie promptu, YAML lub modelu, a później dołączą do niego testy red-teamowe.
 
@@ -633,7 +668,17 @@ Research z wersji 1: 5 kierunków wyszukiwania, 22 źródła, 105 wyodrębnionyc
 
 **Mniej istotne po zmianie wymagań:** [7] Microsoft Agent Framework (stack .NET).
 
-**Funkcje Claude API** [8] (tool search z `defer_loading`, `strict`, brak wymuszania narzędzia w Sonnet 5.5 i Opus 5.5, `effort` i jego wartości domyślne, `fallbacks` i ich brak dla Haiku 5.5, ceny i zachowanie myślenia w Haiku 5.5, programmatic tool calling i jego niezgodność ze `strict`) pochodzą z dokumentacji referencyjnej Claude API (stan na 2026-10-06), a nie z researchu. Przed implementacją warto je potwierdzić w aktualnej dokumentacji.
+**Funkcje Claude API** [8] (tool search z `defer_loading`, `strict`, brak wymuszania narzędzia w Sonnet 5.5 i Opus 5.5, `effort` i jego wartości domyślne, `fallbacks` i ich brak dla Haiku 5.5, ceny i zachowanie myślenia w Haiku 5.5, programmatic tool calling i jego niezgodność ze `strict`) pochodzą z dokumentacji referencyjnej Claude API (stan na 2026-10-06), a nie z researchu. Limity trybu `strict` potwierdził research z 2026-10-11 [9].
+  https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+
+**Research bibliotek z 2026-10-11** [9] (wersja 3.4): testy na Pythonie 3.14.3, DuckDB 1.5.6, pyodbc 5.3.0 i lokalnym SQL Server z ODBC Driver 18 oraz dokumentacja Pydantic AI 2.55.0. Z niego pochodzą: typy wynikowe DuckDB i jawna rejestracja Arrow (sekcja 7.4), widoczność metadanych przy samym `EXECUTE` (sekcja 5.5), budżet trybu `strict` (sekcja 6.1), `defer_loading` w Pydantic AI (sekcja 6.3), wiązanie bloków myślenia, `ToolFailed` i limity czasu (sekcja 11).
+
+- Pydantic AI, narzędzia i `strict`: https://pydantic.dev/docs/ai/tools-toolsets/tools-advanced/
+- Pydantic AI, model Anthropic i wiązanie bloków myślenia: https://pydantic.dev/docs/ai/models/anthropic/
+- Pydantic AI, wynik (`ToolOutput`, `retries`): https://pydantic.dev/docs/ai/core-concepts/output/
+- Pydantic AI, testy (`FunctionModel`, `TestModel`): https://pydantic.dev/docs/ai/guides/testing/
+- pyodbc, wywoływanie procedur: https://github.com/mkleehammer/pyodbc/wiki/Calling-Stored-Procedures
+- SQL Server, widoczność metadanych: https://learn.microsoft.com/en-us/sql/relational-databases/security/metadata-visibility-configuration
 
 **Odrzucone w weryfikacji:** liczby trafności z benchmarków Spider 2.0, BIRD i BEAVER oraz twierdzenie o uprawnieniach użytkownika w Databricks Genie. Nie są tu przytaczane.
 

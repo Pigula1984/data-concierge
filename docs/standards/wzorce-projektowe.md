@@ -1,6 +1,6 @@
 # Wzorce projektowe w Data Concierge
 
-Każdy wzorzec poniżej ma konkretne miejsce w architekturze ([001-architektura-data-concierge.md](../architektura/001-architektura-data-concierge.md)). Nie wprowadzamy wzorców „na zapas”: jeśli wzorzec nie rozwiązuje istniejącego problemu (wymiana implementacji, testowalność, usunięcie duplikacji), zostaje zwykły kod.
+Każdy wzorzec poniżej ma konkretne miejsce w architekturze ([001-architektura-data-concierge.md](../architecture/001-architektura-data-concierge.md)). Nie wprowadzamy wzorców „na zapas”: jeśli wzorzec nie rozwiązuje istniejącego problemu (wymiana implementacji, testowalność, usunięcie duplikacji), zostaje zwykły kod.
 
 | Wzorzec | Gdzie w projekcie | Problem, który rozwiązuje |
 |---------|-------------------|---------------------------|
@@ -62,7 +62,7 @@ Walidacja specyfikacji jest wspólna i działa **przed** wykonawcą, więc obie 
 
 Rejestr narzędzi powstaje z katalogu YAML (sekcje 4 i 6.1 architektury):
 
-- **Factory**: `ProcedureToolFactory.create(entry) -> Tool` buduje narzędzie Pydantic AI (nazwa, opis z `summary`/`use_when`/`not_for`, schemat parametrów, pominięte parametry `inject`).
+- **Factory**: `ProcedureToolFactory.create(entry) -> Tool` buduje narzędzie Pydantic AI (nazwa, opis z `summary`/`use_when`/`not_for`, model parametrów z `pydantic.create_model`, pominięte parametry `inject`). Ten sam model daje schemat narzędzia i walidację argumentów.
 - **Registry**: `ToolRegistry` trzyma narzędzia procedur i narzędzia stałe (`transform`, `describe_result`), udostępnia je agentowi i (później) wyszukuje je dla `find_procedures`.
 
 Dodanie procedury = nowy wpis w YAML, bez nowego kodu. To DRY w praktyce: opis procedury istnieje w jednym miejscu.
@@ -118,7 +118,8 @@ Niemutowalne modele Pydantic (`frozen=True`) do przekazywania danych między war
 - `RequestContext` (user_id, rola, id korelacji),
 - `CatalogEntry`, `ProcedureParams`, `TransformSpec`,
 - `ResultSummary` (to, co widzi model: uchwyt, schemat, statystyki, podgląd),
-- `Response` (kontrakt z sekcji 9 architektury, także `output_type` agenta).
+- `AgentAnswer` (wynik modelu, `output_type` agenta: status, komentarz, uchwyty z tytułami, założenia, pytanie doprecyzowujące),
+- `Response` (kontrakt z sekcji 9 architektury, składany przez `ResponseAssembler` z `AgentAnswer`, danych uchwytów i proweniencji).
 
 Repozytoria zwracają obiekty domenowe, controllery zwracają DTO. Nie przekazujemy surowych `dict` między warstwami.
 
@@ -176,27 +177,30 @@ Inne miejsca: `CachingCatalogRepository` (katalog YAML czytany raz na proces).
 | `@property`, `@cached_property` | wartości pochodne obiektu bez jawnego wywołania (np. `TableSchema.measures`) |
 | `@functools.cache` | cache czystych funkcji bez stanu (np. mapowanie typów SQL → Arrow) |
 
-**Własne dekoratory** dla powtarzalnej obsługi przekrojowej. Przykład: każde narzędzie agenta musi zamienić błąd domenowy na `ModelRetry`. Zamiast `try/except` w każdym narzędziu (powtórzenie) jest jeden dekorator:
+**Własne dekoratory** dla powtarzalnej obsługi przekrojowej. Przykład: każde narzędzie agenta musi zamienić błąd domenowy na wyjątek Pydantic AI. Błąd wejścia staje się `ModelRetry` (model poprawia wywołanie), a błąd wykonania `ToolFailed` (nie zużywa budżetu ponowień, model nie powtarza tego samego wywołania). Zamiast `try/except` w każdym narzędziu (powtórzenie) jest jeden dekorator. Narzędzia są synchroniczne, bo Pydantic AI uruchamia je w wątkach roboczych (sekcja 11.2 architektury):
 
 ```python
-def retry_on_domain_error[**P, R](
-    tool: Callable[P, Awaitable[R]],
-) -> Callable[P, Awaitable[R]]:
-    """Turns domain errors into ModelRetry so the model can correct its call."""
+INPUT_ERRORS = (ParameterValidationError, SpecValidationError, UnknownHandleError)
+
+
+def retry_on_domain_error[**P, R](tool: Callable[P, R]) -> Callable[P, R]:
+    """Maps domain errors to ModelRetry (input) or ToolFailed (execution)."""
 
     @functools.wraps(tool)
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
-            return await tool(*args, **kwargs)
-        except DataConciergeError as exc:
+            return tool(*args, **kwargs)
+        except INPUT_ERRORS as exc:
             raise ModelRetry(str(exc)) from exc
+        except ProcedureError as exc:
+            raise ToolFailed(str(exc)) from exc
 
     return wrapper
 
 
 @agent.tool
 @retry_on_domain_error
-async def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSummary:
+def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSummary:
     return ctx.deps.transform_service.apply(spec, ctx.deps.request)
 ```
 
