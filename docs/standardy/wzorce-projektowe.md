@@ -48,10 +48,11 @@ class TransformExecutor(Protocol):
     def run(self, spec: TransformSpec, source: ResultTable) -> TransformResult: ...
 
 
-class DuckDBExecutor:      # v1: compiles spec to SQL, runs in a locked-down DuckDB connection
+class DuckDBExecutor:  # v1: compiles spec to SQL, runs in a locked-down DuckDB connection
     ...
 
-class PolarsExecutor:      # optional: compiles the same spec to Polars expressions
+
+class PolarsExecutor:  # optional: compiles the same spec to Polars expressions
     ...
 ```
 
@@ -100,7 +101,7 @@ query = (
     .add_cte(derive_sql)
     .add_cte(aggregate_sql)
     .order_by(["month"])
-    .build()            # -> CompiledQuery(sql: str, params: list[object])
+    .build()  # -> CompiledQuery(sql: str, params: list[object])
 )
 ```
 
@@ -146,8 +147,11 @@ class LoggingProcedureRepository:
         result = self._inner.execute(entry, params)
         self._logger.info(
             "procedure executed",
-            extra={"procedure": entry.procedure, "rows": result.row_count,
-                   "ms": round((time.perf_counter() - started) * 1000)},
+            extra={
+                "procedure": entry.procedure,
+                "rows": result.row_count,
+                "ms": round((time.perf_counter() - started) * 1000),
+            },
         )
         return result
 
