@@ -3,3 +3,11 @@ db-backup/
 
 # Prompt files
 docs/prompts/
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+dist/

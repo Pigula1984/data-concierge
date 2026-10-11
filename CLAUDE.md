@@ -1,0 +1,53 @@
+# Data Concierge
+
+Backend asystenta AI: przyjmuje prompt użytkownika, wybiera procedurę składowaną z katalogu, wywołuje ją, deterministycznie liczy zestawienia (DuckDB) i zwraca JSON. Projekt systemu: [`docs/architektura/001-architektura-data-concierge.md`](docs/architektura/001-architektura-data-concierge.md). To źródło prawdy o architekturze; zmiany projektu zaczynamy od aktualizacji tego dokumentu.
+
+## Język
+
+- **Rozmowa z użytkownikiem: po polsku.**
+- **Dokumenty po polsku:** analizy, plany, brainstormy, wnioski (`docs/solutions/`), standardy, opisy architektury. Dotyczy to także dokumentów tworzonych przez skille Compound Engineering, nawet jeśli skill domyślnie pisze po angielsku.
+- **Po angielsku:** kod, nazwy (moduły, klasy, funkcje, zmienne), komentarze, docstringi, komunikaty logów i wyjątków, nazwy testów, commity, opisy PR.
+- Fragmenty kodu wewnątrz polskich dokumentów też piszemy po angielsku (identyfikatory i komentarze).
+- Nazwy kolumn w danych też są po angielsku: aliasy i fakty tworzone w specyfikacji `transform` (np. `month`, `net_sales`, `order_count`), w przykładach i w instrukcjach dla modelu. Po polsku zostają tylko teksty dla użytkownika (`message`, `title`, `assumptions`, pytania doprecyzowujące).
+
+## Sposób pracy: Compound Engineering
+
+Pracujemy skillami z pluginu `compound-engineering` (włączony w `.claude/settings.json`). Typowy cykl:
+
+1. `ce-brainstorm`: doprecyzowanie, co budujemy (wymagania) → `docs/brainstorms/`
+2. `ce-plan`: plan wdrożenia → `docs/plans/`
+3. `ce-work`: realizacja planu
+4. `ce-code-review` (lub `ce-simplify-code` przed review): przegląd zmian
+5. `ce-commit` / `ce-commit-push-pr`: commit, ewentualnie PR
+6. `ce-compound`: zapis nieoczywistej wiedzy z rozwiązanego problemu → `docs/solutions/`
+
+Pomocniczo: `ce-debug` (błędy), `ce-ideate` (pomysły), `ce-doc-review` (przegląd planów i dokumentów), `ce-explain` (wyjaśnienia). Katalogiem bazowym artefaktów CE jest `docs/` (brak `.compound-engineering/config.yaml`).
+
+Nie commitujemy bez prośby użytkownika.
+
+## Kod: Python, obiektowo, czysto
+
+Obowiązują zasady z [`docs/standardy/`](docs/standardy/README.md). Najważniejsze:
+
+- Kod obiektowy: klasy z jedną odpowiedzialnością, zależności wstrzykiwane przez konstruktor, interfejsy jako `typing.Protocol`.
+- Czysty kod i DRY: małe funkcje, czytelne nazwy, brak duplikacji logiki, pełne type hints.
+- Modele danych i DTO na granicach warstw: Pydantic (niemutowalne, `frozen=True`, tam gdzie to możliwe).
+- Wzorce projektowe tylko tam, gdzie rozwiązują konkretny problem. Katalog wzorców dla tego projektu: [`docs/standardy/wzorce-projektowe.md`](docs/standardy/wzorce-projektowe.md).
+
+## Architektura: controller → service → repository
+
+Usługa jest modułowa (moduły według funkcji: `core`, `catalog`, `procedures`, `results`, `transform`, `agent`, `api`), a wewnątrz modułu obowiązuje podział na warstwy:
+
+- **controller**: wejścia do systemu, czyli endpoint/CLI `ask()` **oraz narzędzia agenta Pydantic AI**. Cienkie: walidacja wejścia, mapowanie DTO, delegacja do serwisu, zamiana błędów domenowych na odpowiedź (`ModelRetry` w narzędziach, status `error` w endpoincie).
+- **service**: logika biznesowa i orkiestracja.
+- **repository**: dostęp do danych (procedury składowane, magazyn wyników DuckDB, katalog YAML).
+
+Zależności idą tylko w jedną stronę: controller → service → repository. Szczegóły i przykłady: [`docs/standardy/architektura-warstwowa.md`](docs/standardy/architektura-warstwowa.md).
+
+## Python, uv i ruff
+
+- **Python 3.14** (przypięty w `.python-version`). Korzystamy z jego składni (PEP 695, leniwe adnotacje PEP 649), bez `from __future__ import annotations`.
+- **Ruff** formatuje i lintuje kod: `uv run ruff format` i `uv run ruff check --fix`. Kod przed commitem przechodzi oba bez błędów. Konfiguracja tylko w `pyproject.toml`.
+- Zależności dodajemy przez `uv add <pakiet>`, narzędzia deweloperskie przez `uv add --dev <pakiet>`, usuwamy przez `uv remove`.
+- Środowisko: `uv sync`. Polecenia uruchamiamy przez `uv run <polecenie>` (np. `uv run pytest`).
+- Nie używamy `pip install` ani ręcznie tworzonych virtualenvów. `pyproject.toml` i `uv.lock` trafiają do repozytorium.

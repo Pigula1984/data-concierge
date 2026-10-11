@@ -8,6 +8,7 @@ Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (
 > **v3:** (1) osobny plik YAML z opisami procedur pisanymi pod agenta; (2) silnik obliczeń: DuckDB; (3) zakres zawężony do backendu: wejściem jest prompt, wyjściem dane w JSON, bez UI, wykresów i streamingu; (4) brak filtrowania w aplikacji: każdy filtr musi być parametrem procedury.
 > **v3.1:** model `claude-haiku-5-5` z `effort: medium`; specyfikacja obliczeń niezależna od silnika (DuckDB teraz, Polars jako możliwa wersja alternatywna); komentarz w v1 pisany przez model swobodnie, bez placeholderów i bez kontroli liczb (do zrobienia później, razem z ochroną przed prompt injection); projekt testowy z jednym właścicielem.
 > **v3.2:** pętla agenta na **Pydantic AI** zamiast samego Anthropic SDK (kod od razu gotowy na inne modele); filtrowanie po pobraniu w DuckDB/Polars jako przewidziane rozszerzenie (nie w v1); dedykowane konto SQL z minimalnymi uprawnieniami (sekcja 5.5); wyjaśnienie, czy DuckDB to sandbox (sekcja 7.4a).
+> **v3.3:** nazwy kolumn tworzonych w specyfikacji przekształceń (aliasy, fakty) po angielsku, np. `month`, `net_sales`; instalacja zależności przez uv.
 
 ## 1. Cel i zakres
 
@@ -286,12 +287,12 @@ Specyfikacja to lista kroków nad jednym uchwytem. Zestaw kroków jest zamknięt
 
 | `op` | Co robi | Przykład parametrów |
 |------|---------|---------------------|
-| `derive` | Nowa kolumna z funkcji z białej listy: `date_trunc`, `year`, `month`, `quarter`, arytmetyka dwóch kolumn | `{"name": "miesiac", "fn": "date_trunc", "unit": "month", "column": "OrderDate"}` |
-| `aggregate` | Grupowanie i miary: `sum`, `count`, `count_distinct`, `avg`, `min`, `max` | `{"group_by": ["miesiac"], "measures": [...]}` |
-| `fill_periods` | Uzupełnienie brakujących okresów zerami w **zadanym** zakresie | `{"column": "miesiac", "unit": "month", "from": "2024-01-01", "to": "2025-01-01"}` |
-| `pivot` | Obrót: wiersze × kolumny × miara | `{"rows": "miesiac", "columns": "Territory", "measure": "sprzedaz_netto"}` |
-| `sort`, `limit` | Kolejność i top N (np. 10 najlepszych klientów) | `{"by": [{"column": "sprzedaz_netto", "dir": "desc"}]}`, `{"n": 10}` |
-| `select` | Wybór i zmiana nazw kolumn w wyniku | `{"columns": {"CustomerName": "Klient"}}` |
+| `derive` | Nowa kolumna z funkcji z białej listy: `date_trunc`, `year`, `month`, `quarter`, arytmetyka dwóch kolumn | `{"name": "month", "fn": "date_trunc", "unit": "month", "column": "OrderDate"}` |
+| `aggregate` | Grupowanie i miary: `sum`, `count`, `count_distinct`, `avg`, `min`, `max` | `{"group_by": ["month"], "measures": [...]}` |
+| `fill_periods` | Uzupełnienie brakujących okresów zerami w **zadanym** zakresie | `{"column": "month", "unit": "month", "from": "2024-01-01", "to": "2025-01-01"}` |
+| `pivot` | Obrót: wiersze × kolumny × miara | `{"rows": "month", "columns": "Territory", "measure": "net_sales"}` |
+| `sort`, `limit` | Kolejność i top N (np. 10 najlepszych klientów) | `{"by": [{"column": "net_sales", "dir": "desc"}]}`, `{"n": 10}` |
+| `select` | Wybór i zmiana nazw kolumn w wyniku | `{"columns": {"CustomerName": "Customer"}}` |
 
 Do tego sekcja `facts`, czyli nazwane wartości skalarne liczone z wyniku (`sum`, `avg`, `min`, `max`, `argmax`, `count`). Tylko z nich model może korzystać w komentarzu.
 
@@ -305,7 +306,7 @@ Do tego sekcja `facts`, czyli nazwane wartości skalarne liczone z wyniku (`sum`
 
 ### 7.4. Silnik: DuckDB
 
-**Czym jest DuckDB:** bazą analityczną (OLAP) uruchamianą wewnątrz procesu Pythona, jako biblioteka (`pip install duckdb`). Nie ma serwera ani instalacji. Dane trzyma w pamięci, a operuje się na nich zwykłym SQL. Jest zoptymalizowana pod grupowania i agregacje na dużych tabelach.
+**Czym jest DuckDB:** bazą analityczną (OLAP) uruchamianą wewnątrz procesu Pythona, jako biblioteka (`uv add duckdb`). Nie ma serwera ani instalacji. Dane trzyma w pamięci, a operuje się na nich zwykłym SQL. Jest zoptymalizowana pod grupowania i agregacje na dużych tabelach.
 
 **Dlaczego DuckDB, a nie Polars czy pandas:**
 
@@ -331,20 +332,20 @@ SQL wygenerowany dla raportu miesięcznego z sekcji 10 (sprawdzony na DuckDB na 
 
 ```sql
 WITH s1 AS (
-  SELECT *, CAST(date_trunc('month', "OrderDate") AS DATE) AS "miesiac" FROM r1
+  SELECT *, CAST(date_trunc('month', "OrderDate") AS DATE) AS "month" FROM r1
 ), s2 AS (
-  SELECT "miesiac",
-         SUM("SubTotal")                 AS "sprzedaz_netto",
-         COUNT(DISTINCT "SalesOrderID")  AS "liczba_zamowien"
-  FROM s1 GROUP BY "miesiac"
+  SELECT "month",
+         SUM("SubTotal")                 AS "net_sales",
+         COUNT(DISTINCT "SalesOrderID")  AS "order_count"
+  FROM s1 GROUP BY "month"
 ), periods AS (
-  SELECT CAST(range AS DATE) AS "miesiac" FROM range(DATE '2024-01-01', DATE '2025-01-01', INTERVAL 1 MONTH)
+  SELECT CAST(range AS DATE) AS "month" FROM range(DATE '2024-01-01', DATE '2025-01-01', INTERVAL 1 MONTH)
 )
-SELECT p."miesiac",
-       COALESCE(s2."sprzedaz_netto", 0)  AS "sprzedaz_netto",
-       COALESCE(s2."liczba_zamowien", 0) AS "liczba_zamowien"
-FROM periods p LEFT JOIN s2 USING ("miesiac")
-ORDER BY p."miesiac";
+SELECT p."month",
+       COALESCE(s2."net_sales", 0)   AS "net_sales",
+       COALESCE(s2."order_count", 0) AS "order_count"
+FROM periods p LEFT JOIN s2 USING ("month")
+ORDER BY p."month";
 ```
 
 **Warunki deterministyczności:**
@@ -382,7 +383,7 @@ Tabele w odpowiedzi liczy DuckDB, ale krótki komentarz tekstowy (np. „Sprzeda
 **Docelowo (razem z innymi zabezpieczeniami, np. przed prompt injection):**
 
 - **Kontrola liczb:** backend wyszukuje liczby w komentarzu i sprawdza, czy występują w faktach, wynikach lub prośbie. Liczba spoza nich oznacza prośbę do modelu o poprawkę, a przy kolejnej porażce odpowiedź bez komentarza.
-- **Odwołania zamiast liczb:** model pisze w komentarzu odwołanie do faktu, który sam zdefiniował w specyfikacji tego pytania (np. `{r2.suma_roczna}`), a backend wstawia wartość. Szablonów nie przygotowuje się z góry, bo model tworzy je przy każdym pytaniu. To mocniejsza gwarancja niż kontrola, ale wymaga od modelu dyscypliny w pisaniu komentarza.
+- **Odwołania zamiast liczb:** model pisze w komentarzu odwołanie do faktu, który sam zdefiniował w specyfikacji tego pytania (np. `{r2.annual_total}`), a backend wstawia wartość. Szablonów nie przygotowuje się z góry, bo model tworzy je przy każdym pytaniu. To mocniejsza gwarancja niż kontrola, ale wymaga od modelu dyscypliny w pisaniu komentarza.
 - Zestaw testowy sprawdza od początku, czy liczby w komentarzu zgadzają się z faktami, więc skalę problemu będzie widać, zanim trzeba będzie go rozwiązać.
 
 ### 7.6. Proweniencja
@@ -463,9 +464,9 @@ Pętla kończy się narzędziem `present_result`. Backend składa z niego odpowi
       "handle": "r2",
       "title": "Sprzedaż netto po miesiącach, 2024",
       "columns": [
-        {"name": "miesiac", "type": "date"},
-        {"name": "sprzedaz_netto", "type": "decimal(19,4)"},
-        {"name": "liczba_zamowien", "type": "int"}
+        {"name": "month", "type": "date"},
+        {"name": "net_sales", "type": "decimal(19,4)"},
+        {"name": "order_count", "type": "int"}
       ],
       "rows": [["2024-01-01", "1234567.8900", 1102], ["…"]],
       "row_count": 12,
@@ -493,7 +494,7 @@ Pętla kończy się narzędziem `present_result`. Backend składa z niego odpowi
 
 1. `customer_list(city="Berlin", country_region_code=null, customer_type=null)` → `r1` z kolumnami m.in. `CustomerName`, `CustomerType`, `City`, `StateProvince`, `CountryRegion`.
 2. Statystyki `r1` pokazują 5 różnych wartości `StateProvince`. Według zasad z sekcji 8 nie trzeba dopytywać, wystarczy zwrócić kolumnę regionu.
-3. `transform(r1, {steps: [select(Klient, Typ, Miasto, Region), sort(Region, Klient)], facts: [count]})` → `r2`.
+3. `transform(r1, {steps: [select(CustomerName, CustomerType, City, StateProvince), sort(StateProvince, CustomerName)], facts: [count]})` → `r2`.
 4. Odpowiedź: `ok`, tabela `r2`, komentarz z liczbą klientów (fakt `count`), w `assumptions` informacja, że „Berlin występuje w 5 regionach, zwrócono wszystkie”.
 
 **P2: „Pokaż sprzedaż klienta Mohamed Pal w 2024”**
@@ -513,18 +514,18 @@ Pętla kończy się narzędziem `present_result`. Backend składa z niego odpowi
 {
   "source": "r1",
   "steps": [
-    {"op": "derive", "name": "miesiac", "fn": "date_trunc", "unit": "month", "column": "OrderDate"},
-    {"op": "aggregate", "group_by": ["miesiac"], "measures": [
-      {"name": "sprzedaz_netto", "fn": "sum", "column": "SubTotal"},
-      {"name": "liczba_zamowien", "fn": "count_distinct", "column": "SalesOrderID"}
+    {"op": "derive", "name": "month", "fn": "date_trunc", "unit": "month", "column": "OrderDate"},
+    {"op": "aggregate", "group_by": ["month"], "measures": [
+      {"name": "net_sales", "fn": "sum", "column": "SubTotal"},
+      {"name": "order_count", "fn": "count_distinct", "column": "SalesOrderID"}
     ]},
-    {"op": "fill_periods", "column": "miesiac", "unit": "month", "from": "2024-01-01", "to": "2025-01-01",
-     "fill": {"sprzedaz_netto": 0, "liczba_zamowien": 0}},
-    {"op": "sort", "by": [{"column": "miesiac", "dir": "asc"}]}
+    {"op": "fill_periods", "column": "month", "unit": "month", "from": "2024-01-01", "to": "2025-01-01",
+     "fill": {"net_sales": 0, "order_count": 0}},
+    {"op": "sort", "by": [{"column": "month", "dir": "asc"}]}
   ],
   "facts": [
-    {"name": "suma_roczna", "fn": "sum", "column": "sprzedaz_netto"},
-    {"name": "najlepszy_miesiac", "fn": "argmax", "column": "sprzedaz_netto", "return": "miesiac"}
+    {"name": "annual_total", "fn": "sum", "column": "net_sales"},
+    {"name": "best_month", "fn": "argmax", "column": "net_sales", "return": "month"}
   ]
 }
 ```
@@ -533,7 +534,7 @@ Pętla kończy się narzędziem `present_result`. Backend składa z niego odpowi
 3. Wynik `r2` (12 wierszy) wraca do modelu w całości razem z faktami.
 4. Odpowiedź: `ok`, tabela `r2`, komentarz oparty na faktach, w `provenance` procedura, specyfikacja i SQL.
 
-Wariant „po miesiącach i kategoriach”: `sales_order_line_list` → `derive(miesiac)` → `aggregate(miesiac, Category; sum LineTotal)` → `pivot(rows=miesiac, columns=Category)`.
+Wariant „po miesiącach i kategoriach”: `sales_order_line_list` → `derive(month)` → `aggregate(month, Category; sum LineTotal)` → `pivot(rows=month, columns=Category)`.
 
 **P4: „Pokaż strukturę materiałową produktu HL Mountain Frame”**
 
