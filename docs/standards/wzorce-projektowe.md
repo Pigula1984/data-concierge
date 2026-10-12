@@ -6,10 +6,10 @@ Każdy wzorzec poniżej ma konkretne miejsce w architekturze ([001-architektura-
 |---------|-------------------|---------------------------|
 | Repository | dostęp do procedur, magazyn wyników, katalog | oddzielenie logiki od źródła danych |
 | Adapter | wykonawca procedur per silnik bazy | wymienna baza danych |
-| Strategy | silnik przekształceń (DuckDB / Polars) | wymienny silnik obliczeń |
+| Strategy (reguły jako obiekty) | reguły zapytania `query` | każda reguła bezpieczeństwa i determinizmu osobno testowana, nowa reguła bez zmiany pozostałych |
 | Registry + Factory | rejestr narzędzi generowany z YAML | narzędzia z jednego źródła prawdy |
-| Unia dyskryminowana + polimorficzne kroki | specyfikacja `transform` | walidacja i kompilacja bez `if op == ...` |
-| Builder | składanie zapytania SQL z kroków | czytelne budowanie CTE |
+| Unia dyskryminowana | pochodzenie uchwytu (procedura albo zapytanie) | typowana proweniencja bez `if step == ...` rozsianych po kodzie |
+| Visitor (jedno przejście drzewa) | drzewo zapytania z parsera DuckDB | reguły nie chodzą po JSON parsera każda osobno |
 | Dependency Injection + Composition Root | cała aplikacja, `deps` w Pydantic AI | testowalność, brak stanu globalnego |
 | Value Object / DTO | `RequestContext`, `Response`, wpisy katalogu | bezpieczne przekazywanie danych między warstwami |
 | Facade | `AskService` / `ask()` | jeden prosty punkt wejścia |
@@ -39,71 +39,67 @@ Serwisy znają tylko `Protocol`, a testy dostają implementację w pamięci.
 
 Konkretna implementacja repozytorium dopasowuje zewnętrzne API do naszego interfejsu. `SqlServerProcedureRepository` zamienia wywołanie na `EXEC` przez pyodbc, a wiersze na `ResultTable` z typami z katalogu. To **jedyne** miejsce zależne od silnika bazy (wymaganie z sekcji 2 architektury). Inna baza = nowy adapter, reszta kodu bez zmian.
 
-## 3. Strategy
+## 3. Strategy: reguły zapytania jako obiekty
 
-Wymienny algorytm za wspólnym interfejsem. Silnik przekształceń (sekcja 7.4 architektury):
+Reguły z sekcji 7.3 architektury (jedna instrukcja `SELECT`, tylko uchwyty sesji, dozwolone funkcje, brak `LIMIT` w podzapytaniach, brak arytmetyki zmiennoprzecinkowej w agregatach, obcięte źródła…) to osobne klasy z jednym interfejsem. `QueryPolicy` uruchamia wszystkie i zbiera naruszenia, więc model dostaje komplet uwag w jednym `ModelRetry`, a nie jedną po drugiej.
 
 ```python
-class TransformExecutor(Protocol):
-    def run(self, spec: TransformSpec, source: ResultTable) -> TransformResult: ...
+class QueryRule(Protocol):
+    def check(self, query: ParsedQuery, context: QueryContext) -> list[RuleViolation]: ...
 
 
-class DuckDBExecutor:  # v1: compiles spec to SQL, runs in a locked-down DuckDB connection
+class AllowedFunctionsRule:  # rule 5: only functions from the allowlist
     ...
 
 
-class PolarsExecutor:  # optional: compiles the same spec to Polars expressions
-    ...
+class QueryPolicy:
+    def __init__(self, rules: Sequence[QueryRule]) -> None:
+        self._rules = rules
+
+    def violations(self, query: ParsedQuery, context: QueryContext) -> list[RuleViolation]:
+        return [v for rule in self._rules for v in rule.check(query, context)]
 ```
 
-Walidacja specyfikacji jest wspólna i działa **przed** wykonawcą, więc obie strategie dostają ten sam, sprawdzony wejściowy obiekt. Uruchomienie obu strategii na tych samych danych to gotowy test porównawczy.
+Każda reguła ma własne testy przypadków dozwolonych i zakazanych, w tym testy bezpieczeństwa (próby czytania plików, katalogu systemowego, DDL).
 
 ## 4. Registry + Factory
 
 Rejestr narzędzi powstaje z katalogu YAML (sekcje 4 i 6.1 architektury):
 
 - **Factory**: `ProcedureToolFactory.create(entry) -> Tool` buduje narzędzie Pydantic AI (nazwa, opis z `summary`/`use_when`/`not_for`, model parametrów z `pydantic.create_model`, pominięte parametry `inject`). Ten sam model daje schemat narzędzia i walidację argumentów.
-- **Registry**: `ToolRegistry` trzyma narzędzia procedur i narzędzia stałe (`transform`, `describe_result`), udostępnia je agentowi i (później) wyszukuje je dla `find_procedures`.
+- **Registry**: `ToolRegistry` trzyma narzędzia procedur i narzędzia stałe (`query`, `describe_result`), udostępnia je agentowi i (później) wyszukuje je dla `find_procedures`.
 
 Dodanie procedury = nowy wpis w YAML, bez nowego kodu. To DRY w praktyce: opis procedury istnieje w jednym miejscu.
 
-## 5. Unia dyskryminowana i polimorficzne kroki specyfikacji
+## 5. Unia dyskryminowana: pochodzenie uchwytu
 
-Specyfikacja `transform` to lista kroków rozróżnianych polem `op` (sekcja 7.2–7.3). Każdy krok jest osobną klasą Pydantic, która sama wie, jak się zwalidować względem schematu i jak zmienić schemat wyjściowy. Kompilator nie ma długiego `if op == "derive" ... elif ...`.
-
-```python
-class DeriveStep(BaseModel, frozen=True):
-    op: Literal["derive"]
-    name: str
-    fn: DeriveFn
-    column: str
-
-    def output_schema(self, schema: TableSchema) -> TableSchema:
-        schema.require(self.column, role=ColumnRole.TIME)
-        return schema.with_column(self.name, ColumnType.DATE, ColumnRole.TIME)
-
-
-type TransformStep = Annotated[
-    DeriveStep | AggregateStep | FillPeriodsStep | PivotStep | SortStep | LimitStep | SelectStep,
-    Field(discriminator="op"),
-]
-```
-
-Wariant: gdy kroki muszą być kompilowane dla kilku silników (DuckDB i Polars), logikę kompilacji trzymamy w wykonawcach jako **Visitor** (`compile_derive`, `compile_aggregate`…), a nie w samych krokach. Kroki znają wtedy tylko walidację. Nowy `op` (np. `filter`) to nowa klasa i nowa metoda w każdym wykonawcy, a brak metody wychodzi w kontroli typów.
-
-## 6. Builder
-
-`SqlQueryBuilder` składa zapytanie z kolejnych CTE (`s1`, `s2`, …, `periods`), cytuje identyfikatory z białej listy schematu i zbiera parametry zapytania osobno od tekstu SQL. Zapewnia też zawsze obecne `ORDER BY` (wymóg deterministyczności). Model nigdy nie dostarcza fragmentów SQL.
+Uchwyt pochodzi z procedury albo z zapytania (sekcja 7.6 architektury). Oba warianty to osobne modele Pydantic rozróżniane polem `step`, a kod, który potrzebuje źródeł uchwytu (graf proweniencji, flaga `truncated`), pyta model, a nie sprawdza `step` ręcznie.
 
 ```python
-query = (
-    SqlQueryBuilder(source="r1")
-    .add_cte(derive_sql)
-    .add_cte(aggregate_sql)
-    .order_by(["month"])
-    .build()  # -> CompiledQuery(sql: str, params: list[object])
-)
+class ProcedureLineage(BaseModel, frozen=True):
+    step: Literal["procedure"] = "procedure"
+    procedure: str
+    params: dict[str, JsonValue]
+    truncated: bool
+
+    @property
+    def sources(self) -> tuple[Handle, ...]:
+        return ()
+
+
+class QueryLineage(BaseModel, frozen=True):
+    step: Literal["query"] = "query"
+    sources: tuple[Handle, ...]
+    submitted_sql: str
+    sql: str
+
+
+type Lineage = Annotated[ProcedureLineage | QueryLineage, Field(discriminator="step")]
 ```
+
+## 6. Visitor: jedno przejście drzewa zapytania
+
+Parser DuckDB zwraca drzewo w formacie JSON (`json_serialize_sql`). Jeden obiekt przechodzi je raz i zamienia na płaską listę `QueryNode` z kontekstem (rodzaj węzła, nazwa funkcji lub tabeli, czy węzeł jest w argumencie agregatu, czy jest na najwyższym poziomie, zasięg CTE). Reguły z sekcji 3 czytają tę listę zamiast chodzić po JSON każda osobno. Nieznany rodzaj węzła kończy przejście błędem, więc zmiana formatu w nowej wersji DuckDB daje odmowę, a nie lukę. Znajomość formatu JSON parsera jest w jednym miejscu.
 
 ## 7. Dependency Injection i Composition Root
 
@@ -116,8 +112,8 @@ Po stronie agenta zależności żądania (`RequestContext`, `ResultStore` sesji,
 Niemutowalne modele Pydantic (`frozen=True`) do przekazywania danych między warstwami i do modelu:
 
 - `RequestContext` (user_id, rola, id korelacji),
-- `CatalogEntry`, `ProcedureParams`, `TransformSpec`,
-- `ResultSummary` (to, co widzi model: uchwyt, schemat, statystyki, podgląd),
+- `CatalogEntry`, `ProcedureParams`, `ProcedureLineage`, `QueryLineage`,
+- `ResultSummary` i `QuerySummary` (to, co widzi model: uchwyt, schemat, statystyki, podgląd, a dla zapytania także źródła i SQL wykonany),
 - `AgentAnswer` (wynik modelu, `output_type` agenta: status, komentarz, uchwyty z tytułami, założenia, pytanie doprecyzowujące),
 - `Response` (kontrakt z sekcji 9 architektury, składany przez `ResponseAssembler` z `AgentAnswer`, danych uchwytów i proweniencji).
 
@@ -170,7 +166,7 @@ Inne miejsca: `CachingCatalogRepository` (katalog YAML czytany raz na proces).
 | Dekorator | Do czego |
 |-----------|----------|
 | `@agent.tool` (Pydantic AI) | rejestracja narzędzia agenta (controller dla modelu) |
-| `@field_validator`, `@model_validator` (Pydantic) | walidacja pojedynczego pola i reguł między polami w DTO i krokach specyfikacji |
+| `@field_validator`, `@model_validator` (Pydantic) | walidacja pojedynczego pola i reguł między polami w DTO i wpisach katalogu |
 | `@dataclass(frozen=True, slots=True)` | proste niemutowalne struktury wewnętrzne |
 | `@override` (`typing`) | oznaczenie nadpisanej metody; kontrola typów wykrywa literówki i zmiany w klasie bazowej |
 | `@classmethod` | alternatywne konstruktory, np. `CatalogEntry.from_yaml(node)` |
@@ -180,7 +176,7 @@ Inne miejsca: `CachingCatalogRepository` (katalog YAML czytany raz na proces).
 **Własne dekoratory** dla powtarzalnej obsługi przekrojowej. Przykład: każde narzędzie agenta musi zamienić błąd domenowy na wyjątek Pydantic AI. Błąd wejścia staje się `ModelRetry` (model poprawia wywołanie), a błąd wykonania `ToolFailed` (nie zużywa budżetu ponowień, model nie powtarza tego samego wywołania). Zamiast `try/except` w każdym narzędziu (powtórzenie) jest jeden dekorator. Narzędzia są synchroniczne, bo Pydantic AI uruchamia je w wątkach roboczych (sekcja 11.2 architektury):
 
 ```python
-INPUT_ERRORS = (ParameterValidationError, SpecValidationError, UnknownHandleError)
+INPUT_ERRORS = (ParameterValidationError, UnknownHandleError, QueryError)  # QueryError: SQL the model can fix
 
 
 def retry_on_domain_error[**P, R](tool: Callable[P, R]) -> Callable[P, R]:
@@ -200,8 +196,9 @@ def retry_on_domain_error[**P, R](tool: Callable[P, R]) -> Callable[P, R]:
 
 @agent.tool
 @retry_on_domain_error
-def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSummary:
-    return ctx.deps.transform_service.apply(spec, ctx.deps.request)
+def query(ctx: RunContext[AgentDeps], sql: str) -> QuerySummary:
+    """Run one read-only SELECT in DuckDB SQL over this session's result handles."""
+    return ctx.deps.query_service.run(sql)
 ```
 
 Zasady dla własnych dekoratorów:
