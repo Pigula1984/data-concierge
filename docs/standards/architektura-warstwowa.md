@@ -44,7 +44,7 @@ def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSummary:
 
 Moduły bez controllera są wewnętrzne: korzystają z nich serwisy innych modułów.
 
-Magazyn wyników to osobny moduł, bo korzystają z niego trzy inne: `procedures` zapisuje `r1`, `transform` czyta `r1` i zapisuje `r2`, a `agent` (narzędzie `describe_result`, `ResponseAssembler`) czyta uchwyty. Wszyscy idą przez `ResultService`, nie przez `ResultStore`. Moduł `results` jest właścicielem zablokowanego połączenia DuckDB sesji (sekcja 7.4a architektury); `DuckDBExecutor` dostaje to połączenie przez konstruktor.
+Magazyn wyników to osobny moduł, bo korzystają z niego trzy inne: `procedures` zapisuje `r1`, `transform` czyta `r1` i zapisuje `r2`, a `agent` (narzędzie `describe_result`, `ResponseAssembler`) czyta uchwyty. Wszyscy idą przez `ResultService`, nie przez `ResultStore`. Moduł `results` jest właścicielem zablokowanego połączenia DuckDB sesji (sekcja 7.4a architektury). `DuckDBExecutor` dostaje przez konstruktor `ResultService` sesji i przez niego wykonuje zapytania i zapisuje wynik, więc blokada i limit czasu działają w jednym miejscu.
 
 Silnik przekształceń trafia do warstwy repository, bo to on wykonuje zapytania na danych w DuckDB. Kompilator specyfikacji (czysta logika bez I/O) jest częścią serwisu albo osobną klasą pomocniczą w module `transform`.
 

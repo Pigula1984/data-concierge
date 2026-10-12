@@ -151,8 +151,8 @@ Dokumentacja techniczna procedury („zwraca nagłówki zamówień z kolumnami�
     - {name: CustomerName, type: string,        role: dimension}
     - {name: CustomerType, type: string,        role: dimension, values: [individual, store]}
     - {name: Territory,    type: string,        role: dimension}
-    - {name: SubTotal,     type: decimal(19,4), role: measure,   hint: Sprzedaż netto, bez podatku i frachtu, default_for: [sprzedaż]}
-    - {name: TotalDue,     type: decimal(19,4), role: measure,   hint: Kwota z podatkiem i frachtem}
+    - {name: SubTotal,     type: "decimal(19,4)", role: measure,   hint: "Sprzedaż netto, bez podatku i frachtu", default_for: [sprzedaż]}
+    - {name: TotalDue,     type: "decimal(19,4)", role: measure,   hint: Kwota z podatkiem i frachtem}
   data_range: {procedure: api.SalesOrder_DataRange}  # min/max read once at startup
   examples:
     - prompt: "sprzedaż za I kwartał 2025"
@@ -169,6 +169,9 @@ Pola istotne dla agenta:
 - **`role` kolumny** (`id`, `dimension`, `measure`, `time`) mówi silnikowi przekształceń, co wolno z kolumną zrobić: sumować można tylko `measure`, ziarno czasu stosować tylko do `time`.
 - **`default_for`** rozstrzyga typowe niejednoznaczności („sprzedaż” = SubTotal). Agent pokazuje to w `assumptions`.
 - **`inject`** oznacza parametry doklejane przez backend (tożsamość). Model ich nie widzi ani nie ustawia.
+- **`exposed: false`** oznacza procedurę wołaną tylko przez backend, np. procedurę zakresu dat. Model nie dostaje dla niej narzędzia.
+
+Plik jest czytany ściśle: nieznany klucz to błąd katalogu, a nie cicho pominięte pole. W mapowaniach `{...}` wartości z przecinkiem, także typ `"decimal(19,4)"`, trzeba ująć w cudzysłów, bo przecinek kończy wartość.
 - **`data_range`** wskazuje procedurę zakresu, która zwraca min/max dat. Konto agenta nie ma `SELECT` na tabelach, więc zakresu nie da się odczytać z kolumny. Zakres jest wspólny dla wszystkich użytkowników i czytany raz przy starcie, bez kontekstu żądania. Trafia do kontekstu modelu. Względne okresy poza zakresem danych kończą się statusem `no_data` z informacją o dostępnym zakresie.
 - **`examples`** to przykłady pytanie → wywołanie. Pełnią rolę few-shot, podobnie jak przykłady w Fabric data agent [1], i od razu nadają się do zestawu testów.
 
@@ -254,11 +257,10 @@ Wynik wywołania procedury zwracany modelowi (nie pełne dane):
 ```json
 {
   "handle": "r1",
-  "procedure": "api.SalesOrder_List",
   "row_count": 14244,
   "truncated": false,
   "columns": [{"name": "OrderDate", "type": "date", "role": "time"}, {"name": "SubTotal", "type": "decimal(19,4)", "role": "measure"}, "..."],
-  "stats": {"OrderDate": {"min": "2024-01-01", "max": "2024-12-31"}, "CustomerType": {"distinct": ["individual", "store"]}},
+  "stats": {"OrderDate": {"min": "2024-01-01", "max": "2024-12-31"}, "CustomerType": {"values": ["individual", "store"]}, "CustomerName": {"distinct_count": 9876}},
   "preview": ["… do 10 wierszy …"]
 }
 ```
@@ -298,13 +300,15 @@ Specyfikacja to lista kroków nad jednym uchwytem. Zestaw kroków jest zamknięt
 | `fill_periods` | Uzupełnienie brakujących okresów zerami w **zadanym** zakresie | `{"column": "month", "unit": "month", "from": "2024-01-01", "to": "2025-01-01"}` |
 | `pivot` | Obrót: wiersze × kolumny × miara | `{"rows": "month", "columns": "Territory", "measure": "net_sales"}` |
 | `sort`, `limit` | Kolejność i top N (np. 10 najlepszych klientów) | `{"by": [{"column": "net_sales", "dir": "desc"}]}`, `{"n": 10}` |
-| `select` | Wybór i zmiana nazw kolumn w wyniku | `{"columns": {"CustomerName": "Customer"}}` |
+| `select` | Wybór, kolejność i zmiana nazw kolumn w wyniku | `{"columns": [{"column": "CustomerName", "alias": "customer"}, {"column": "City"}]}` |
 
 Do tego sekcja `facts`, czyli nazwane wartości skalarne liczone z wyniku (`sum`, `avg`, `min`, `max`, `argmax`, `count`). Tylko z nich model może korzystać w komentarzu. `argmax` przy remisie zwraca najmniejszą wartość kolumny `return`, więc wynik nie zależy od kolejności wierszy.
 
 Reguły języka:
 
-- **Nazwy nadawane przez model** (aliasy w `derive` i `aggregate`, nazwy faktów) muszą pasować do `^[a-z][a-z0-9_]*$`.
+- **Nazwy nadawane przez model** (aliasy w `derive`, `aggregate` i `select`, nazwy faktów) muszą pasować do `^[a-z][a-z0-9_]*$`. Nazwy kolumn są unikalne bez względu na wielkość liter, bo DuckDB tak rozwiązuje identyfikatory: alias `subtotal` obok kolumny `SubTotal` to błąd walidacji.
+- **`derive`** liczy `date_trunc` (z `unit`), `year`, `quarter` i `month` z kolumny `time` albo arytmetykę `{"fn": "arithmetic", "operator": "/", "left": ..., "right": ...}` na dwóch kolumnach liczbowych.
+- **`fill_periods`** wymaga, żeby `from` było pierwszym dniem okresu, a kolumna okresu była jedyną kolumną poza miarami. Kolumna okresu może zawierać tylko początki okresów, np. wynik `date_trunc` z tą samą jednostką: przed wykonaniem wykonawca liczy wartości spoza siatki okresów i zgłasza błąd, bo inaczej takie wiersze zostałyby po cichu zastąpione wartością `fill`. Wiersze spoza zakresu `from`–`to` odpadają.
 - **`pivot` jest ostatnim krokiem.** Po nim wolno tylko `sort` po kolumnie wierszy i `limit`. Nazwy kolumn obrotu pochodzą z wartości danych, więc walidator nie zna ich przed wykonaniem.
 - **Obcięty wynik procedury nie trafia do agregacji.** Flaga `truncated` przechodzi na każdy uchwyt pochodny. `aggregate`, `pivot`, `fill_periods` i `facts` na uchwycie z obciętym przodkiem kończą się błędem walidacji z prośbą o zawężenie parametrów procedury. Suma z obciętych danych wyglądałaby na pełną, a np. wszystkie pozycje zamówień z całego zakresu (121 317) przekraczają domyślne `max_rows` 100 000. Pozostałe kroki przenoszą flagę do wyniku i do `truncated` tabeli w odpowiedzi.
 
@@ -353,11 +357,13 @@ derive.fn = arithmetic:
   /                        -> DECIMAL(38,6)   # CAST added by the compiler
 ```
 
+Dzielenie przez zero daje `NULL`: kompilator dzieli przez `NULLIF(<dzielnik>, 0)`, bo dzielenie dziesiętne w DuckDB idzie przez `DOUBLE` i bez tego zwraca `NaN`, którego nie da się rzutować na `DECIMAL`. `sum` po kolumnie całkowitej kompilator rzutuje na `BIGINT`, bo DuckDB zwraca `HUGEINT`. Magazyn wyników porównuje typy faktycznego wyniku z typami przewidzianymi przez walidator i odrzuca rozjazd.
+
 Suma pod `avg` jest dokładna, więc wynik nie zależy od kolejności wierszy. Stała skala 6 wystarcza dla v1. Pole skali w specyfikacji dodamy, gdy zażąda tego konkretna prośba.
 
 **Pełna kolejność wierszy.** Kompilator dokleja do końcowego `ORDER BY`, po kluczach `sort` albo kluczach grupowania, wszystkie pozostałe kolumny wyniku w kolejności schematu. `limit` działa po tym porządku. Bez tego remisy w `sort` (np. trzech klientów „Mohamed Pal”, równe `net_sales`) dają przy `threads = 2` różną kolejność i różne top N między uruchomieniami.
 
-**Kompilacja `pivot`.** `pivot` to agregacja warunkowa z wartościami pobranymi w osobnym zapytaniu. Kompilator najpierw wykonuje `SELECT DISTINCT` kolumny obrotu na łańcuchu CTE przed `pivot`, z limitem kolumn plus jeden, żeby wykryć przekroczenie limitu. Potem tworzy jedną kolumnę `SUM(CASE WHEN <column> = ? THEN <measure> ELSE 0 END)` na każdą wartość, z wartością jako parametrem. Oba zapytania trafiają do proweniencji. Wszystkie identyfikatory, także nazwy kolumn z wartości danych, przechodzą przez jeden pomocnik cytowania, który podwaja znak `"`, bo w danych są np. nazwy z apostrofem („Margie's Travel”). Statystyki źródła nie wystarczą, bo nie znają kolumn utworzonych przez `derive` ani wartości wymiarów z ponad 20 wartościami.
+**Kompilacja `pivot`.** `pivot` to agregacja warunkowa z wartościami pobranymi w osobnym zapytaniu. Kompilator buduje zapytanie `SELECT DISTINCT` kolumny obrotu na łańcuchu CTE przed `pivot`, a wykonawca uruchamia je przed zapytaniem końcowym, z limitem kolumn plus jeden, żeby wykryć przekroczenie limitu. Potem tworzy jedną kolumnę `SUM(CASE WHEN <column> = ? THEN <measure> ELSE 0 END)` na każdą wartość, z wartością jako parametrem. Oba zapytania trafiają do proweniencji. Wszystkie identyfikatory, także nazwy kolumn z wartości danych, przechodzą przez jeden pomocnik cytowania, który podwaja znak `"`, bo w danych są np. nazwy z apostrofem („Margie's Travel”). Statystyki źródła nie wystarczą, bo nie znają kolumn utworzonych przez `derive` ani wartości wymiarów z ponad 20 wartościami.
 
 SQL wygenerowany dla raportu miesięcznego z sekcji 10 (sprawdzony na DuckDB na danych testowych: sumy wychodzą jako dokładny `DECIMAL`, puste miesiące jako 0):
 
@@ -419,7 +425,7 @@ Tabele w odpowiedzi liczy DuckDB, ale krótki komentarz tekstowy (np. „Sprzeda
 
 ### 7.6. Proweniencja
 
-Każdy wynik niesie łańcuch: procedura + parametry → uchwyt → specyfikacja + wygenerowany SQL → uchwyt. Łańcuch żyje przy uchwytach: magazyn wyników zapisuje przy każdym uchwycie jego pochodzenie, czyli wywołanie procedury z parametrami i flagą `truncated` albo krok `transform` ze źródłem, specyfikacją i SQL (dla `pivot` także z zapytaniem o wartości kolumny obrotu). Backend zwraca w odpowiedzi (pole `provenance`) łańcuch pochodzenia zwracanych uchwytów, więc nie potrzeba osobnego komponentu proweniencji. Łańcuch:
+Każdy wynik niesie łańcuch: procedura + parametry → uchwyt → specyfikacja + wygenerowany SQL → uchwyt. Łańcuch żyje przy uchwytach: magazyn wyników zapisuje przy każdym uchwycie jego pochodzenie, czyli wywołanie procedury z parametrami i flagą `truncated` albo krok `transform` ze źródłem, specyfikacją oraz każdym zapytaniem SQL z jego parametrami (dla `pivot` także z zapytaniem o wartości kolumny obrotu). Backend zwraca w odpowiedzi (pole `provenance`) łańcuch pochodzenia zwracanych uchwytów, więc nie potrzeba osobnego komponentu proweniencji. Łańcuch:
 
 - pozwala sprawdzić decyzję modelu (np. suma `TotalDue` zamiast `SubTotal`),
 - pozwala odtworzyć wynik bez modelu (ponowne wykonanie zapisanego łańcucha),

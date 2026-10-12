@@ -1,0 +1,23 @@
+# Smallest valid catalog: one exposed procedure with a data-range procedure.
+- procedure: api.Order_List
+  tool: order_list
+  summary: Orders in a period.
+  params:
+    - {name: DateFrom, arg: date_from, type: date, required: true}
+    - {name: UserId, type: int, inject: request_context.user_id}
+  columns:
+    - {name: OrderID, type: int, role: id}
+    - {name: OrderDate, type: date, role: time}
+    - {name: Amount, type: "decimal(19,4)", role: measure, default_for: [sales]}
+  data_range: {procedure: api.Order_DataRange}
+  examples:
+    - prompt: orders in 2024
+      call: {date_from: 2024-01-01}
+
+- procedure: api.Order_DataRange
+  tool: order_data_range
+  exposed: false
+  summary: First and last order date.
+  columns:
+    - {name: MinOrderDate, type: date, role: time}
+    - {name: MaxOrderDate, type: date, role: time}

@@ -1,5 +1,6 @@
 """Application settings read once from environment variables or `.env`."""
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, PositiveInt, SecretStr
@@ -30,6 +31,8 @@ class Settings(BaseSettings):
     strict_tools: bool = True
     # Standard provider variable name; passed explicitly to the provider by the composition root.
     anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
+
+    catalog_path: Path = Path("catalog/agent-procedures.yaml")
 
     max_agent_steps: PositiveInt = 10
     procedure_timeout_seconds: PositiveInt = 30

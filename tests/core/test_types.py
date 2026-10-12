@@ -1,6 +1,7 @@
 import re
 
 import pyarrow as pa
+import pydantic
 import pytest
 
 from data_concierge.core.errors import CatalogError, SpecValidationError
@@ -135,3 +136,42 @@ def test_with_column_returns_new_schema_and_keeps_original() -> None:
 def test_with_column_rejects_existing_name() -> None:
     with pytest.raises(SpecValidationError, match="SubTotal"):
         _orders_schema().with_column("SubTotal", ColumnType.parse("int"), ColumnRole.MEASURE)
+
+
+def test_with_column_rejects_name_differing_only_in_case() -> None:
+    # DuckDB resolves identifiers case-insensitively, so `subtotal` would shadow `SubTotal`.
+    with pytest.raises(SpecValidationError, match="SubTotal"):
+        _orders_schema().with_column("subtotal", ColumnType.parse("int"), ColumnRole.MEASURE)
+
+
+def test_table_schema_rejects_duplicate_names_ignoring_case() -> None:
+    column_type = ColumnType.parse("int")
+    with pytest.raises(pydantic.ValidationError, match="SubTotal, subtotal"):
+        TableSchema(
+            columns=(
+                Column(name="SubTotal", type=column_type, role=ColumnRole.MEASURE),
+                Column(name="subtotal", type=column_type, role=ColumnRole.MEASURE),
+            )
+        )
+
+
+def test_column_type_reads_and_writes_its_text_form() -> None:
+    column = Column.model_validate({"name": "SubTotal", "type": "decimal(19,4)", "role": "measure"})
+
+    assert column.type == ColumnType.decimal(19, 4)
+    assert column.model_dump(mode="json")["type"] == "decimal(19,4)"
+    assert Column.model_validate(column.model_dump()) == column
+
+
+def test_column_type_text_error_names_the_type() -> None:
+    with pytest.raises(pydantic.ValidationError, match="unknown column type 'money'"):
+        Column.model_validate({"name": "Amount", "type": "money", "role": "measure"})
+
+
+def test_parse_reports_decimal_bounds_without_pydantic_details() -> None:
+    with pytest.raises(CatalogError) as error:
+        ColumnType.parse("decimal(4,6)")
+
+    assert str(error.value) == (
+        "invalid type 'decimal(4,6)': needs 1 <= precision <= 38 and 0 <= scale <= precision"
+    )
