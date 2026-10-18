@@ -55,6 +55,14 @@ class ResultService:
         """Names and DuckDB types of a query's result columns, without running the query."""
         return self._store.describe_query(sql)
 
+    def statement_types(self, sql: str) -> tuple[str, ...]:
+        return self._store.statement_types(sql)
+
+    def sources(self, sql: str) -> tuple[Handle, ...]:
+        """The session handles a query reads, each once, in creation order."""
+        read = self._store.read_tables(sql)
+        return tuple(handle for handle in self._store.handles() if handle in read)
+
     def materialize(self, sql: str, schema: TableSchema, lineage: Lineage) -> Handle:
         """Stores the result of a query over existing handles under a new handle."""
         return self._store.materialize(sql, schema, lineage)

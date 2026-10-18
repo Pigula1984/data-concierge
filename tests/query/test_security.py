@@ -1,8 +1,8 @@
-"""Hostile SQL from the model: every case is refused before DuckDB runs anything."""
+"""Hostile SQL from the model: the locked-down connection and the one-SELECT check stop it."""
 
 import pytest
 
-from data_concierge.core.errors import QueryExecutionError, QueryTimeoutError, QueryValidationError
+from data_concierge.core.errors import QueryError, QueryExecutionError, QueryTimeoutError
 from data_concierge.query.service import QueryService
 from data_concierge.results.service import ResultService
 
@@ -37,86 +37,41 @@ FILES_AND_NETWORK = [
     "SELECT * FROM glob('*')",
     "SELECT * FROM 'data.csv'",
     "SELECT * FROM 'https://example.com/data.csv'",
-    "SELECT * FROM query_table('r1')",
-    "SELECT * FROM query('SELECT 1')",
 ]
-SYSTEM_CATALOG_AND_ENVIRONMENT = [
-    "SELECT * FROM information_schema.tables",
-    "SELECT * FROM duckdb_tables()",
-    "SELECT * FROM duckdb_settings()",
-    "SELECT * FROM pg_catalog.pg_tables",
-    "SELECT * FROM sqlite_master",
-    "SELECT current_setting('memory_limit') AS setting",
-    "SELECT getenv('HOME') AS home",
-    "SELECT version() AS version",
-]
-BYPASSES = [
-    # A CTE named like a handle would shadow it.
-    'WITH r1 AS (SELECT 1 AS "SubTotal") SELECT * FROM r1',
-    "SELECT * FROM main.r1",
-    "SELECT * FROM memory.main.r1",
+TEXT_TRICKS = [
     "SELECT 1 AS a; /* harmless */ DROP TABLE r1",
     "SELECT * FROM READ_CSV('C:/Windows/win.ini')",
     "SELECT * FROM r1 WHERE \"CustomerID\" IN (SELECT * FROM read_csv('ids.csv'))",
-    # A CTE that references its own name reads the system view of that name.
-    "WITH sqlite_master AS (SELECT * FROM sqlite_master) SELECT * FROM sqlite_master",
-    # Handles and CTE names compare ignoring ASCII case, as DuckDB resolves them.
-    'WITH R1 AS (SELECT 1 AS "SubTotal") SELECT * FROM r1',
-    'WITH r1 AS (SELECT 1 AS "SubTotal") SELECT * FROM R1',
-    # Python's casefold maps the long s and the Kelvin sign to ASCII letters, DuckDB does not:
-    # the CTE would look like it covers the system view, which DuckDB then reads.
-    'WITH "\u017fqlite_master" AS (SELECT 1 AS a) SELECT * FROM sqlite_master',
-    'WITH "duc\u212adb_tables" AS (SELECT 1 AS a) SELECT * FROM duckdb_tables',
-    'WITH "pg_\u017fettings" AS (SELECT 1 AS a) SELECT * FROM pg_settings',
-]
-
-# One forbidden element in every position the walker must visit.
-EVERY_POSITION = [
-    'SELECT * FROM r1 WHERE "SubTotal" > 0 AND random() > 0.5',
-    'SELECT * FROM r1 WHERE "SubTotal" > 0 OR random() > 0.5',
-    'SELECT * REPLACE (random() AS "SubTotal") FROM r1',
-    "SELECT CASE WHEN random() > 0.5 THEN 1 ELSE 0 END AS c FROM r1",
-    'SELECT CASE WHEN "SubTotal" > 0 THEN random() ELSE 0 END AS c FROM r1',
-    'SELECT CASE WHEN "SubTotal" > 0 THEN 1 ELSE random() END AS c FROM r1',
-    'SELECT * FROM r1 WHERE "SubTotal" BETWEEN random() AND 100',
-    'SELECT * FROM r1 WHERE "CustomerID" IN (1, random())',
-    'SELECT * FROM r1 WHERE random() = ANY (SELECT "CustomerID" FROM r2)',
-    'SELECT * FROM r1 o JOIN r2 c ON o."CustomerID" = c."CustomerID" AND random() > 0.1',
-    'SELECT "Territory" FROM r1 GROUP BY "Territory" HAVING random() > 0.5',
-    'SELECT "SalesOrderID" FROM r1 QUALIFY random() > 0.5',
-    "SELECT count(*) AS n FROM r1 GROUP BY random() > 0.5",
-    'SELECT "SalesOrderID" FROM r1 ORDER BY random()',
-    'SELECT "SalesOrderID" FROM r1 LIMIT (SELECT count(*) FROM sqlite_master)',
-    'SELECT sum("SubTotal") OVER (PARTITION BY random() > 0.5) AS t FROM r1',
-    'SELECT sum("SubTotal") OVER (ORDER BY random()) AS t FROM r1',
-    "SELECT count(*) FILTER (WHERE random() > 0.5) AS n FROM r1",
-    'SELECT min("SubTotal" ORDER BY random()) AS m FROM r1',
-    "SELECT * FROM r1 PIVOT (sum(random()) FOR \"Territory\" IN ('Canada' AS canada))",
-    "SELECT 1 AS a UNION SELECT count(*) FROM sqlite_master",
-    "SELECT count(*) AS a FROM sqlite_master EXCEPT SELECT 1",
-    "SELECT 1 AS a INTERSECT SELECT count(*) FROM duckdb_settings()",
-    "SELECT (SELECT max(random()) FROM r2) AS m FROM r1",
-    "SELECT * FROM (SELECT random() AS x FROM r2) AS s",
+    "SELECT * FROM query('DROP TABLE r1')",
+    "SELECT * FROM query('SET enable_external_access = true')",
+    "SELECT * FROM duckdb_secrets()",
+    "SELECT * FROM duckdb_extensions()",
 ]
 
 
 @pytest.mark.usefixtures("sales")
 @pytest.mark.parametrize(
     "sql",
-    DDL_AND_DML
-    + CONFIGURATION_AND_EXTENSIONS
-    + FILES_AND_NETWORK
-    + SYSTEM_CATALOG_AND_ENVIRONMENT
-    + BYPASSES
-    + EVERY_POSITION,
+    DDL_AND_DML + CONFIGURATION_AND_EXTENSIONS + FILES_AND_NETWORK + TEXT_TRICKS,
 )
-def test_hostile_query_is_refused_before_execution(
+def test_hostile_query_fails_and_leaves_the_session_intact(
     queries: QueryService, results: ResultService, sql: str
 ) -> None:
-    with pytest.raises(QueryValidationError, match=r"Rule \d+"):
+    with pytest.raises(QueryError):
         queries.run(sql)
 
     _assert_orders_intact(queries, results)
+
+
+@pytest.mark.usefixtures("sales")
+def test_system_views_show_only_the_session_itself(
+    queries: QueryService, results: ResultService
+) -> None:
+    # Readable since v3.6 (architecture, section 7.3): nothing beyond the session's own
+    # tables, here r1, r2 and r3, the result table being created.
+    summary = queries.run("SELECT table_name FROM duckdb_tables() ORDER BY table_name")
+
+    assert results.export(summary.handle, max_rows=10).rows == (("r1",), ("r2",), ("r3",))
 
 
 def _assert_orders_intact(queries: QueryService, results: ResultService) -> None:

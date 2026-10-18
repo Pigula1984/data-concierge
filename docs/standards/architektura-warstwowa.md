@@ -78,10 +78,8 @@ src/data_concierge/
 │   ├── repository.py      # ResultStore protocol + DuckDB implementation (owns the connection)
 │   └── service.py         # ResultService
 ├── query/
-│   ├── models.py          # ParsedQuery, QueryNode, RuleViolation, QuerySummary
-│   ├── parser.py          # SqlParser protocol, DuckDBSqlParser (json_serialize_sql / json_deserialize_sql)
-│   ├── rules.py           # QueryRule protocol, allowlists, QueryPolicy
-│   ├── normalizer.py      # completes the top-level ORDER BY
+│   ├── models.py          # QuerySummary
+│   ├── policy.py          # QueryPolicy: result column names and types, truncated sources
 │   └── service.py         # QueryService
 ├── agent/
 │   ├── deps.py            # AgentDeps

@@ -1,6 +1,5 @@
 """Result tables stored under handles, their lineage, and what the model sees of them."""
 
-import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -11,9 +10,8 @@ from pydantic import BaseModel, Field, JsonValue
 
 from data_concierge.core.types import ColumnRole, ColumnType, TableSchema, arrow_fields
 
+# Handles are r1, r2, ... in creation order.
 type Handle = str
-# Handles are r1, r2, ... in creation order; DuckDB resolves table names ignoring case.
-HANDLE_PATTERN = re.compile(r"r[0-9]+", re.IGNORECASE)
 type JsonScalar = str | int | bool | None
 type Rows = tuple[tuple[JsonScalar, ...], ...]
 

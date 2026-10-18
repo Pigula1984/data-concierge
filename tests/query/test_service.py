@@ -8,9 +8,8 @@ from decimal import Decimal
 import pytest
 
 from data_concierge.core.errors import QueryExecutionError, QueryValidationError
-from data_concierge.query.rules import QueryPolicy
 from data_concierge.query.service import QueryService
-from data_concierge.results.models import DescribedColumn, QueryLineage, ResultTable
+from data_concierge.results.models import QueryLineage, ResultTable
 from data_concierge.results.service import ResultService
 
 type Order = tuple[int, date, int, str, Decimal]
@@ -68,9 +67,8 @@ def test_monthly_report_has_exact_sums_and_zero_months(
         ("net_sales", "decimal(38,4)"),
         ("order_count", "int"),
     ]
-    assert summary.sql.endswith(
-        'ORDER BY m."month", 1 ASC NULLS LAST, 2 ASC NULLS LAST, 3 ASC NULLS LAST'
-    )
+    # Every column already has an allowed type, so the backend runs the model's text.
+    assert summary.sql == MONTHLY_REPORT.rstrip()
 
 
 @pytest.mark.usefixtures("sales")
@@ -96,13 +94,15 @@ def test_reversed_source_rows_give_the_same_values_in_the_same_order(
     orders_table: Callable[..., ResultTable],
     orders: list[Order],
 ) -> None:
-    # Two customers tie at the top: the appended ORDER BY must break the tie the same way.
+    # Two orders tie at the top; the model's tie-breaking column picks the same one.
     tied = [
         *orders,
         (31, date(2024, 1, 5), 8, "Canada", Decimal("99999.0000")),
         (32, date(2024, 1, 6), 9, "Canada", Decimal("99999.0000")),
     ]
-    top = 'SELECT "SalesOrderID", "SubTotal" FROM r1 ORDER BY "SubTotal" DESC LIMIT 1'
+    top = (
+        'SELECT "SalesOrderID", "SubTotal" FROM r1 ORDER BY "SubTotal" DESC, "SalesOrderID" LIMIT 1'
+    )
     outputs = []
     for rows in (tied, list(reversed(tied))):
         results, queries = new_services()
@@ -119,28 +119,34 @@ def test_reversed_source_rows_give_the_same_values_in_the_same_order(
 
 
 @pytest.mark.usefixtures("sales")
-def test_query_without_order_by_gets_every_column_position(queries: QueryService) -> None:
-    summary = queries.run('SELECT "Territory", count(*) AS order_count FROM r1 GROUP BY ALL')
+def test_rows_keep_the_order_of_the_models_order_by(
+    queries: QueryService, results: ResultService
+) -> None:
+    sql = 'SELECT "City" AS place FROM r2 UNION SELECT "Territory" FROM r1 ORDER BY place DESC'
 
-    assert summary.sql.endswith("ORDER BY 1 ASC NULLS LAST, 2 ASC NULLS LAST")
+    summary = queries.run(sql)
+    values = [str(row[0]) for row in results.export(summary.handle, max_rows=100).rows]
+
+    assert values == sorted(values, reverse=True)
+    assert summary.sql == sql
 
 
 @pytest.mark.usefixtures("sales")
 @pytest.mark.parametrize(
     "sql",
     [
-        'SELECT DISTINCT "Territory" FROM r1',
-        'SELECT "City" AS place FROM r2 UNION SELECT "Territory" FROM r1',
+        "SELECT count(*) AS n, 1 AS one FROM r1;  ",
+        "SELECT count(*) AS n, 1 AS one FROM r1 -- every order",
     ],
 )
-def test_distinct_and_union_run_with_the_appended_order(
+def test_trailing_semicolon_and_comment_survive_the_backends_wrapping(
     queries: QueryService, results: ResultService, sql: str
 ) -> None:
+    # `1 AS one` is INTEGER, so the backend wraps the query to cast it to BIGINT.
     summary = queries.run(sql)
-    values = [str(row[0]) for row in results.export(summary.handle, max_rows=100).rows]
 
-    assert values == sorted(values)
-    assert summary.sql.endswith("ORDER BY 1 ASC NULLS LAST")
+    assert results.export(summary.handle, max_rows=1).rows == ((30, 1),)
+    assert summary.sql.startswith("SELECT * REPLACE")
 
 
 def test_pivot_gives_a_column_per_listed_value_including_an_apostrophe(
@@ -201,9 +207,8 @@ def test_sum_of_an_integer_column_is_an_int(queries: QueryService, results: Resu
 @pytest.mark.parametrize(
     ("sql", "message"),
     [
-        # Lists and structs have no allowed constructor, so rule 5 stops them first.
-        ('SELECT ["City"] AS cities FROM r2', "`list_value` is not allowed"),
-        ("SELECT {'a': 1} AS pair", "`struct_pack` is not allowed"),
+        ('SELECT ["City"] AS cities FROM r2', "cities has the unsupported type VARCHAR[]"),
+        ("SELECT {'a': 1} AS pair", "pair has the unsupported type STRUCT"),
         ("SELECT INTERVAL 1 DAY AS span", "span has the unsupported type INTERVAL"),
     ],
 )
@@ -216,12 +221,19 @@ def test_result_columns_of_unsupported_types_are_refused(
     assert message in str(error.value)
 
 
-def test_double_result_column_is_refused_with_a_cast_hint() -> None:
-    # Rules 5 and 7 stop every allowed DOUBLE source first; the type check is the backstop.
+@pytest.mark.usefixtures("sales")
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT avg("SubTotal") AS average FROM r1',
+        'SELECT "SubTotal" / 2 AS average FROM r1',
+    ],
+)
+def test_double_result_column_is_refused_with_a_cast_hint(queries: QueryService, sql: str) -> None:
     with pytest.raises(
-        QueryValidationError, match=r"seconds is DOUBLE; CAST it to DECIMAL\(38,6\)"
+        QueryValidationError, match=r"average is DOUBLE; CAST it to DECIMAL\(38,6\)"
     ):
-        QueryPolicy.result_types([DescribedColumn("seconds", "DOUBLE")])
+        queries.run(sql)
 
 
 @pytest.mark.usefixtures("sales")
@@ -248,6 +260,26 @@ def test_handle_names_ignore_ascii_case(queries: QueryService) -> None:
     summary = queries.run("WITH Bothell AS (SELECT * FROM R2) SELECT count(*) AS n FROM bothell")
 
     assert summary.sources == ("r2",)
+
+
+@pytest.mark.usefixtures("sales")
+@pytest.mark.parametrize(
+    ("sql", "sources"),
+    [
+        # A CTE named like a handle shadows it, so the query reads no handle.
+        ('WITH r1 AS (SELECT 1 AS "SubTotal") SELECT * FROM r1', ()),
+        # The statistics prove no row matches, yet the query still reads both handles.
+        (
+            'SELECT * FROM r1 WHERE "CustomerID" IN (SELECT "CustomerID" + 100 FROM r2)',
+            ("r1", "r2"),
+        ),
+        ("SELECT count(*) AS n FROM query('SELECT * FROM r2')", ("r2",)),
+    ],
+)
+def test_sources_are_the_handles_duckdb_binds(
+    queries: QueryService, sql: str, sources: tuple[str, ...]
+) -> None:
+    assert queries.run(sql).sources == sources
 
 
 @pytest.mark.usefixtures("sales")

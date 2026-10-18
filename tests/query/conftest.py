@@ -12,9 +12,7 @@ import pyarrow as pa
 import pytest
 
 from data_concierge.core.types import Column, ColumnRole, ColumnType, TableSchema
-from data_concierge.query.normalizer import QueryNormalizer
-from data_concierge.query.parser import DuckDBSqlParser
-from data_concierge.query.rules import QueryPolicy
+from data_concierge.query.policy import QueryPolicy
 from data_concierge.query.service import QueryService
 from data_concierge.results.models import Handle, ProcedureLineage, ResultTable
 from data_concierge.results.repository import DuckDBResultStore
@@ -79,8 +77,7 @@ def _services(
 ) -> tuple[ResultService, QueryService]:
     store = DuckDBResultStore(query_timeout_seconds=timeout, max_query_rows=max_query_rows)
     results = ResultService(store)
-    parser = DuckDBSqlParser()
-    return results, QueryService(results, parser, QueryPolicy(), QueryNormalizer(parser))
+    return results, QueryService(results, QueryPolicy())
 
 
 @pytest.fixture

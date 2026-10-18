@@ -1,6 +1,6 @@
 # Data Concierge: opis architektury backendu (wersja 3, happy-flow tylko do odczytu)
 
-Status: opis koncepcji, implementacja w toku według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.5, data: 2026-10-12.
+Status: opis koncepcji, implementacja w toku według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.6, data: 2026-10-18.
 Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (sekcja 14), research bibliotek z 2026-10-11, prototyp parsera DuckDB z 2026-10-12, sprawdzenie danych i metadanych w lokalnej bazie AdventureWorks2025.
 
 > **Historia zmian.**
@@ -12,6 +12,7 @@ Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (
 > **v3.4:** wnioski z researchu bibliotek (Pydantic AI 2.55.0, DuckDB 1.5.6, pyodbc 5.3.0, testy na lokalnym SQL Server) i z planu wdrożenia: (1) agent kończy turę wynikiem `AgentAnswer`, a `Response` składa `ResponseAssembler`; (2) proweniencja żyje przy uchwytach w magazynie wyników; (3) sesje w pamięci procesu za `SessionRepository`; (4) `data_range` czytany procedurą `api.SalesOrder_DataRange`; (5) konto `agent_reader` to login SQL (instancja w trybie mieszanym), a same uprawnienia `EXECUTE` wystarczają także do walidacji katalogu; (6) tryb `strict` tylko dla narzędzi procedur, z budżetem Anthropic; (7) `avg` i dzielenie rzutowane na `DECIMAL(38,6)`, pełna kolejność wierszy, kompilacja `pivot`, zakaz agregacji obciętych wyników; (8) narzędzia synchroniczne, limity czasu w sterownikach, błędy mapowane na `ModelRetry` albo `ToolFailed`; (9) stały początek rozmowy i data bieżąca w wiadomości użytkownika; (10) `find_procedures` poza v1, kandydatem na później jest `defer_loading`.
 > **v3.5:** decyzja właściciela projektu: **wariant B** z sekcji 7.7 zastępuje wariant A. Agent wybiera i wywołuje procedury, każdy wynik trafia do DuckDB pod uchwytem, a obliczenia agent zapisuje jako jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji (narzędzie `query`, w tym `JOIN` kilku uchwytów i filtry po kolumnach wyniku). Zamknięta specyfikacja `transform` (kroki, fakty, walidator semantyczny, `SqlQueryBuilder`) znika. Backend odpowiada za bezpieczeństwo i determinizm: parser DuckDB z listami dozwolonych elementów, wykonanie w zablokowanym połączeniu, pełne `ORDER BY`, kontrola typów wyniku (kwoty nie wychodzą jako `DOUBLE`), proweniencja z pełnym SQL i wieloma źródłami. Zasada „model nie pisze SQL” dotyczy odtąd tylko SQL Server. Python i DataFrame'y (wariant C) odłożone. Zmienione sekcje: 1–4, 5.2, 6, 7 (w całości), 8–10, 11.2, 11.3, 12–14.
 > **v3.5 (uzupełnienie z implementacji silnika zapytań, 2026-10-13):** `POSITIONAL JOIN` i `ASOF JOIN` poza listą (sekcja 7.2); ramka `ROWS` w agregatach okna odpada razem z funkcjami okna zależnymi od kolejności (reguła 5); `SAMPLE` odpada na każdym poziomie (reguła 6); reguła 9 działa na kolumnach z `DESCRIBE`; literały `INTERVAL` rozpoznawane w drzewie; `preserve_insertion_order` ustawione jawnie w połączeniu sesji; reguła 7 wymaga `CAST(… AS DECIMAL)` wokół dzielenia i `avg` w kolumnach wyniku na każdym poziomie zapytania (decyzja właściciela projektu).
+> **v3.6:** decyzja właściciela projektu: **bez analizy treści zapytania**. Walidator drzewa parsera z listami dozwolonych węzłów i funkcji (reguły 2–8 z v3.5) i dopisywanie pełnego `ORDER BY` znikają. Bezpieczeństwo daje zablokowane połączenie DuckDB (sondy w sekcji 7.4a), dokładność `DECIMAL` i odrzucanie kolumn `DOUBLE` w wyniku. Backend sprawdza tylko: jedną instrukcję `SELECT`, nazwy i typy kolumn z `DESCRIBE` oraz obcięte źródła, które podaje plan zapytania DuckDB (`EXPLAIN`), a zapytanie na obciętym źródle jest odrzucane w całości. Funkcje niedeterministyczne, remisy i `DOUBLE` w krokach pośrednich zostają świadomie bez kontroli (sekcja 7.3). Zmienione sekcje: 1–4, 6.2, 7.1–7.4a, 7.6, 7.7, 8–14.
 
 ## 1. Cel i zakres
 
@@ -22,7 +23,7 @@ Szczęśliwa ścieżka v1:
 1. backend dostaje prompt (i tożsamość użytkownika),
 2. agent wybiera jedną lub kilka procedur z katalogu i ustala ich parametry (w razie potrzeby zwraca pytanie doprecyzowujące),
 3. backend wywołuje procedury i zapisuje każdy wynik w DuckDB pod uchwytem (`r1`, `r2`…),
-4. agent pisze jedno zapytanie `SELECT` nad uchwytami (np. `JOIN` listy klientów z zamówieniami i grupowanie po miesiącu), a backend je sprawdza, uzupełnia o pełną kolejność wierszy i wykonuje deterministycznie,
+4. agent pisze jedno zapytanie `SELECT` nad uchwytami (np. `JOIN` listy klientów z zamówieniami i grupowanie po miesiącu), a backend sprawdza, że to jedna instrukcja `SELECT` z poprawnymi nazwami i typami kolumn, i wykonuje je w zablokowanym DuckDB,
 5. backend zwraca status, tabele z danymi, krótki komentarz i proweniencję (jak policzono).
 
 Przykładowe prośby:
@@ -42,7 +43,7 @@ Poza zakresem v1: frontend, zapisy, procesy w tle, strażnicy, zatwierdzanie, ob
 - **Dane tylko przez procedury** z katalogu. Model nie pisze SQL do bazy SQL Server: tam wywołuje wyłącznie procedury z katalogu z parametrami.
 - **Żadnych procedur „pod pytanie”.** Procedury zwracają dane w naturalnym ziarnie (klient, zamówienie, pozycja), a zestawienia robi backend.
 - **Najpierw parametry procedur, potem SQL nad wynikami.** Wolumen danych zawężają parametry procedur (okres, klient, kategoria). Dodatkowe filtry po kolumnach wyniku i łączenie kilku wyników agent zapisuje w zapytaniu `SELECT` nad uchwytami w DuckDB (sekcja 7). Status `unsupported` zostaje dla próśb o dane, których nie zwraca żadna procedura, albo których nie da się pobrać bez obcięcia wyniku.
-- **Obliczenia deterministyczne.** Model nie liczy sum ani średnich i nie przepisuje liczb „z głowy”. Liczy DuckDB według SQL od modelu, a backend gwarantuje, że ten sam SQL na tych samych danych daje ten sam wynik w tej samej kolejności (sekcja 7).
+- **Obliczenia deterministyczne.** Model nie liczy sum ani średnich i nie przepisuje liczb „z głowy”. Liczy DuckDB według SQL od modelu. Kwoty zostają `DECIMAL`, więc ten sam SQL na tych samych danych daje te same sumy, a kolejność wierszy wynika z `ORDER BY` w zapytaniu (sekcja 7).
 - **Python.** Na start **modele Anthropic**, ale kod od początku niezależny od dostawcy, żeby później dało się użyć innych modeli (OpenAI, Azure, lokalne) bez przepisywania.
 - **Wymienna baza danych.** Zależność od silnika siedzi w jednym adapterze, który wywołuje procedury.
 - **Agent działa w imieniu użytkownika.** Tożsamość jest przekazywana do procedur już w v1, nawet jeśli procedury jeszcze jej nie sprawdzają.
@@ -55,8 +56,8 @@ Poza zakresem v1: frontend, zapisy, procesy w tle, strażnicy, zatwierdzanie, ob
 | Jak model wywołuje procedury | Jedno narzędzie na procedurę, generowane z YAML, ze ścisłym schematem parametrów. Tryb `strict` dostawcy dla narzędzi procedur i narzędzia `query`, sterowany ustawieniem. | Typowane parametry, walidacja przed wywołaniem, model nie wymyśla nazw [2]. `query` ma jeden parametr tekstowy, więc mieści się w budżecie trybu `strict` Anthropic (sekcja 6.1). |
 | Duża liczba procedur | W v1 bez wyszukiwania narzędzi: wszystkie definicje w kontekście | Przy kilkunastu procedurach to wystarcza. Gdy katalog urośnie: tool search Claude API (`defer_loading`, obsługiwany przez Pydantic AI) albo własne `find_procedures` (sekcja 6.3). |
 | Gdzie są dane | W magazynie wyników backendu, pod uchwytami. Model widzi schemat, statystyki i kilka wierszy. | Koszt, opóźnienie, limit kontekstu [4][5]. |
-| Jak liczyć | Model pisze **jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji** (narzędzie `query`: CTE, `JOIN`, `WHERE`, `GROUP BY`, `PIVOT`, wybrane funkcje okna). Backend parsuje je parserem DuckDB, sprawdza listy dozwolonych elementów, dokłada pełne `ORDER BY`, kontroluje typy wyniku i wykonuje w **DuckDB** (wariant B, sekcja 7.7). | Nie trzeba przewidywać z góry wszystkich kombinacji: agent łączy wyniki kilku procedur i filtruje je sam. Model ustala „co”, DuckDB liczy „ile”, a backend pilnuje bezpieczeństwa i determinizmu. |
-| SQL od modelu w DuckDB | Parser DuckDB (`json_serialize_sql`) i reguły „dozwolone tylko to, co wymienione”, wykonanie w zablokowanym połączeniu sesji z limitami pamięci, wątków, czasu i wierszy | Ten sam parser, który wykona zapytanie, więc nie ma rozjazdu między walidacją a wykonaniem. Zapytanie widzi tylko wyniki, które sesja już pobrała (sekcje 7.3 i 7.4a). |
+| Jak liczyć | Model pisze **jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji** (narzędzie `query`: CTE, `JOIN`, `WHERE`, `GROUP BY`, `PIVOT`, wybrane funkcje okna). Backend sprawdza, że to jedna instrukcja `SELECT`, kontroluje nazwy i typy wyniku i wykonuje je w **DuckDB** (wariant B, sekcja 7.7). | Nie trzeba przewidywać z góry wszystkich kombinacji: agent łączy wyniki kilku procedur i filtruje je sam. Model ustala „co”, DuckDB liczy „ile”. |
+| SQL od modelu w DuckDB | Wykonanie w zablokowanym połączeniu sesji (bez plików, sieci, rozszerzeń i zmian konfiguracji) z limitami pamięci, wątków, czasu i wierszy, bez analizy treści zapytania | Ochronę daje silnik, a nie własny walidator SQL. Zapytanie widzi tylko wyniki, które sesja już pobrała (sekcje 7.3 i 7.4a). |
 | Liczby w komentarzu | v1: model pisze komentarz swobodnie, korzystając z wartości z małych wyników zapytań policzonych przez backend. Bez kontroli. | Prostota na start. Ryzyko pomyłki przy przepisywaniu liczb jest znane i odłożone na później (sekcja 7.5). |
 | Pętla agenta | **Pydantic AI** z modelem `anthropic:claude-haiku-5-5` | Jeden kod dla wielu dostawców (zmiana modelu = zmiana konfiguracji) [6]. Vercel AI SDK jest w TypeScript, więc nie pasuje do backendu w Pythonie (sekcja 11). |
 | Koniec tury | Model zwraca `AgentAnswer` (status, komentarz, uchwyty, założenia, pytanie), a `ResponseAssembler` dokleja dane uchwytów i proweniencję | Model nie przepisuje danych tabel, więc nie może ich przekłamać (sekcje 6.2 i 9). |
@@ -75,7 +76,7 @@ flowchart LR
     EXE["Wykonawca procedur<br/>(adapter per silnik)"]
     DB[("Baza<br/>procedury, konto EXECUTE")]
     RS["Magazyn wyników<br/>(uchwyty, tabele DuckDB,<br/>pochodzenie uchwytów)"]
-    QE["Silnik zapytań<br/>(parser → reguły → ORDER BY → DuckDB)"]
+    QE["Silnik zapytań<br/>(jeden SELECT → DESCRIBE → DuckDB)"]
     OUT["Składanie odpowiedzi<br/>(AgentAnswer → Response)"]
 
     C --> API --> LOOP
@@ -98,7 +99,7 @@ flowchart LR
 | **Rejestr narzędzi** | Generuje definicje narzędzi z YAML, waliduje parametry, dokleja parametry wstrzykiwane przez backend (np. `@UserId`). |
 | **Wykonawca procedur** | `EXEC` z parametrami, limit wierszy i czasu, zamiana wyniku na tabelę z typami z katalogu (bez utraty precyzji), zapis do magazynu. Jedyny komponent zależny od silnika bazy. |
 | **Magazyn wyników** | Wyniki sesji pod uchwytami `r1`, `r2`… jako tabele w DuckDB (w pamięci procesu), ze schematem, statystykami i pochodzeniem każdego uchwytu: wywołaniem procedury albo zapytaniem `query` z pełnym SQL i listą uchwytów źródłowych. |
-| **Silnik zapytań** | Przyjmuje SQL od modelu (narzędzie `query`): parsuje go parserem DuckDB, sprawdza reguły bezpieczeństwa i determinizmu, uzupełnia `ORDER BY`, sprawdza typy wyniku, wykonuje w połączeniu sesji i zapisuje wynik pod nowym uchwytem (sekcja 7). |
+| **Silnik zapytań** | Przyjmuje SQL od modelu (narzędzie `query`): sprawdza, że to jedna instrukcja `SELECT`, wiąże je (`DESCRIBE`), sprawdza nazwy i typy wyniku oraz obcięte źródła, wykonuje w połączeniu sesji i zapisuje wynik pod nowym uchwytem (sekcja 7). |
 | **Składanie odpowiedzi** | `ResponseAssembler`: z `AgentAnswer` od modelu buduje `Response` (sekcja 9). Dokleja pełne dane wskazanych uchwytów i proweniencję, czyli wszystkich przodków tych uchwytów z grafu pochodzenia. Docelowo także kontrola liczb w komentarzu (sekcja 7.5). |
 
 Proweniencja nie jest osobnym komponentem. Magazyn wyników zapisuje pochodzenie przy każdym uchwycie, a składanie odpowiedzi odczytuje graf pochodzenia zwracanych uchwytów (sekcja 7.6). Ten graf pozwala odtworzyć wynik bez modelu i jest zalążkiem logu audytowego.
@@ -273,7 +274,7 @@ Wynik wywołania procedury zwracany modelowi (nie pełne dane):
 
 | Narzędzie | Rola |
 |-----------|------|
-| `query` | Przyjmuje jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji (sekcja 7). Zwraca nowy uchwyt z opisem jak po wywołaniu procedury (schemat, statystyki, podgląd, a dla małych wyników cały wynik) i SQL faktycznie wykonany przez backend. Błąd parsera, reguł albo wykonania wraca do modelu jako prośba o poprawkę (`ModelRetry`). |
+| `query` | Przyjmuje jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji (sekcja 7). Zwraca nowy uchwyt z opisem jak po wywołaniu procedury (schemat, statystyki, podgląd, a dla małych wyników cały wynik) i SQL faktycznie wykonany przez backend. Błąd kontroli z sekcji 7.3 albo wykonania wraca do modelu jako prośba o poprawkę (`ModelRetry`). |
 | `describe_result` | Pełny schemat i statystyki uchwytu (gdy podgląd nie wystarcza). |
 | `present_result` | Koniec tury: wynik `AgentAnswer` ze statusem, komentarzem, uchwytami do zwrócenia (z tytułami tabel), założeniami i ewentualnym pytaniem doprecyzowującym. W Pydantic AI to nie zwykłe narzędzie, tylko **typ wyniku agenta** (`output_type=ToolOutput(AgentAnswer, name="present_result")`): framework udostępnia go modelowi jako specjalne narzędzie wyjściowe i sam prosi o poprawkę, gdy odpowiedź nie pasuje do schematu [6]. `AgentAnswer` nie zawiera danych tabel. Pełną odpowiedź (sekcja 9) buduje z niego `ResponseAssembler`. |
 
@@ -282,7 +283,7 @@ Definicja narzędzia `query` (opis skrócony):
 ```json
 {
   "name": "query",
-  "description": "Run one read-only SELECT in DuckDB SQL over result handles of this session (r1, r2, ...). Use CTEs, JOIN, WHERE, GROUP BY, PIVOT. Keep money as DECIMAL: CAST(avg(...) AS DECIMAL(38,6)), divide with NULLIF(divisor, 0) and CAST the quotient to DECIMAL(38,6). Give every computed column an English snake_case alias. The backend appends a full ORDER BY and stores the result under a new handle.",
+  "description": "Run one read-only SELECT in DuckDB SQL over result handles of this session (r1, r2, ...). Use CTEs, JOIN, WHERE, GROUP BY, PIVOT. Keep money as DECIMAL: CAST(avg(...) AS DECIMAL(38,6)), divide with NULLIF(divisor, 0) and CAST the quotient to DECIMAL(38,6). Give every computed column an English snake_case alias. Write dates as literals, not current_date or now(). Add ORDER BY when order matters, with a tie-breaking id column for a stable top N. The result is stored under a new handle.",
   "strict": true,
   "input_schema": {
     "type": "object",
@@ -301,7 +302,7 @@ Wynik `query` zwracany modelowi:
   "row_count": 12,
   "truncated": false,
   "sources": ["r1", "r2"],
-  "sql": "WITH … SELECT … ORDER BY m.\"month\", 1 ASC NULLS LAST, 2 ASC NULLS LAST, 3 ASC NULLS LAST",
+  "sql": "WITH … SELECT … ORDER BY m.month",
   "columns": [{"name": "month", "type": "date", "role": "time"}, {"name": "net_sales", "type": "decimal(38,4)", "role": "measure"}, "..."],
   "stats": {"…": "…"},
   "preview": ["… cały wynik, bo ma do 50 wierszy …"]
@@ -318,11 +319,11 @@ Gdy katalog urośnie, kandydatem jest wbudowany **tool search** Claude API (`def
 
 ### 7.1. Zasada
 
-**Model decyduje, jakie dane pobrać i co z nich policzyć. DuckDB liczy. Backend pilnuje bezpieczeństwa i determinizmu.** Model nigdy nie dostaje pełnych danych do zsumowania „w głowie” i nigdy sam nie wpisuje wyniku obliczeń. Wywołuje procedury, które uzna za potrzebne, a ich wyniki trafiają do DuckDB pod uchwytami. Obliczenie zapisuje jako jedno zapytanie `SELECT` w dialekcie DuckDB nad tymi uchwytami. Backend parsuje zapytanie, sprawdza je według list dozwolonych elementów, uzupełnia o pełną kolejność wierszy, kontroluje typy wyniku i wykonuje je w zablokowanym połączeniu sesji. Ten sam SQL na tych samych danych daje zawsze ten sam wynik w tej samej kolejności.
+**Model decyduje, jakie dane pobrać i co z nich policzyć. DuckDB liczy. Bezpieczeństwo daje zablokowany silnik, a nie analiza tekstu zapytania.** Model nigdy nie dostaje pełnych danych do zsumowania „w głowie” i nigdy sam nie wpisuje wyniku obliczeń. Wywołuje procedury, które uzna za potrzebne, a ich wyniki trafiają do DuckDB pod uchwytami. Obliczenie zapisuje jako jedno zapytanie `SELECT` w dialekcie DuckDB nad tymi uchwytami. Pliki, sieć, rozszerzenia i zmiany konfiguracji blokuje samo połączenie DuckDB (sekcja 7.4a). Backend sprawdza tylko to, czego silnik nie sprawdzi sam: że to jedna instrukcja `SELECT`, że kolumny wyniku mają nazwy i typy zgodne z kontraktem odpowiedzi i że zapytanie nie liczy na obciętych danych (sekcja 7.3).
 
 ```
 procedura A ──► r1 ─┐
-                    ├──► SQL od modelu ──► parser i reguły ──► pełne ORDER BY ──► DuckDB ──► kontrola typów ──► r3 ──► odpowiedź JSON
+                    ├──► SQL od modelu ──► jedna instrukcja SELECT ──► DESCRIBE: nazwy, typy, źródła ──► DuckDB ──► r3 ──► odpowiedź JSON
 procedura B ──► r2 ─┘
 ```
 
@@ -331,66 +332,47 @@ Podział odpowiedzialności:
 | Kto | Za co odpowiada |
 |-----|-----------------|
 | Model | Wybór procedur i parametrów, treść zapytania: które uchwyty połączyć, jak filtrować, grupować, sortować, jakie miary policzyć. |
-| Backend | Zabezpieczenia (tylko `SELECT`, tylko uchwyty sesji, tylko dozwolone funkcje, brak plików i sieci, limity), determinizm (pełne `ORDER BY`, typy dokładne, brak funkcji niedeterministycznych), proweniencja. |
+| DuckDB | Blokada plików, sieci, rozszerzeń i zmian konfiguracji, limity pamięci i wątków (sekcja 7.4a). Dokładna arytmetyka `DECIMAL`. |
+| Backend | Jedna instrukcja `SELECT`, nazwy i typy kolumn wyniku, odmowa obliczeń na obciętych wynikach, limity czasu i wierszy, proweniencja. |
 | SQL Server | Bez zmian: wyłącznie procedury z katalogu z parametrami (sekcja 5). Zasada „model nie pisze SQL” obowiązuje tam nadal. |
 
 ### 7.2. Narzędzie `query`
 
-Wejściem jest jeden tekst `sql` (definicja w sekcji 6.2). Zapytanie czyta tabele nazwane jak uchwyty sesji (`r1`, `r2`…) z kolumnami nazwanymi jak w schemacie uchwytu. Dozwolone konstrukcje:
-
-- `WITH` (CTE, bez `RECURSIVE`), `JOIN` (`INNER`, `LEFT`, `RIGHT`, `FULL`, `CROSS`, `NATURAL`, `SEMI`, `ANTI`; bez `POSITIONAL JOIN`, który łączy wiersze według ich kolejności, i `ASOF JOIN`, który z kilku równych dopasowań wybiera dowolne), `WHERE`, `GROUP BY` (także `GROUP BY ALL`), `HAVING`, `QUALIFY`, `CASE`, `UNION`/`INTERSECT`/`EXCEPT`, podzapytania skalarne i w `IN`/`EXISTS`, `SELECT DISTINCT`;
-- `PIVOT` w składni `FROM … PIVOT (<agregat> FOR <kolumna> IN (<wartości>))` z jawną listą wartości. Uproszczona instrukcja `PIVOT <tabela> ON …` odpada: nie jest instrukcją `SELECT`, a bez listy wartości DuckDB uruchamia pod spodem dodatkowe zapytania. Wartości kolumny obrotu model bierze ze statystyk uchwytu albo z wcześniejszego `query`;
-- `ORDER BY` i `LIMIT` tylko na najwyższym poziomie zapytania (top N);
-- funkcje z listy dozwolonych (sekcja 7.3), w tym `range` i `generate_series` jako jedyne funkcje tabelowe, np. do siatki miesięcy.
+Wejściem jest jeden tekst `sql` (definicja w sekcji 6.2). Zapytanie czyta tabele nazwane jak uchwyty sesji (`r1`, `r2`…) z kolumnami nazwanymi jak w schemacie uchwytu. Dozwolony jest każdy `SELECT` dialektu DuckDB: CTE, `JOIN`, `WHERE`, `GROUP BY`, `HAVING`, `QUALIFY`, funkcje okna, `UNION`, podzapytania, `PIVOT` w składni `FROM … PIVOT (<agregat> FOR <kolumna> IN (<wartości>))`, `range` i `generate_series` do siatki okresów. Uproszczona instrukcja `PIVOT <tabela> ON …` odpada, bo nie jest instrukcją `SELECT`. Wartości kolumny obrotu model bierze ze statystyk uchwytu albo z wcześniejszego `query`.
 
 Wynik `query` zapisuje się pod nowym uchwytem. Model może go użyć w kolejnym `query`, opisać przez `describe_result` albo zwrócić w `present_result`.
 
 **Wskazówki dla modelu** (instrukcja systemowa i opis narzędzia, sekcja 11.3):
 
 - **Kwoty zostają `DECIMAL`.** `sum`, `min`, `max`, dodawanie, odejmowanie i mnożenie kwot dają `DECIMAL`. `avg` i dzielenie dają w DuckDB `DOUBLE`, więc model rzutuje je w tym samym wyrażeniu: `CAST(avg("SubTotal") AS DECIMAL(38,6))`, `CAST(sum(a) / NULLIF(sum(b), 0) AS DECIMAL(38,6))`. `NULLIF` jest konieczne, bo dzielenie przez zero daje `NaN` albo nieskończoność, których nie da się rzutować na `DECIMAL`. Najpierw agregujemy dokładne wartości, dzielimy na końcu.
+- **Daty jako literały.** Data bieżąca jest w wiadomości użytkownika (sekcja 11.3). Model wpisuje okresy jawnie, np. `DATE '2026-10-01'`, a nie `current_date` czy `now()`, żeby w proweniencji było widać, za jaki okres jest wynik.
+- **Kolejność.** Backend nie dopisuje sortowania. Model pisze `ORDER BY`, gdy kolejność ma znaczenie, a przy `LIMIT` (top N) dodaje kolumnę rozstrzygającą remisy (np. `CustomerID`), jeśli lista ma być za każdym razem taka sama.
 - **Okresy:** `CAST(date_trunc('month', "OrderDate") AS DATE) AS month`, bo `date_trunc` zwraca `TIMESTAMP`.
 - **Brakujące okresy:** `LEFT JOIN` z siatką `range(DATE '2024-01-01', DATE '2025-01-01', INTERVAL 1 MONTH)` w zakresie z prośby (nie z min/max danych) i `COALESCE(…, 0)`. Miesiąc bez sprzedaży na początku lub końcu roku inaczej zniknąłby z raportu.
 - **Nazwy kolumn wyniku** po angielsku w `snake_case` (`month`, `net_sales`, `order_count`). Kolumny przeniesione bez zmian mogą zachować nazwę źródłową (`CustomerName`).
 - **Łączenie uchwytów** po kolumnach `id` (np. `CustomerID`), a nie po nazwach, bo nazwy nie są unikalne (sekcja 5.4).
-- Model pisze zapytanie bez parametrów (`?`, `$1`), z literałami w tekście. Literały trafiają do proweniencji razem z SQL.
+- `random()`, `row_number()` bez pełnego `ORDER BY` i agregaty zależne od kolejności (`string_agg`, `any_value`) dają przy każdym uruchomieniu albo przy remisach inny wynik. Model używa ich tylko wtedy, gdy użytkownik o to prosi (np. losowa próbka).
 
-### 7.3. Walidacja przed wykonaniem
+### 7.3. Kontrole backendu
 
-**Parser: parser DuckDB, a nie sqlglot.** Rozważone opcje:
+**Decyzja v3.6: backend nie analizuje treści zapytania.** Wersja 3.5 przechodziła drzewo parsera DuckDB (`json_serialize_sql`) i sprawdzała listy dozwolonych węzłów, funkcji i konstrukcji. Ten walidator był większością kodu modułu zapytań i wymagał znajomości wewnętrznego formatu drzewa, a chronił głównie przed przypadkami brzegowymi: bezpieczeństwo i tak daje zablokowane połączenie (sekcja 7.4a), a kwoty są dokładne dzięki `DECIMAL`. Zostają kontrole, których silnik nie zrobi sam:
 
-| | Parser DuckDB (`duckdb.extract_statements` + `json_serialize_sql`) | sqlglot |
-|---|---|---|
-| Zgodność z wykonaniem | Ten sam parser, który wykona zapytanie. Nie ma rozjazdu „walidator widzi co innego niż silnik”, który w zabezpieczeniach jest typową drogą obejścia. | Osobna implementacja dialektu DuckDB. Każda różnica w parsowaniu to potencjalne obejście reguł. |
-| Zależności | Żadnych nowych: DuckDB już jest. | Nowa biblioteka. |
-| Wygoda drzewa | Drzewo JSON w formacie wewnętrznym DuckDB, zmienia się między wersjami. | Wygodne API drzewa i przepisywania zapytań. |
-| Odtworzenie SQL po zmianie drzewa | `json_deserialize_sql` | `Expression.sql(dialect="duckdb")` |
+1. **Jedna instrukcja `SELECT`.** `extract_statements` zwraca dokładnie jedną instrukcję typu `SELECT`. Odpada DDL, DML, `PRAGMA`, `SET`, `ATTACH`, `COPY`, `INSTALL`, `LOAD`, `CALL`, `EXPORT`, `PIVOT … ON` i każda druga instrukcja po średniku. Funkcja `query('…')` wewnątrz `SELECT` też przyjmuje tylko `SELECT` (sprawdzone na DuckDB 1.5.6).
+2. **Wiązanie bez wykonania.** Backend uruchamia `DESCRIBE <zapytanie>`, które wiąże zapytanie ze schematem uchwytów (nazwy kolumn, typy, funkcje) bez liczenia wyniku. Błąd wiązania (nieznana kolumna, nieznana tabela, zły typ argumentu) wraca do modelu z komunikatem DuckDB, np. „Binder Error: Referenced column "Subtotal" not found… Candidate bindings: "SubTotal"”.
+3. **Nazwy kolumn wyniku** (z `DESCRIBE`, bo nazwy kolumn z `*` i kolumn bez aliasu powstają dopiero przy wiązaniu) pasują do `^[A-Za-z][A-Za-z0-9_]*$` i są unikalne bez względu na wielkość liter (tak DuckDB rozwiązuje identyfikatory). Wymusza to jawny alias każdej wyliczanej kolumny, bo nazwy nadawane automatycznie przez DuckDB (np. `sum("SubTotal")`) zawierają nawiasy. Kolumny obrotu dostają aliasy w liście `IN ('Bikes' AS bikes, …)`.
+4. **Typy wyniku** według tabeli z sekcji 7.4. Kolumna `DOUBLE` jest odrzucana z prośbą o `CAST(… AS DECIMAL(38,6))`.
+5. **Obcięte źródła.** Źródła zapytania podaje DuckDB: backend czyta tabele z planu logicznego przed optymalizacją (`EXPLAIN (FORMAT json)` przy `explain_output = 'all'`). Binder rozwiązał tam już CTE (także nazwane jak uchwyt), wielkość liter i `query('…')`, a optymalizator nie usunął jeszcze tabeli, o której statystyki mówią, że nic nie wniesie. `get_table_names` odpada, bo wiąże zapytanie na pustych tabelach i zgłasza błąd przy `JOIN … USING` i `NATURAL JOIN` (DuckDB 1.5.6). Gdy którekolwiek źródło ma w grafie pochodzenia wynik procedury obcięty przez `max_rows`, zapytanie jest odrzucane z prośbą o zawężenie parametrów procedury. Wiersze samego obciętego wyniku agent może zwrócić bez `query`, wskazując uchwyt procedury w `present_result`, a odpowiedź niesie wtedy flagę `truncated`.
 
-Wybór: **parser DuckDB**. Rozstrzyga zgodność z wykonaniem. Słabość formatu łagodzimy trzema rzeczami: wersja DuckDB jest przypięta w `uv.lock`, walidator odrzuca każdy nieznany typ węzła (zasada „dozwolone tylko to, co wymienione”, więc zmiana formatu kończy się odmową, a nie dziurą), a testy bezpieczeństwa uruchamiają się przy każdej aktualizacji DuckDB. Prototyp z 2026-10-12 na DuckDB 1.5.6 potwierdził, że w zablokowanym połączeniu: `json_serialize_sql` działa, odrzuca instrukcje inne niż `SELECT` (`DELETE`, `PRAGMA`, `PIVOT … ON`), zwraca listę instrukcji (więc widać, że jest ich kilka), pokazuje funkcje tabelowe jako węzły `TABLE_FUNCTION`, a `json_deserialize_sql` odtwarza tekst SQL z drzewa.
+**Dlaczego obcięte źródło to błąd, a nie ostrzeżenie.** Suma, liczba czy średnia z obciętych danych wygląda na pełną: w tabeli odpowiedzi nie widać, których wierszy brakuje, a wszystkie pozycje zamówień z całego zakresu (121 317) przekraczają domyślne `max_rows` 100 000. Obcięty zbiór użyty jako filtr (`JOIN` sprzedaży z obciętą listą klientów) też po cichu zaniża sumy. Ostrzeżenie zależałoby od tego, czy model przekaże je użytkownikowi, a komentarz w v1 nie jest kontrolowany (sekcja 7.5). Bez analizy drzewa backend nie odróżnia agregacji od wyboru wierszy, więc odrzuca każde zapytanie na obciętym źródle. To prostsze i bezpieczniejsze, a zwrot surowych wierszy zostaje przez uchwyt procedury.
 
-**Reguły** (każde naruszenie to `QueryValidationError` z nazwą reguły i fragmentem zapytania):
+**Błąd wraca do modelu** jako prośba o poprawkę (`ModelRetry`, sekcja 11.2) z czytelnym komunikatem, np. „Result type: column avg_order is DOUBLE; CAST it to DECIMAL(38,6)”. Model poprawia SQL w kolejnym kroku pętli. Budżet ponowień i limit 10 kroków (sekcja 8) ograniczają liczbę prób.
 
-1. **Jedna instrukcja `SELECT`.** `extract_statements` zwraca dokładnie jedną instrukcję typu `SELECT`. Odpada DDL, DML, `PRAGMA`, `SET`, `ATTACH`, `COPY`, `INSTALL`, `LOAD`, `CALL`, `EXPORT` i każda druga instrukcja po średniku.
-2. **Węzły drzewa z listy dozwolonych.** Walidator przechodzi całe drzewo z `json_serialize_sql`. Dozwolone są tylko wymienione typy węzłów zapytania (m.in. `SELECT_NODE`, `SET_OPERATION_NODE`, CTE z `cte_map`), źródeł (m.in. tabela bazowa, `JOIN`, podzapytanie, `PIVOT`, `TABLE_FUNCTION` z reguły 4) i wyrażeń (kolumny, stałe, operatory, porównania, `CASE`, `CAST`, funkcje, agregaty, okna, podzapytania). Nieznany typ węzła to odmowa.
-3. **Tylko uchwyty sesji.** Każde `BASE_TABLE` bez schematu i katalogu jest nazwą CTE w zasięgu albo istniejącym uchwytem sesji. Nazwa CTE nie może wyglądać jak uchwyt (`^r[0-9]+$`). Odpada więc `information_schema`, `duckdb_*`, `pg_catalog` i nazwy plików w `FROM 'x.csv'`. Lista uchwytów źródłowych z tej reguły trafia do proweniencji.
-4. **Funkcje tabelowe:** tylko `range` i `generate_series`. Odpadają `read_csv`, `read_parquet`, `read_json`, `read_text`, `glob`, `query`, `query_table`, `sql_auto_complete`, funkcje `duckdb_*()` i każda inna.
-5. **Funkcje skalarne, agregujące i okna z listy dozwolonych.** Lista obejmuje m.in. operatory arytmetyczne i porównania, `coalesce`, `nullif`, `greatest`, `least`, `abs`, `round`, `floor`, `ceil`, funkcje dat (`date_trunc`, `date_part`, `extract`, `year`, `quarter`, `month`, `day`, `strftime`, `make_date`, dodawanie `INTERVAL`), funkcje tekstu (`lower`, `upper`, `trim`, `concat`, `length`, `like`, `ilike`, `starts_with`, `contains`), agregaty `sum`, `count`, `count(DISTINCT …)`, `min`, `max`, `avg`, `bool_and`, `bool_or` oraz funkcje okna `rank`, `dense_rank` i agregaty `OVER (…)`. Lista żyje w kodzie w jednym miejscu, a każde rozszerzenie jest świadome i ma test. Poza listą zostają w szczególności:
-   - funkcje niedeterministyczne: `random`, `uuid`, `gen_random_uuid`, `now`, `current_date`, `current_timestamp`, `nextval`, `setseed`;
-   - agregaty zależne od kolejności wierszy: `any_value`, `arbitrary`, `first`, `last`, `list`, `string_agg`, `array_agg`;
-   - funkcje okna zależne od kolejności przy remisach: `row_number`, `ntile`, `lag`, `lead`, `first_value`, `last_value`, `nth_value`. Top N w grupach daje `rank`/`dense_rank` z `QUALIFY`, a porównanie z poprzednim okresem `JOIN` po przesuniętej dacie. Z tego samego powodu odpada ramka `ROWS` w agregatach okna (np. `ROWS BETWEEN 1 PRECEDING AND CURRENT ROW`): przy remisach w `ORDER BY` okna obejmuje inne wiersze, a domyślna ramka `RANGE` traktuje remisy razem. Funkcje z remisami wrócą, gdy backend nauczy się sprawdzać, że `ORDER BY` okna jest pełne;
-   - funkcje odczytujące środowisko i ustawienia: `current_setting`, `getenv`, `version` i podobne.
+**Czego backend świadomie nie sprawdza** (wrócimy do tego, gdy zestaw ewaluacyjny pokaże problem):
 
-   Reguła ocenia nazwy funkcji takie, jakie daje parser: `extract(…)` to `date_part`, `LIKE`/`ILIKE` to `~~`/`~~*`, `count(*)` to `count_star`. Literał `INTERVAL 1 MONTH` parser zapisuje jako `to_months(CAST(trunc(CAST(1 AS DOUBLE)) AS INTEGER))`, więc walidator rozpoznaje ten wzorzec jako literał przedziału i nie traktuje go jako rzutowania na `DOUBLE` (reguła 7). Schemat przy nazwie funkcji niczego nie zmienia (parser sam dopisuje `main` np. przy `extract`), więc decyduje sama nazwa. `date_part` (także z `extract`) przechodzi tylko z częścią całkowitą (`year`, `month`, `day` itd.), bo części takie jak `epoch` i `julian` dają `DOUBLE`. Nazwy tabel, CTE i funkcji walidator porównuje tak jak DuckDB: bez względu na wielkość liter tylko w zakresie ASCII. Pełne składanie wielkości liter z Pythona (`casefold`) zamienia np. długie „ſ” na „s”, więc CTE `"ſqlite_master"` udawałoby przesłonięcie widoku systemowego `sqlite_master`, który DuckDB i tak by odczytał.
-6. **Brak ukrytych źródeł niedeterminizmu.** `LIMIT` i `OFFSET` są dozwolone tylko na najwyższym poziomie, bo w CTE i podzapytaniach wybierałyby dowolne wiersze przy remisach. `SAMPLE`/`TABLESAMPLE` (losowe wiersze) i `DISTINCT ON` (dowolny wiersz z grupy) odpadają na każdym poziomie, podobnie `WITH RECURSIVE`.
-7. **Brak arytmetyki zmiennoprzecinkowej, której wynik zależy od kolejności.** Odpada `CAST`/`TRY_CAST` na `FLOAT`, `REAL`, `DOUBLE` i literały w notacji wykładniczej (`1e-3`, które DuckDB czyta jako `DOUBLE`). W argumentach funkcji agregujących i okien nie wolno dzielić (`/`), używać `avg` ani podzapytań. Suma wartości `DOUBLE` zależy od kolejności dodawania, a przy `threads = 2` ta kolejność się zmienia. Dzielenie i `avg` (także `avg(…) OVER (…)`) są dozwolone poza agregatem, czyli na dokładnych sumach, ale w kolumnie wyniku na każdym poziomie zapytania (także w CTE i podzapytaniu) muszą stać wewnątrz `CAST(… AS DECIMAL(p,s))` w tym samym wyrażeniu. Inaczej kolumna `DOUBLE` z CTE mogłaby zostać zsumowana poziom wyżej, a końcowy `CAST` ukryłby to przed kontrolą typów wyniku (sekcja 7.4). Warunki (`WHERE`, `HAVING`, `QUALIFY`, `JOIN … ON`, `FILTER`) i klucze sortowania oraz partycji nie dają wartości kolumny, więc rzutowania nie wymagają.
-8. **Brak parametrów zapytania** (`?`, `$1`, `$name`).
-9. **Nazwy kolumn wyniku** (sprawdzane na kolumnach z `DESCRIBE`, bo nazwy kolumn z `*` i kolumn bez aliasu powstają dopiero przy wiązaniu) pasują do `^[A-Za-z][A-Za-z0-9_]*$` i są unikalne bez względu na wielkość liter (tak DuckDB rozwiązuje identyfikatory). Wymusza to jawny alias każdej wyliczanej kolumny, bo nazwy nadawane automatycznie przez DuckDB (np. `sum("SubTotal")`) zawierają nawiasy. Kolumny obrotu dostają aliasy w liście `IN ('Bikes' AS bikes, …)`.
-10. **Obcięte źródła a agregacja.** Gdy którykolwiek uchwyt źródłowy ma w grafie pochodzenia wynik procedury obcięty przez `max_rows`, zapytanie z agregacją (funkcja agregująca, `GROUP BY`, `PIVOT`, agregat w oknie) jest odrzucane z prośbą o zawężenie parametrów procedury. Zapytanie bez agregacji przechodzi, a jego wynik dziedziczy flagę `truncated`, która trafia do odpowiedzi.
-
-**Dlaczego obcięte źródło w agregacji to nadal błąd, a nie ostrzeżenie.** Suma, liczba czy średnia z obciętych danych wygląda na pełną: w tabeli odpowiedzi nie widać, których wierszy brakuje, a wszystkie pozycje zamówień z całego zakresu (121 317) przekraczają domyślne `max_rows` 100 000. Ostrzeżenie zależałoby od tego, czy model przekaże je użytkownikowi, a komentarz w v1 nie jest kontrolowany (sekcja 7.5). Wariant B dokłada nowy przypadek: obcięty zbiór użyty jako filtr (`JOIN` sprzedaży z obciętą listą klientów) po cichu zaniża sumy, więc reguła obejmuje każde źródło, a nie tylko tabelę, po której się sumuje. Wiersze bez agregacji niosą flagę `truncated` jawnie, więc tam ostrzeżenie wystarcza. Agent ma dwie drogi: zawęzić parametry procedury (np. krótszy okres, kategoria) albo zwrócić wiersze z flagą i wyjaśnieniem w `assumptions`.
-
-**Po regułach drzewa: wiązanie bez wykonania.** Backend uruchamia `DESCRIBE <zapytanie>`, które wiąże zapytanie ze schematem uchwytów (nazwy kolumn, typy, funkcje) bez liczenia wyniku. Błąd wiązania (nieznana kolumna, zły typ argumentu) wraca do modelu jako `ModelRetry` z komunikatem DuckDB, np. „Binder Error: Referenced column "Subtotal" not found… Candidate bindings: "SubTotal"”. Wynik `DESCRIBE` daje typy kolumn do kontroli z sekcji 7.4.
-
-**Błąd wraca do modelu** jako prośba o poprawkę (`ModelRetry`, sekcja 11.2) z czytelnym komunikatem, np. „Rule 5: function `row_number` is not allowed; use `rank` or `dense_rank` with QUALIFY”. Model poprawia SQL w kolejnym kroku pętli. Budżet ponowień i limit 10 kroków (sekcja 8) ograniczają liczbę prób.
+- **Funkcje niedeterministyczne** (`random`, `now`, `current_date`): wskazówka dla modelu z sekcji 7.2, a SQL i tak trafia do proweniencji.
+- **Remisy przy sortowaniu i `LIMIT`:** zachowują się jak w każdym ręcznie pisanym SQL. Przy remisie każdy z wyników jest poprawny, a stałą listę daje kolumna rozstrzygająca z sekcji 7.2.
+- **`DOUBLE` w krokach pośrednich** (np. suma wartości `avg` z CTE): ostatnie cyfry mogą zależeć od kolejności sumowania. Pomiar z 2026-10-18 (zwykłe sumowanie `DOUBLE`, 10 losowych kolejności): 100 tys. wierszy o sumie ok. 1 mld daje błąd ok. 0,00003, przy sumie ok. 100 mld ok. 0,002, a widoczny w groszach (ok. 0,07) dopiero przy 1 mln wierszy i sumie ok. 1 bln. Kwoty z procedur są `DECIMAL`, więc sumy kwot są dokładne zawsze, a `DOUBLE` dają tylko średnie i ilorazy.
+- **Widoki i funkcje systemowe DuckDB** (`duckdb_settings()`, `duckdb_tables()`, `current_setting`): są czytelne, ale pokazują tylko ustawienia i tabele własnej sesji.
 
 ### 7.4. Silnik: DuckDB
 
@@ -404,16 +386,16 @@ Wybór: **parser DuckDB**. Rozstrzyga zgodność z wykonaniem. Słabość format
 | Język operacji | SQL | Metody Pythona (`group_by`, `agg`, `pivot`…) | Metody Pythona |
 | Typ dziesiętny | `DECIMAL(p,s)`, pełne wsparcie | Typ `Decimal` jest, ale stan wsparcia operacji trzeba by sprawdzić | Tylko jako obiekty Pythona (wolno) albo `float` (niedokładnie) |
 | Czytelność proweniencji | SQL jest czytelny dla każdego, kto zna SQL | Kod Polars trzeba znać | Kod pandas trzeba znać |
-| Model pisze zapytania (wariant B) | SQL, który modele znają najlepiej, a parser DuckDB daje drzewo do walidacji | Kod Pythona, czyli wariant C z sandboxem | Kod Pythona, czyli wariant C z sandboxem |
+| Model pisze zapytania (wariant B) | SQL, który modele znają najlepiej, wykonywany w połączeniu bez dostępu do plików i sieci | Kod Pythona, czyli wariant C z sandboxem | Kod Pythona, czyli wariant C z sandboxem |
 
-Polars jest bardzo szybki i popularny, ale w wariancie B obliczenia są zapisane w dialekcie DuckDB, więc wymiana silnika oznaczałaby zmianę języka, w którym pisze model. To świadomy koszt wyboru wariantu B. Wcześniejszy pomysł na wymiennego wykonawcę specyfikacji w Polars (`PolarsExecutor`) znika razem ze specyfikacją.
+Polars jest bardzo szybki i popularny, ale w wariancie B obliczenia są zapisane w dialekcie DuckDB, więc wymiana silnika oznaczałaby zmianę języka, w którym pisze model. To świadomy koszt wyboru wariantu B. SQLite odpada, bo nie ma typu `DECIMAL`, a kwoty musiałyby być liczbami zmiennoprzecinkowymi albo groszami w liczbach całkowitych.
 
 **Jak to działa w praktyce:**
 
 1. Wykonawca procedur wywołuje procedurę przez pyodbc w postaci `SET NOCOUNT ON; EXEC <proc> @Name = ?, ...` i odbiera wiersze (pyodbc zwraca `Decimal` dla `money`/`decimal` i `date`/`datetime` dla dat). Z `fetchall()` buduje tabelę Arrow z typami z katalogu (np. `decimal128(19,4)`, `date32`). Odrzucona alternatywa: `arrow-odbc`, które przyjmuje parametry tylko jako tekst i otwiera połączenie z ciągu znaków przy każdym wywołaniu. Przy wynikach rzędu kilkudziesięciu tysięcy wierszy budowa kolumn z `fetchall()` wystarcza.
 2. Magazyn wyników zapisuje tabelę w DuckDB jako `r1`. Zablokowane połączenie nie skanuje zmiennych Pythona, więc rejestracja jest jawna: `register`, potem `CREATE TABLE r1 AS SELECT …`, potem `unregister`. DuckDB zachowuje `DECIMAL(19,4)`, a wynik odczytany przez `to_arrow_table()` ma typy dziesiętne, np. suma kwot `decimal128(38,4)` (sprawdzone na DuckDB 1.5.6). Tak samo trafia do DuckDB każdy kolejny wynik procedury (`r2`…).
-3. Model wysyła `query`. Silnik zapytań parsuje SQL i sprawdza reguły z sekcji 7.3, wiąże zapytanie (`DESCRIBE`), sprawdza typy wyniku, uzupełnia `ORDER BY` w drzewie i odtwarza tekst SQL przez `json_deserialize_sql`. Wykonany SQL to ten po normalizacji, a nie tekst od modelu.
-4. Wynik zapisuje się jako nowy uchwyt (`CREATE TABLE r3 AS <SQL po normalizacji>`), a przy uchwycie jego pochodzenie: SQL od modelu, SQL wykonany, uchwyty źródłowe (sekcja 7.6). Wynik większy niż limit wierszy zapytania (domyślnie 100 000) jest usuwany, a model dostaje prośbę o agregację albo zawężenie.
+3. Model wysyła `query`. Silnik zapytań sprawdza, że to jedna instrukcja `SELECT`, wiąże zapytanie (`DESCRIBE`), sprawdza nazwy i typy kolumn oraz obcięte źródła (sekcja 7.3). Wykonany SQL to tekst od modelu. Backend opakowuje go tylko wtedy, gdy trzeba rzutować kolumny całkowite na `BIGINT` (niżej).
+4. Wynik zapisuje się jako nowy uchwyt (`CREATE TABLE r3 AS SELECT * FROM (<SQL>) LIMIT <limit + 1>`), a przy uchwycie jego pochodzenie: SQL od modelu, SQL wykonany, uchwyty źródłowe (sekcja 7.6). Wynik większy niż limit wierszy zapytania (domyślnie 100 000) jest usuwany, a model dostaje prośbę o agregację albo zawężenie. `LIMIT` pozwala DuckDB przerwać liczenie zaraz po przekroczeniu limitu.
 
 **Typy wyniku.** Typ każdej kolumny wyniku z `DESCRIBE` mapuje się na typ katalogu:
 
@@ -429,9 +411,9 @@ FLOAT | REAL | DOUBLE               -> rejected: "column net_avg is DOUBLE; CAST
 anything else (LIST, STRUCT, MAP, INTERVAL, TIME, BLOB, UUID, ...) -> rejected
 ```
 
-`HUGEINT` pojawia się przy `sum` po kolumnie całkowitej (np. `sum("OrderQty")`), a `INTEGER` przy literałach (`1 AS one`), więc backend rzutuje każdą kolumnę całkowitą inną niż `BIGINT` na `BIGINT` w zewnętrznym `SELECT * REPLACE (…)`, zamiast obciążać tym model. Zewnętrzny `SELECT` nie zmienia kolejności wierszy podzapytania. Kolumna zmiennoprzecinkowa w wyniku to błąd, a nie ciche rzutowanie, bo backend nie wie, jakiej skali chce model i czy wartość nie powstała z sumy liczb `DOUBLE` (reguła 7). Rola kolumny wyniku: kolumna o tej samej nazwie i typie co kolumna źródłowa dziedziczy jej rolę, pozostałe dostają rolę z typu (`date`/`datetime` → `time`, `decimal`/`int` → `measure`, reszta → `dimension`). Rola służy tylko do statystyk w opisie uchwytu.
+`HUGEINT` pojawia się przy `sum` po kolumnie całkowitej (np. `sum("OrderQty")`), a `INTEGER` przy literałach (`1 AS one`), więc backend rzutuje każdą kolumnę całkowitą inną niż `BIGINT` na `BIGINT` w zewnętrznym `SELECT * REPLACE (…) FROM (<SQL>)`, zamiast obciążać tym model. Zewnętrzny `SELECT` nie zmienia kolejności wierszy podzapytania. Kolumna zmiennoprzecinkowa w wyniku to błąd, a nie ciche rzutowanie, bo backend nie wie, jakiej skali chce model. Rola kolumny wyniku: kolumna o tej samej nazwie i typie co kolumna źródłowa dziedziczy jej rolę, pozostałe dostają rolę z typu (`date`/`datetime` → `time`, `decimal`/`int` → `measure`, reszta → `dimension`). Rola służy tylko do statystyk w opisie uchwytu.
 
-**Pełna kolejność wierszy.** Backend dokleja do `ORDER BY` najwyższego poziomu, po kluczach podanych przez model, wszystkie kolumny wyniku według pozycji (`1, 2, …, n`, rosnąco, `NULLS LAST`). Dzięki temu remisy w kluczach modelu (np. trzech klientów „Mohamed Pal” z równym `net_sales`) zawsze rozstrzyga się tak samo, a `LIMIT` modelu działa po tym porządku. Przy `threads = 2` bez tego top N mógłby różnić się między uruchomieniami. Pozycje działają też dla `SELECT DISTINCT` i `UNION`, gdzie `ORDER BY` może odwoływać się tylko do kolumn wyniku.
+**Kolejność wierszy** wynika z `ORDER BY` w zapytaniu modelu. `preserve_insertion_order` zachowuje ją przy `CREATE TABLE … AS` i przy odczycie uchwytu. Zapytanie bez `ORDER BY` nie gwarantuje kolejności, tak jak każdy SQL.
 
 Przykład: SQL od modelu dla raportu miesięcznego (P3, sekcja 10):
 
@@ -453,22 +435,20 @@ FROM months m LEFT JOIN sales s USING (month)
 ORDER BY m.month
 ```
 
-SQL wykonany przez backend to tekst odtworzony z drzewa (`json_deserialize_sql`), więc różni się od tekstu modelu zapisem (cudzysłowy tylko tam, gdzie potrzebne, `DATE '…'` jako `CAST('…' AS DATE)`, `INTERVAL 1 MONTH` jako `to_months(…)`), a znaczeniem tylko końcem: `ORDER BY m."month", 1 ASC NULLS LAST, 2 ASC NULLS LAST, 3 ASC NULLS LAST`. Literały liczbowe przechodzą przez drzewo bez zmian. Wynik: `month DATE`, `net_sales DECIMAL(38,4)`, `order_count BIGINT` → `int` (sumy dokładne, puste miesiące jako 0).
+Backend wykonuje ten tekst bez zmian, bo wszystkie kolumny mają już dozwolone typy. Wynik: `month DATE`, `net_sales DECIMAL(38,4)`, `order_count BIGINT` → `int` (sumy dokładne, puste miesiące jako 0).
 
-**Warunki deterministyczności:**
+**Co daje powtarzalny wynik:**
 
-- **Typy dokładne:** kwoty przez całą ścieżkę są `DECIMAL`. Wynik nie może mieć kolumn `DOUBLE`/`FLOAT`, a sumowanie wartości zmiennoprzecinkowych jest zablokowane regułą 7. `avg` po kolumnie dziesiętnej liczy dokładną sumę, a rzutowanie na `DECIMAL(38,6)` następuje w tym samym wyrażeniu, więc wynik nie zależy od kolejności wierszy. Odcinek Arrow → DuckDB → Arrow potwierdził research. Odcinek pyodbc → Arrow sprawdzamy na początku implementacji adaptera SQL Server, a wartości dziesiętne trafiają do JSON jako tekst (sekcja 9).
-- **Kolejność:** SQL bez `ORDER BY` nie gwarantuje kolejności wierszy. Backend zawsze dokłada pełne `ORDER BY` na najwyższym poziomie, a `LIMIT` niżej jest zakazany (reguła 6).
-- **Funkcje:** tylko z listy dozwolonych, bez funkcji niedeterministycznych i zależnych od kolejności (reguła 5).
+- **Typy dokładne:** kwoty przez całą ścieżkę są `DECIMAL`, a suma `DECIMAL` jest dokładna w dowolnej kolejności dodawania i przy dowolnej liczbie wątków. Wynik nie może mieć kolumn `DOUBLE`/`FLOAT`. Odcinek Arrow → DuckDB → Arrow potwierdził research. Odcinek pyodbc → Arrow sprawdzamy na początku implementacji adaptera SQL Server, a wartości dziesiętne trafiają do JSON jako tekst (sekcja 9).
+- **Kolejność:** z `ORDER BY` modelu (sekcja 7.2).
 - **Brakujące okresy:** siatka okresów z zakresu z prośby, a nie z min/max danych (wskazówka w sekcji 7.2, sprawdzana zestawem ewaluacyjnym).
-- **Testy:** zapytania referencyjne dla P1–P5 (agregacja miesięczna, `count(DISTINCT)`, `PIVOT`, top N z remisami, siatka okresów, `JOIN` dwóch uchwytów) dają w DuckDB ten sam wynik co równoważne zapytanie w SQL Server na tych samych danych. To samo zapytanie na wierszach źródłowych w odwróconej kolejności daje identyczny wynik.
+- **Testy:** zapytania referencyjne dla P1–P5 (agregacja miesięczna, `count(DISTINCT)`, `PIVOT`, top N, siatka okresów, `JOIN` dwóch uchwytów) dają w DuckDB ten sam wynik co równoważne zapytanie w SQL Server na tych samych danych. Zapytanie z agregacją na wierszach źródłowych w odwróconej kolejności daje identyczny wynik.
 
 ### 7.4a. Czy DuckDB to sandbox?
 
-Nie jest to osobny proces ani kontener, a w wariancie B wykonuje SQL napisany przez model. Dlatego obrona jest warstwowa:
+Nie jest to osobny proces ani kontener, a w wariancie B wykonuje SQL napisany przez model. Ochrona opiera się na silniku:
 
-1. **Parser i reguły** (sekcja 7.3): tylko jedna instrukcja `SELECT`, tylko uchwyty sesji, tylko funkcje z listy dozwolonych, brak funkcji tabelowych poza `range` i `generate_series`. Większość ataków kończy się tu, zanim DuckDB cokolwiek wykona.
-2. **Zablokowane połączenie sesji** (sprawdzone na DuckDB 1.5.6):
+1. **Zablokowane połączenie sesji** (sprawdzone na DuckDB 1.5.6):
 
    ```sql
    SET enable_external_access = false;      -- no file or network access (read_csv, COPY, ATTACH, HTTP)
@@ -476,17 +456,18 @@ Nie jest to osobny proces ani kontener, a w wariancie B wykonuje SQL napisany pr
    SET autoload_known_extensions = false;
    SET memory_limit = '512MB';
    SET threads = 2;
-   SET preserve_insertion_order = true;    -- the full ORDER BY survives CREATE TABLE AS and reads
+   SET preserve_insertion_order = true;    -- the model's ORDER BY survives CREATE TABLE AS and reads
    SET lock_configuration = true;           -- settings can no longer change on this connection
    ```
 
-   Po tych ustawieniach `read_csv('C:/Windows/win.ini')`, `FROM 'x.csv'` i `COPY ... TO 'x.csv'` kończą się błędem uprawnień, a próba ponownego włączenia dostępu zwraca błąd konfiguracji. Wynik procedury trafia do bazy przez jawną rejestrację tabeli Arrow (sekcja 7.4), bo zablokowane połączenie nie skanuje zmiennych Pythona.
+   Sondy z 2026-10-18 w tym połączeniu: `read_csv`, `read_blob` i `glob` na plikach lokalnych, `read_text` z adresu HTTP, `COPY … TO`, `ATTACH`, `INSTALL httpfs`, `duckdb_secrets()` i `duckdb_extensions()` kończą się błędem uprawnień. `SET enable_external_access = true` zwraca błąd konfiguracji, a `query('DROP TABLE r1')` błąd parsera, bo `query` przyjmuje tylko `SELECT`. Czytelne zostają ustawienia (`current_setting`, `duckdb_settings()`) i tabele własnej sesji. Wynik procedury trafia do bazy przez jawną rejestrację tabeli Arrow (sekcja 7.4), bo zablokowane połączenie nie skanuje zmiennych Pythona.
+2. **Jedna instrukcja `SELECT`** (sekcja 7.3), więc model nie zmieni tabel sesji ani ustawień.
 3. **Limity zasobów:** `memory_limit`, `threads`, limit czasu (`interrupt()` wywołany z `threading.Timer`) i limit wierszy wyniku zapytania. Iloczyn kartezjański dwóch dużych uchwytów kończy się błędem limitu, a nie zatrzymaniem procesu.
 4. **Zasięg danych:** każda sesja ma osobne połączenie, w którym są wyłącznie wyniki procedur wywołanych w tej sesji, w imieniu jej użytkownika. Zapytanie nie może więc odczytać niczego, czego sesja już nie pobrała. Do SQL Server zapytanie w ogóle nie sięga.
 
 Narzędzia działają w wątkach roboczych, więc każde wywołanie pracuje na własnym `cursor()` pod blokadą magazynu wyników.
 
-**Ryzyko szczątkowe:** błąd w samym DuckDB (np. błąd pamięci wywołany spreparowanym zapytaniem) działa w procesie backendu. Lista dozwolonych funkcji mocno zmniejsza powierzchnię ataku, a dane w sesji i tak należą do jej użytkownika, więc w projekcie testowym z jednym właścicielem v1 zostaje w procesie. Przed udostępnieniem wielu użytkownikom albo danych wrażliwych DuckDB sesji przenosimy do osobnego procesu roboczego z limitami systemu operacyjnego (sekcja 12). Wariant C (kod Pythona od modelu) wymagałby takiego sandboxa od pierwszego dnia.
+**Ryzyko szczątkowe:** błąd w samym DuckDB (np. błąd pamięci wywołany spreparowanym zapytaniem) działa w procesie backendu, a powierzchnią ataku jest cały dialekt `SELECT` DuckDB. Dane w sesji i tak należą do jej użytkownika, więc w projekcie testowym z jednym właścicielem v1 zostaje w procesie. Przed udostępnieniem wielu użytkownikom albo danych wrażliwych są dwie drogi (sekcja 12): DuckDB sesji w osobnym procesie albo kontenerze bez sieci i dostępu do dysku, albo osobna baza SQL Server, w której model pisze SQL na koncie bez żadnych uprawnień do tabel, a wyniki procedur leżą w tabelach tymczasowych połączenia sesji. Wariant C (kod Pythona od modelu) wymagałby takiego sandboxa od pierwszego dnia.
 
 ### 7.5. Liczby w komentarzu
 
@@ -505,7 +486,7 @@ Tabele w odpowiedzi liczy DuckDB, ale krótki komentarz tekstowy (np. „Sprzeda
 Pochodzenie wyniku to **graf**, a nie łańcuch: zapytanie może łączyć kilka uchwytów, a każdy z nich pochodzi z procedury albo z wcześniejszego zapytania. Magazyn wyników zapisuje przy każdym uchwycie jego pochodzenie:
 
 - **procedura:** nazwa, parametry (bez wartości wstrzykiwanych), liczba wierszy, flaga `truncated`;
-- **zapytanie:** lista uchwytów źródłowych (z reguły 3), SQL od modelu, SQL wykonany po normalizacji i liczba wierszy.
+- **zapytanie:** lista uchwytów źródłowych (z planu zapytania, sekcja 7.3), SQL od modelu, SQL wykonany (ten sam tekst albo opakowany w rzutowanie kolumn całkowitych na `BIGINT`) i liczba wierszy.
 
 Backend zwraca w odpowiedzi (pole `provenance`) wszystkich przodków zwracanych uchwytów, każdego raz, w kolejności nadania uchwytów. Uchwyty są numerowane rosnąco, a źródło zawsze powstaje przed wynikiem, więc ta kolejność jest porządkiem topologicznym grafu. Flaga `truncated` uchwytu to „którykolwiek przodek-procedura był obcięty”, liczona po tym samym grafie. Proweniencja:
 
@@ -518,11 +499,11 @@ Backend zwraca w odpowiedzi (pole `provenance`) wszystkich przodków zwracanych 
 | Podejście | Deterministyczne wykonanie | Kto ustala logikę obliczeń | Audyt i powtarzalność | Gdzie są dane | Ocena |
 |-----------|----------------------------|-----------------------------|------------------------|---------------|-------|
 | **A. Specyfikacja deklaratywna → SQL w DuckDB** | Tak | Model wybiera z zamkniętego zestawu operacji, a kod je realizuje | Pełne | W backendzie | **Zastąpione w v3.5.** Było wyborem v3.0–v3.4 i zostało zaimplementowane w gałęzi roboczej (moduł `transform`). |
-| **B. Model pisze SQL dla DuckDB nad uchwytami** | Tak, przy regułach z sekcji 7.3 i pełnym `ORDER BY` | Model, SQL ograniczony listami dozwolonych elementów | Dobre: pełny SQL i źródła w proweniencji, wynik odtwarzalny bez modelu | W backendzie | **v1 (wybrane w v3.5).** Wzorzec: przykład data-analyst w Pydantic AI [5]. |
+| **B. Model pisze SQL dla DuckDB nad uchwytami** | Tak, przy kwotach `DECIMAL` i `ORDER BY` w zapytaniu | Model, dowolny `SELECT` w zablokowanym silniku | Dobre: pełny SQL i źródła w proweniencji, wynik odtwarzalny bez modelu | W backendzie | **v1 (wybrane w v3.5).** Wzorzec: przykład data-analyst w Pydantic AI [5]. |
 | **C. Model pisze Python w sandboxie** (DataFrame'y, code execution / programmatic tool calling w Claude API) | Tak (wykonanie) | Model, dowolny kod | Słabe: kod jest inny przy każdym pytaniu | W sandboxie: w kontenerze Anthropic pełne wiersze opuszczają backend, własny sandbox to osobna infrastruktura | **Odłożone.** Ewentualnie później jako osobne narzędzie w piaskownicy dla analiz, których SQL nie wyrazi. |
 | **D. Model liczy sam z wierszy** | Nie | Model | Brak | W kontekście modelu | Odrzucone. |
 
-**Dlaczego B zamiast A.** Decyzja właściciela projektu: ideą rozwiązania jest to, żeby nie trzeba było przygotowywać wszystkich możliwych kombinacji, bo po to jest agent. Typowa prośba („sprzedaż klientów z miejscowości XYZ”) to dwa zbiory: lista klientów z miasta i zamówienia, połączone zwykłym `JOIN`. W wariancie A każda taka potrzeba oznaczała nowy krok specyfikacji (`filter`, `join`), jego walidację semantyczną, kompilację i testy, a zamknięty język i tak zostawałby w tyle za pytaniami. SQL to język, który modele znają najlepiej, a DuckDB już był silnikiem obliczeń. Koszt B to zabezpieczenie SQL pisanego przez model. Rozwiązują go parser DuckDB z listami dozwolonych elementów i zablokowane połączenie (sekcje 7.3 i 7.4a). Determinizm, który w A zapewniał kompilator, w B zapewnia backend: pełne `ORDER BY`, kontrola typów i zakaz funkcji niedeterministycznych. Co tracimy: walidację semantyczną ról kolumn (np. „sumować wolno tylko `measure`”), wymienny silnik (Polars) i sekcję `facts`. Błędy logiczne SQL (zła kolumna, zły `JOIN`) wykrywa zestaw ewaluacyjny i proweniencja, a nie walidator.
+**Dlaczego B zamiast A.** Decyzja właściciela projektu: ideą rozwiązania jest to, żeby nie trzeba było przygotowywać wszystkich możliwych kombinacji, bo po to jest agent. Typowa prośba („sprzedaż klientów z miejscowości XYZ”) to dwa zbiory: lista klientów z miasta i zamówienia, połączone zwykłym `JOIN`. W wariancie A każda taka potrzeba oznaczała nowy krok specyfikacji (`filter`, `join`), jego walidację semantyczną, kompilację i testy, a zamknięty język i tak zostawałby w tyle za pytaniami. SQL to język, który modele znają najlepiej, a DuckDB już był silnikiem obliczeń. Koszt B to zabezpieczenie SQL pisanego przez model. Rozwiązuje go zablokowane połączenie DuckDB i kilka kontroli backendu (sekcje 7.3 i 7.4a). Dokładność, którą w A zapewniał kompilator, w B zapewniają kwoty `DECIMAL` i odrzucanie kolumn `DOUBLE` w wyniku. W v3.5 backend dodatkowo analizował drzewo zapytania i dopisywał pełne `ORDER BY`; v3.6 z tego rezygnuje (sekcja 7.3). Co tracimy: walidację semantyczną ról kolumn (np. „sumować wolno tylko `measure`”), wymienny silnik (Polars) i sekcję `facts`. Błędy logiczne SQL (zła kolumna, zły `JOIN`) wykrywa zestaw ewaluacyjny i proweniencja, a nie walidator.
 
 **Dlaczego nie C (na razie).** Kod Pythona wymaga prawdziwego sandboxa (osobny proces lub kontener z limitami) albo wysłania pełnych wierszy do kontenera dostawcy [4], a programmatic tool calling nie łączy się ze `strict: true` [8]. Audyt kodu zmiennego przy każdym pytaniu jest słabszy niż audyt jednego `SELECT`. Wrócimy do C jako osobnego narzędzia, gdy pojawią się prośby, których SQL nie wyrazi (np. modele statystyczne).
 
@@ -549,7 +530,7 @@ sequenceDiagram
     T-->>A: r1: schemat, statystyki, podgląd
     A->>M: wynik narzędzia
     M-->>A: query(sql: SELECT … FROM r1 GROUP BY month)
-    A->>T: parser i reguły, DESCRIBE, typy, pełne ORDER BY
+    A->>T: jeden SELECT, DESCRIBE, nazwy i typy, obcięte źródła
     T->>RS: CREATE TABLE r2 AS <SQL wykonany> (12 wierszy)
     T-->>A: r2: schemat, cały wynik (mały), SQL wykonany
     A->>M: wynik narzędzia
@@ -570,7 +551,7 @@ Zasady ustalania parametrów:
 | Parametr niejednoznaczny, ale wynik może to pokazać (miasto w kilku regionach) | Zwrócić wszystko z kolumną rozróżniającą i zapisać to w `assumptions`. |
 | Filtr po kolumnie wyniku, której procedura nie ma jako parametru (np. typ klienta w zamówieniach) | Pobrać dane zawężone dostępnymi parametrami i przefiltrować w `query`. |
 | Filtr „po innym zbiorze” (np. sprzedaż klientów z miasta) | Wywołać obie procedury i połączyć wyniki przez `JOIN` po kolumnie `id` w `query` (P5). |
-| Wynik procedury obcięty przez `max_rows`, a prośba wymaga agregacji | Zawęzić parametry (np. krótszy okres, kategoria). Gdy się nie da: `unsupported` z wyjaśnieniem albo wiersze z flagą `truncated` i informacją w `assumptions` (sekcja 7.3, reguła 10). |
+| Wynik procedury obcięty przez `max_rows`, a prośba wymaga obliczeń na nim | Zawęzić parametry (np. krótszy okres, kategoria). Gdy się nie da: `unsupported` z wyjaśnieniem albo wiersze samego wyniku procedury z flagą `truncated` i informacją w `assumptions` (sekcja 7.3). |
 | Dane, których nie zwraca żadna procedura | `unsupported` z wyjaśnieniem, czego brakuje. |
 | Niejasna miara („sprzedaż”) | `default_for` z katalogu, nazwa kolumny w `assumptions`. |
 
@@ -603,7 +584,7 @@ Pętla kończy się wynikiem `AgentAnswer` (narzędzie wyjściowe `present_resul
   "clarification": null,
   "provenance": [
     {"step": "procedure", "name": "api.SalesOrder_List", "params": {"DateFrom": "2024-01-01", "DateTo": "2025-01-01", "CustomerID": null}, "rows": 14244, "handle": "r1"},
-    {"step": "query", "sources": ["r1"], "submitted_sql": "WITH months AS (…) SELECT … ORDER BY m.month", "sql": "WITH months AS (…) SELECT … ORDER BY m.\"month\", 1 NULLS LAST, 2 NULLS LAST, 3 NULLS LAST", "rows": 12, "handle": "r2"}
+    {"step": "query", "sources": ["r1"], "submitted_sql": "WITH months AS (…) SELECT … ORDER BY m.month", "sql": "WITH months AS (…) SELECT … ORDER BY m.month", "rows": 12, "handle": "r2"}
   ]
 }
 ```
@@ -635,7 +616,7 @@ Pętla kończy się wynikiem `AgentAnswer` (narzędzie wyjściowe `present_resul
 **P3: „Zrób raport sprzedaży po miesiącach za 2024”**
 
 1. `sales_order_list(date_from="2024-01-01", date_to="2025-01-01", customer_id=null)` → `r1`, 14 244 wiersze.
-2. `query` z SQL z sekcji 7.4 (siatka miesięcy z zakresu prośby, `sum("SubTotal")`, `count(DISTINCT "SalesOrderID")`, `LEFT JOIN` i `COALESCE`) → `r2`, 12 wierszy. Backend dokłada pełne `ORDER BY`.
+2. `query` z SQL z sekcji 7.4 (siatka miesięcy z zakresu prośby, `sum("SubTotal")`, `count(DISTINCT "SalesOrderID")`, `LEFT JOIN` i `COALESCE`) → `r2`, 12 wierszy.
 3. `r2` wraca do modelu w całości, bo ma do 50 wierszy. Do komentarza model może policzyć jeszcze sumę roczną i najlepszy miesiąc:
 
 ```sql
@@ -647,7 +628,7 @@ ORDER BY net_sales DESC, month
 LIMIT 1
 ```
 
-   → `r3`, jeden wiersz. Przy remisie `ORDER BY` wybiera wcześniejszy miesiąc, a backend dokłada resztę kolumn, więc wynik nie zależy od kolejności wierszy.
+   → `r3`, jeden wiersz. Przy remisie `ORDER BY` wybiera wcześniejszy miesiąc, a miesiące są unikalne, więc wynik nie zależy od kolejności wierszy.
 4. Odpowiedź: `ok`, tabela `r2`, komentarz oparty na wynikach zapytań, w `provenance` procedura i SQL (od modelu i wykonany).
 
 Wariant „po miesiącach i kategoriach”: `sales_order_line_list` → `r1`, a potem jedno `query` z `PIVOT`:
@@ -686,7 +667,7 @@ GROUP BY 1
 ORDER BY month
 ```
 
-   → `r3`. Proweniencja `r3` ma dwa źródła: `r1` i `r2`. Gdyby `r1` albo `r2` był obcięty, backend odrzuciłby agregację (sekcja 7.3, reguła 10).
+   → `r3`. Proweniencja `r3` ma dwa źródła: `r1` i `r2`. Gdyby `r1` albo `r2` był obcięty, backend odrzuciłby zapytanie (sekcja 7.3).
 4. Odpowiedź: `ok`, tabela `r3`, w `provenance` obie procedury i zapytanie.
 
 Żaden z tych przepływów nie wymagał nowej procedury dla nowego pytania. Raport miesięczny, sprzedaż klienta, sprzedaż za okres i sprzedaż klientów z miasta korzystają z tej samej `api.SalesOrder_List`, a filtr po mieście z P5 nie wymagał nowego parametru.
@@ -710,7 +691,7 @@ ORDER BY month
 
 - **Agent:** `Agent('anthropic:claude-haiku-5-5', output_type=ToolOutput(AgentAnswer, name='present_result'), tools=[…])`. Tekst modelu pochodzi z konfiguracji, więc zmiana modelu to zmiana ustawienia.
 - **Narzędzia:** funkcje synchroniczne, które Pydantic AI uruchamia w wątkach roboczych. Narzędzia procedur to obiekty `Tool` generowane z YAML, z modelem parametrów z `pydantic.create_model` (sekcja 6.1). `Tool.from_schema` odpada, bo nie waliduje argumentów ani nie stosuje wartości domyślnych. Narzędzia są cienkie: walidacja parametrów, wywołanie procedury i zapis pochodzenia uchwytu dzieją się w serwisach.
-- **Błędy:** jeden dekorator `retry_on_domain_error` mapuje błędy domenowe. Błędy wejścia (zła wartość parametru, nieznany uchwyt) zamienia na `ModelRetry`, czyli prośbę o poprawkę, która zużywa budżet ponowień (`retries`). Wszystkie błędy narzędzia `query` także idą jako `ModelRetry`: naruszenie reguł parsera (`QueryValidationError`), błąd wiązania lub wykonania w DuckDB, niedozwolony typ wyniku, przekroczenie limitu czasu, pamięci lub wierszy (`QueryExecutionError`, `QueryTimeoutError`). We wszystkich tych przypadkach model może poprawić SQL, a komunikat mówi, co poprawić. Błędy wykonania procedur (błąd procedury, przekroczenie czasu) zamienia na `ToolFailed`, który nie zużywa budżetu ponowień i mówi modelowi, żeby nie powtarzał tego samego wywołania. Błąd wewnętrzny DuckDB (`InternalException`, `FatalException`) nie jest błędem domenowym: unieważnia połączenie sesji i kończy turę statusem `error`.
+- **Błędy:** jeden dekorator `retry_on_domain_error` mapuje błędy domenowe. Błędy wejścia (zła wartość parametru, nieznany uchwyt) zamienia na `ModelRetry`, czyli prośbę o poprawkę, która zużywa budżet ponowień (`retries`). Wszystkie błędy narzędzia `query` także idą jako `ModelRetry`: odrzucenie przez kontrole z sekcji 7.3 (`QueryValidationError`), błąd wiązania lub wykonania w DuckDB, niedozwolony typ wyniku, przekroczenie limitu czasu, pamięci lub wierszy (`QueryExecutionError`, `QueryTimeoutError`). We wszystkich tych przypadkach model może poprawić SQL, a komunikat mówi, co poprawić. Błędy wykonania procedur (błąd procedury, przekroczenie czasu) zamienia na `ToolFailed`, który nie zużywa budżetu ponowień i mówi modelowi, żeby nie powtarzał tego samego wywołania. Błąd wewnętrzny DuckDB (`InternalException`, `FatalException`) nie jest błędem domenowym: unieważnia połączenie sesji i kończy turę statusem `error`.
 - **Kontekst żądania:** `RequestContext`, magazyn wyników i serwisy trafiają do narzędzi przez mechanizm zależności Pydantic AI (`deps`), ten sam, którego przykład data-analyst używa do przechowywania DataFrame'ów [5].
 - **Wynik:** `AgentAnswer` jako narzędzie wyjściowe `present_result` (sekcja 6.2). Framework sam prosi model o poprawkę, gdy odpowiedź nie pasuje do schematu [6]. `Response` (sekcja 9) składa `ResponseAssembler`.
 - **Historia sesji:** Pydantic AI zwraca listę wiadomości z przebiegu, którą zapisujemy w sesji i przekazujemy przy kolejnym `ask` (np. po pytaniu doprecyzowującym).
@@ -725,7 +706,7 @@ ORDER BY month
 
 - **Model:** start na `claude-haiku-5-5` (następca Haiku 4.5) z `effort: medium`, ustawionym jawnie (`anthropic_effort`). Cena: $0,10 / $0,50 za milion tokenów wejścia/wyjścia przy promptach do 100 tys. tokenów, powyżej $0,50 / $2,50. Okno kontekstu 1M. Myślenie jest adaptacyjne i włączone domyślnie, a jego głębię steruje się `effort`. Bloki `thinking` muszą wracać do modelu bez zmian razem z wynikami narzędzi. Historią wiadomości zarządza framework. Działanie `strict` i `effort: medium` z Haiku 5.5 potwierdza sprawdzenie na żywo w etapie 3 planu. Gdy Haiku nie radzi sobie z wyborem procedury lub pisaniem SQL nad uchwytami, kolejny krok to `anthropic:claude-sonnet-5-5`. Koszt liczyć na całe zadanie (cała pętla), a nie na pojedyncze wywołanie.
 - **Odmowy:** odmowa modelu kończy się statusem `error`. Dla Haiku 5.5 nie ma automatycznego przełączenia na inny model po stronie serwera.
-- **Instrukcje o SQL:** instrukcja systemowa zawiera stałą część o pisaniu zapytań `query`: dialekt DuckDB, tabele to uchwyty z opisów wyników, cytowanie nazw kolumn w `"…"`, wskazówki z sekcji 7.2 (kwoty jako `DECIMAL`, `CAST` dla `avg` i dzielenia, `NULLIF`, `CAST(date_trunc(…) AS DATE)`, siatka okresów z zakresu prośby, `JOIN` po kolumnach `id`, aliasy po angielsku w `snake_case`), krótką listę dozwolonych funkcji i zakazów (sekcja 7.3) oraz 2–3 przykłady z sekcji 10. Model nie musi pisać `ORDER BY` dla determinizmu, bo dokłada je backend, ale pisze je, gdy kolejność ma znaczenie dla użytkownika lub dla `LIMIT`.
+- **Instrukcje o SQL:** instrukcja systemowa zawiera stałą część o pisaniu zapytań `query`: dialekt DuckDB, tabele to uchwyty z opisów wyników, cytowanie nazw kolumn w `"…"`, wskazówki z sekcji 7.2 (kwoty jako `DECIMAL`, `CAST` dla `avg` i dzielenia, `NULLIF`, `CAST(date_trunc(…) AS DATE)`, siatka okresów z zakresu prośby, `JOIN` po kolumnach `id`, aliasy po angielsku w `snake_case`, daty jako literały, kolumna rozstrzygająca remisy przy top N) oraz 2–3 przykłady z sekcji 10. Backend nie dopisuje `ORDER BY`, więc model pisze je zawsze, gdy kolejność ma znaczenie dla użytkownika lub dla `LIMIT`.
 - **Stały początek rozmowy:** Haiku 5.5 wiąże bloki myślenia z niezmiennym początkiem rozmowy. Gdy zmieni się początek, który wytworzył blok, model odrzuca kontynuację, a Pydantic AI ponawia żądanie bez tego bloku, co kosztuje dodatkowe wywołanie i gubi rozumowanie. Dlatego instrukcje (reguły, skrót katalogu, zakresy danych) i zestaw narzędzi w stałej kolejności powstają raz przy starcie i nie zmieniają się w obrębie procesu. `block_binding.prefix_mismatch_behavior` ustawiamy jawnie na `drop_block`, a ostrzeżenie `AnthropicStaleThinkingBlockWarning` logujemy.
 - **Prompt caching:** stała część (definicje narzędzi w ustalonej kolejności, instrukcja systemowa, skrót katalogu) idzie na początek i jest cache'owana przez ustawienia `anthropic_cache*`. Data bieżąca trafia do wiadomości użytkownika, a nie do instrukcji, żeby początek rozmowy się nie zmieniał.
 - **Claude Agent SDK się nie nadaje.** To harness Claude Code z narzędziami do plików i powłoki, a tu potrzebne są wyłącznie nasze narzędzia.
@@ -745,7 +726,7 @@ ORDER BY month
 | Frontend | Kontrakt odpowiedzi (sekcja 9) zawiera wszystko, czego UI potrzebuje: dane z typami, komentarz, pytania doprecyzowujące, proweniencję. |
 | Inne modele (OpenAI, Azure, lokalne) | Zmiana `dostawca:model` w konfiguracji Pydantic AI i dostrojenie promptu. Narzędzia, katalog i obliczenia bez zmian. Jakość wywoływania narzędzi i pisania SQL przez mniejsze modele trzeba zmierzyć tym samym zestawem testów. |
 | Filtrowanie i łączenie w backendzie | Działa od v1: agent filtruje i łączy uchwyty w `query` (sekcja 7). |
-| Silniejsza izolacja SQL od modelu | Reguły parsera i zablokowane połączenie od v1. DuckDB sesji da się przenieść do osobnego procesu roboczego, bo magazyn wyników ma jeden interfejs (`ResultStore`) i jedno miejsce wykonania zapytań (sekcja 7.4a). |
+| Silniejsza izolacja SQL od modelu | Zablokowane połączenie i kontrole z sekcji 7.3 od v1. Magazyn wyników ma jeden interfejs (`ResultStore`) i jedno miejsce wykonania zapytań, więc da się przenieść DuckDB sesji do osobnego procesu albo kontenera bez sieci i dysku, albo zastąpić go osobną bazą SQL Server z kontem bez uprawnień do tabel i tabelami tymczasowymi sesji (sekcja 7.4a). |
 | Python i DataFrame'y (wariant C) | Osobne narzędzie w sandboxie, czytające te same uchwyty przez Arrow. Odłożone (sekcja 7.7). |
 
 ## 13. Otwarte kwestie i zestaw ewaluacyjny
@@ -756,26 +737,24 @@ Ustalone: projekt testowy z jednym właścicielem (YAML, prompt i testy), Python
 
 Szczegóły wariantu B ustalone przy aktualizacji v3.5, do zatwierdzenia przez właściciela:
 
-- parser DuckDB (`json_serialize_sql`) zamiast sqlglot (sekcja 7.3);
-- `range` i `generate_series` jako jedyne dozwolone funkcje tabelowe (siatka okresów);
-- funkcje okna zależne od kolejności przy remisach (`row_number`, `lag`, `lead`, `ntile`, `first_value`, `last_value`, `nth_value`) poza listą w v1;
-- obcięte źródło w zapytaniu z agregacją to nadal błąd, a nie ostrzeżenie, także gdy obcięty zbiór służy tylko jako filtr (sekcja 7.3, reguła 10);
+- v3.6: bez analizy treści zapytania i bez dopisywania `ORDER BY`; świadomie bez kontroli funkcji niedeterministycznych, remisów i `DOUBLE` w krokach pośrednich (sekcja 7.3), decyzja właściciela projektu;
+- zapytanie czytające obcięte źródło to błąd, a nie ostrzeżenie, także gdy obcięty zbiór służy tylko jako filtr (sekcja 7.3);
 - kolumna `DOUBLE` w wyniku to błąd z prośbą o `CAST`, a nie ciche rzutowanie przez backend; `HUGEINT` backend rzutuje na `BIGINT` sam;
 - DuckDB w procesie backendu w v1, osobny proces dopiero przed wieloma użytkownikami (sekcja 7.4a);
 - limit wierszy wyniku `query` równy domyślnemu `max_rows` (100 000).
 
 **Do sprawdzenia w prototypie** (stan po researchu z 2026-10-11):
 
-- [x] Parser DuckDB w zablokowanym połączeniu (prototyp z 2026-10-12, DuckDB 1.5.6): `json_serialize_sql` odrzuca instrukcje inne niż `SELECT`, pokazuje funkcje tabelowe i kilka instrukcji, `json_deserialize_sql` odtwarza SQL z drzewa, `DESCRIBE` daje typy bez wykonania, `PIVOT … IN (…)` z aliasami działa (sekcje 7.3 i 7.4).
+- [x] Zablokowane połączenie DuckDB 1.5.6 (prototyp z 2026-10-12, sondy z 2026-10-18): `extract_statements` rozpoznaje instrukcje inne niż `SELECT` i kilka instrukcji, `DESCRIBE` daje typy bez wykonania, plan logiczny przed optymalizacją podaje źródła (a `get_table_names` zawodzi przy `USING`), `PIVOT … IN (…)` z aliasami działa, a pliki, sieć, rozszerzenia i zmiana konfiguracji kończą się błędem (sekcje 7.3, 7.4 i 7.4a).
 - [ ] Narzędzie `query` w trybie `strict` z Haiku 5.5. Sprawdzenie na żywo w etapie 3 planu.
-- [ ] Jak Haiku 5.5 pisze SQL DuckDB nad uchwytami: trafność `JOIN` i miar, liczba ponowień po błędach reguł. Mierzy zestaw ewaluacyjny.
+- [ ] Jak Haiku 5.5 pisze SQL DuckDB nad uchwytami: trafność `JOIN` i miar, liczba ponowień po błędach kontroli i wiązania, użycie `current_date`, `random` i top N bez kolumny rozstrzygającej. Mierzy zestaw ewaluacyjny.
 - [ ] Ścieżka typu dziesiętnego: pyodbc → Arrow → DuckDB → JSON. Odcinek Arrow → DuckDB → Arrow potwierdzony. Odcinek pyodbc → Arrow sprawdzamy na początku implementacji adaptera SQL Server.
 - [ ] Jak model radzi sobie z wyborem procedury przy rosnącym katalogu i od jakiej liczby procedur włączyć wyszukiwanie narzędzi (`defer_loading` albo `find_procedures`). Poza v1, mierzy to zestaw ewaluacyjny.
 - [ ] Pydantic AI z Haiku 5.5: przekazywanie bloków `thinking`, `anthropic_effort`, cache, typ wyniku jako narzędzie wyjściowe. Wiązanie bloków myślenia z początkiem rozmowy jest rozpoznane (sekcja 11.3). Działanie na żywo potwierdza sprawdzenie w etapie 3 planu.
 - [x] Minimalne uprawnienia konta agenta. Sam `EXECUTE` wystarcza, także do odczytu metadanych procedur (sekcja 5.5).
 - [x] Wczytanie wyniku procedury do zablokowanego DuckDB przez Arrow z zachowaniem `DECIMAL`. Działa przez jawną rejestrację (sekcja 7.4).
 
-**Zestaw ewaluacyjny:** 30–50 próśb z oczekiwaną procedurą i parametrami, oczekiwanym wynikiem (liczonym ręcznie SQL-em w SQL Server) i oczekiwanym statusem. Część przypadków pochodzi wprost z `examples` w YAML. Grupy: listy z filtrem (miasto, typ klienta), sprzedaż za okres, sprzedaż klienta, raporty po czasie i pivoty, łączenie zbiorów (P5), inne dziedziny (BOM, przełożeni). Przypadki trudne: okres względny, okres poza danymi, niejednoznaczny klient lub produkt, miasto w kilku regionach, „sprzedaż” bez miary, filtr po kolumnie bez parametru w procedurze (filtr w `query`), agregacja na obciętym wyniku, dane, których nie zwraca żadna procedura (`unsupported`). Testy bezpieczeństwa SQL (próby czytania plików, innych tabel, DDL, funkcji spoza listy) są testami jednostkowymi silnika zapytań, a nie częścią zestawu ewaluacyjnego. Ponieważ backend zwraca JSON, testy porównują odpowiedź z oczekiwaną automatycznie. Zestaw uruchamiamy przy każdej zmianie promptu, YAML lub modelu, a później dołączą do niego testy red-teamowe.
+**Zestaw ewaluacyjny:** 30–50 próśb z oczekiwaną procedurą i parametrami, oczekiwanym wynikiem (liczonym ręcznie SQL-em w SQL Server) i oczekiwanym statusem. Część przypadków pochodzi wprost z `examples` w YAML. Grupy: listy z filtrem (miasto, typ klienta), sprzedaż za okres, sprzedaż klienta, raporty po czasie i pivoty, łączenie zbiorów (P5), inne dziedziny (BOM, przełożeni). Przypadki trudne: okres względny, okres poza danymi, niejednoznaczny klient lub produkt, miasto w kilku regionach, „sprzedaż” bez miary, filtr po kolumnie bez parametru w procedurze (filtr w `query`), obliczenia na obciętym wyniku, dane, których nie zwraca żadna procedura (`unsupported`). Testy bezpieczeństwa SQL (próby czytania plików, dostępu do sieci, DDL, zmiany konfiguracji, wielu instrukcji) sprawdzają zablokowany silnik i są testami jednostkowymi, a nie częścią zestawu ewaluacyjnego. Ponieważ backend zwraca JSON, testy porównują odpowiedź z oczekiwaną automatycznie. Zestaw uruchamiamy przy każdej zmianie promptu, YAML lub modelu, a później dołączą do niego testy red-teamowe.
 
 ## 14. Źródła i stan weryfikacji
 
@@ -813,6 +792,6 @@ Research z wersji 1: 5 kierunków wyszukiwania, 22 źródła, 105 wyodrębnionyc
 
 **Odrzucone w weryfikacji:** liczby trafności z benchmarków Spider 2.0, BIRD i BEAVER oraz twierdzenie o uprawnieniach użytkownika w Databricks Genie. Nie są tu przytaczane.
 
-**Prototyp parsera z 2026-10-12** (wersja 3.5): DuckDB 1.5.6 na Pythonie 3.14, zablokowane połączenie. Z niego pochodzą twierdzenia o `json_serialize_sql`, `json_deserialize_sql`, `DESCRIBE`, typach wyniku (`avg` i dzielenie → `DOUBLE`, `sum` po liczbach całkowitych → `HUGEINT`, `date_trunc` → `TIMESTAMP`) i `PIVOT` (sekcje 7.3 i 7.4).
+**Prototyp parsera z 2026-10-12** (wersja 3.5) i **sondy z 2026-10-18** (wersja 3.6): DuckDB 1.5.6 na Pythonie 3.14, zablokowane połączenie. Z nich pochodzą twierdzenia o `extract_statements`, `DESCRIBE`, `EXPLAIN` i `get_table_names`, typach wyniku (`avg` i dzielenie → `DOUBLE`, `sum` po liczbach całkowitych → `HUGEINT`, `date_trunc` → `TIMESTAMP`), `PIVOT`, blokadach połączenia i błędzie sumowania `DOUBLE` (sekcje 7.3, 7.4 i 7.4a).
 
-**Wnioski własne, nie ze źródeł:** katalog agenta i jego pola, generowanie narzędzi, reguły walidacji SQL nad uchwytami, wybór DuckDB, zasady deterministyczności, proweniencja, kontrakt odpowiedzi, przebiegi. Fakty o AdventureWorks2025 (zakres dat, liczby klientów, duplikaty nazw, miast i produktów, lista procedur, działanie `dm_exec_describe_first_result_set_for_object`) pochodzą z zapytań do lokalnej bazy.
+**Wnioski własne, nie ze źródeł:** katalog agenta i jego pola, generowanie narzędzi, kontrole SQL nad uchwytami, wybór DuckDB, zasady deterministyczności, proweniencja, kontrakt odpowiedzi, przebiegi. Fakty o AdventureWorks2025 (zakres dat, liczby klientów, duplikaty nazw, miast i produktów, lista procedur, działanie `dm_exec_describe_first_result_set_for_object`) pochodzą z zapytań do lokalnej bazy.

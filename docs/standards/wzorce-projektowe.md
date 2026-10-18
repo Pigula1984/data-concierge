@@ -6,10 +6,8 @@ Każdy wzorzec poniżej ma konkretne miejsce w architekturze ([001-architektura-
 |---------|-------------------|---------------------------|
 | Repository | dostęp do procedur, magazyn wyników, katalog | oddzielenie logiki od źródła danych |
 | Adapter | wykonawca procedur per silnik bazy | wymienna baza danych |
-| Strategy (reguły jako obiekty) | reguły zapytania `query` | każda reguła bezpieczeństwa i determinizmu osobno testowana, nowa reguła bez zmiany pozostałych |
 | Registry + Factory | rejestr narzędzi generowany z YAML | narzędzia z jednego źródła prawdy |
 | Unia dyskryminowana | pochodzenie uchwytu (procedura albo zapytanie) | typowana proweniencja bez `if step == ...` rozsianych po kodzie |
-| Visitor (jedno przejście drzewa) | drzewo zapytania z parsera DuckDB | reguły nie chodzą po JSON parsera każda osobno |
 | Dependency Injection + Composition Root | cała aplikacja, `deps` w Pydantic AI | testowalność, brak stanu globalnego |
 | Value Object / DTO | `RequestContext`, `Response`, wpisy katalogu | bezpieczne przekazywanie danych między warstwami |
 | Facade | `AskService` / `ask()` | jeden prosty punkt wejścia |
@@ -39,28 +37,9 @@ Serwisy znają tylko `Protocol`, a testy dostają implementację w pamięci.
 
 Konkretna implementacja repozytorium dopasowuje zewnętrzne API do naszego interfejsu. `SqlServerProcedureRepository` zamienia wywołanie na `EXEC` przez pyodbc, a wiersze na `ResultTable` z typami z katalogu. To **jedyne** miejsce zależne od silnika bazy (wymaganie z sekcji 2 architektury). Inna baza = nowy adapter, reszta kodu bez zmian.
 
-## 3. Strategy: reguły zapytania jako obiekty
+## 3. Strategy: reguły zapytania jako obiekty (wycofane w v3.6)
 
-Reguły z sekcji 7.3 architektury (jedna instrukcja `SELECT`, tylko uchwyty sesji, dozwolone funkcje, brak `LIMIT` w podzapytaniach, brak arytmetyki zmiennoprzecinkowej w agregatach, obcięte źródła…) to osobne klasy z jednym interfejsem. `QueryPolicy` uruchamia wszystkie i zbiera naruszenia, więc model dostaje komplet uwag w jednym `ModelRetry`, a nie jedną po drugiej.
-
-```python
-class QueryRule(Protocol):
-    def check(self, query: ParsedQuery, context: QueryContext) -> list[RuleViolation]: ...
-
-
-class AllowedFunctionsRule:  # rule 5: only functions from the allowlist
-    ...
-
-
-class QueryPolicy:
-    def __init__(self, rules: Sequence[QueryRule]) -> None:
-        self._rules = rules
-
-    def violations(self, query: ParsedQuery, context: QueryContext) -> list[RuleViolation]:
-        return [v for rule in self._rules for v in rule.check(query, context)]
-```
-
-Każda reguła ma własne testy przypadków dozwolonych i zakazanych, w tym testy bezpieczeństwa (próby czytania plików, katalogu systemowego, DDL).
+Do architektury v3.5 każda reguła walidatora zapytania `query` była osobną klasą. Od v3.6 backend nie analizuje treści zapytania (sekcja 7.3 architektury), a kilka zostałych kontroli (nazwy i typy kolumn wyniku, obcięte źródła) mieści się w jednej klasie `QueryPolicy`. Wzorzec wróci, gdy kontroli przybędzie i będą niezależne od siebie.
 
 ## 4. Registry + Factory
 
@@ -97,9 +76,9 @@ class QueryLineage(BaseModel, frozen=True):
 type Lineage = Annotated[ProcedureLineage | QueryLineage, Field(discriminator="step")]
 ```
 
-## 6. Visitor: jedno przejście drzewa zapytania
+## 6. Visitor: jedno przejście drzewa zapytania (wycofane w v3.6)
 
-Parser DuckDB zwraca drzewo w formacie JSON (`json_serialize_sql`). Jeden obiekt przechodzi je raz i zamienia na płaską listę `QueryNode` z kontekstem (rodzaj węzła, nazwa funkcji lub tabeli, czy węzeł jest w argumencie agregatu, czy jest na najwyższym poziomie, zasięg CTE). Reguły z sekcji 3 czytają tę listę zamiast chodzić po JSON każda osobno. Nieznany rodzaj węzła kończy przejście błędem, więc zmiana formatu w nowej wersji DuckDB daje odmowę, a nie lukę. Znajomość formatu JSON parsera jest w jednym miejscu.
+Do architektury v3.5 walidator przechodził drzewo parsera DuckDB (`json_serialize_sql`). Od v3.6 drzewa nie analizujemy: bezpieczeństwo daje zablokowane połączenie DuckDB, a źródła zapytania podaje sam silnik w planie zapytania (`EXPLAIN`).
 
 ## 7. Dependency Injection i Composition Root
 

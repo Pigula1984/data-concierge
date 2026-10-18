@@ -1,14 +1,20 @@
 """Session result store: tables under handles r1, r2, ... in a locked-down DuckDB connection."""
 
+import json
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Protocol
 
 import duckdb
 import pyarrow as pa
 
 from data_concierge.core.duckdb_connection import connect_locked
-from data_concierge.core.errors import QueryExecutionError, QueryTimeoutError, UnknownHandleError
+from data_concierge.core.errors import (
+    QueryExecutionError,
+    QueryTimeoutError,
+    QueryValidationError,
+    UnknownHandleError,
+)
 from data_concierge.core.sql import quote_identifier
 from data_concierge.core.types import TableSchema, arrow_fields
 from data_concierge.results.models import (
@@ -34,6 +40,10 @@ class ResultStore(Protocol):
     def materialize(self, sql: str, schema: TableSchema, lineage: Lineage) -> Handle: ...
 
     def describe_query(self, sql: str) -> tuple[DescribedColumn, ...]: ...
+
+    def statement_types(self, sql: str) -> tuple[str, ...]: ...
+
+    def read_tables(self, sql: str) -> frozenset[str]: ...
 
     def describe(self, handle: Handle) -> StoredResult: ...
 
@@ -62,8 +72,10 @@ class DuckDBResultStore:
         self._connection = connect_locked(
             f"SET memory_limit = '{memory_limit}'",
             f"SET threads = {int(threads)}",
-            # The full ORDER BY of a query result must survive CREATE TABLE AS and fetch.
+            # The ORDER BY of the model's query must survive CREATE TABLE AS and fetch.
             "SET preserve_insertion_order = true",
+            # EXPLAIN on this connection also returns the plan before optimization (read_tables).
+            "SET explain_output = 'all'",
         )
         self._timeout = query_timeout_seconds
         self._max_query_rows = max_query_rows
@@ -90,15 +102,16 @@ class DuckDBResultStore:
         """Stores the result of a query over existing handles under a new handle.
 
         A result over the row limit is dropped, so a cartesian product cannot fill the session.
-        At most one row past the limit is stored. The full ORDER BY still makes DuckDB read
-        every row, so a runaway join ends at the time limit rather than early.
+        At most one row past the limit is stored, and DuckDB stops reading there unless the
+        query itself sorts every row first.
         """
         with self._lock:
             handle = self._next_handle()
             table = quote_identifier(handle)
             created = self._execute(
                 self._connection.cursor(),
-                f"CREATE TABLE {table} AS SELECT * FROM ({sql}) LIMIT {self._max_query_rows + 1}",
+                # The newline ends a trailing -- comment in the model's text.
+                f"CREATE TABLE {table} AS SELECT * FROM ({sql}\n) LIMIT {self._max_query_rows + 1}",
                 (),
             )
             # CREATE TABLE AS returns one row with the number of rows it inserted.
@@ -128,6 +141,33 @@ class DuckDBResultStore:
                 DescribedColumn(name, duckdb_type)
                 for name, duckdb_type in zip(names, types, strict=True)
             )
+
+    def statement_types(self, sql: str) -> tuple[str, ...]:
+        """The types of the statements in the text, e.g. ("SELECT",), without running them."""
+        with self._lock:
+            try:
+                statements = self._connection.cursor().extract_statements(sql)
+            except duckdb.Error as exc:
+                raise QueryValidationError(_brief(str(exc))) from exc
+            return tuple(statement.type.name for statement in statements)
+
+    def read_tables(self, sql: str) -> frozenset[str]:
+        """The tables the bound query reads, from DuckDB's logical plan before optimization.
+
+        The binder has resolved CTEs, letter case and query('...') there, and the optimizer
+        has not yet dropped a table that the statistics prove irrelevant.
+        """
+        with self._lock:
+            # explain_output is local to a connection, so a new cursor would not have it.
+            plans = self._execute(self._connection, f"EXPLAIN (FORMAT json) {sql}", ())
+        by_kind = dict(
+            zip(
+                plans.column("explain_key").to_pylist(),
+                plans.column("explain_value").to_pylist(),
+                strict=True,
+            )
+        )
+        return frozenset(_scanned_tables(json.loads(by_kind["logical_plan"])))
 
     def describe(self, handle: Handle) -> StoredResult:
         with self._lock:
@@ -189,6 +229,19 @@ class DuckDBResultStore:
             available = ", ".join(self._results) or "none"
             raise UnknownHandleError(f"unknown handle '{handle}'; available handles: {available}")
         return result
+
+
+def _scanned_tables(node: object) -> Iterator[str]:
+    """Names of the tables a plan scans, e.g. r1 from memory.main.r1."""
+    if isinstance(node, dict):
+        info = node.get("extra_info")
+        if isinstance(info, dict) and isinstance(info.get("Table"), str):
+            yield info["Table"].rsplit(".", 1)[-1]
+        for value in node.values():
+            yield from _scanned_tables(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _scanned_tables(value)
 
 
 def _brief(message: str) -> str:

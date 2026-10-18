@@ -17,7 +17,7 @@ execution: code
 - **Authority:** `docs/architecture/001-architektura-data-concierge.md` jest źródłem prawdy o projekcie systemu. Ten plan ustala kolejność prac i decyzje techniczne. `CLAUDE.md` i `docs/standards/` ustalają sposób pisania kodu. Gdy plan i architektura się rozjadą, najpierw aktualizujemy dokument architektury (wymóg `CLAUDE.md`), potem plan.
 - **Execution profile:** każdy etap to osobne uruchomienie `ce-work` na podstawie tego planu. Etap kończy się, gdy spełnia swoje kryteria z sekcji Definition of Done. Commity i PR robi się tylko na prośbę użytkownika.
 - **Stop conditions:** przerwij i zapytaj użytkownika, gdy:
-  - sprawdzenie prototypowe obali decyzję techniczną (np. Haiku 5.5 odrzuca tryb `strict`, ścieżka `DECIMAL` gubi precyzję albo drzewo z `json_serialize_sql` nie pozwala sprawdzić reguły z sekcji 7.3 architektury),
+  - sprawdzenie prototypowe obali decyzję techniczną (np. Haiku 5.5 odrzuca tryb `strict`, ścieżka `DECIMAL` gubi precyzję albo zablokowane połączenie DuckDB przepuszcza dostęp do plików lub sieci, sekcja 7.4a architektury),
   - lokalny SQL Server z `AdventureWorks2025` jest niedostępny na początku etapu 2 albo nadal przyjmuje tylko logowanie Windows (KTD24),
   - brakuje klucza Anthropic albo zgody na koszt przed sprawdzeniem na żywo w U14 (etap 3) i przed etapem 5,
   - zmiana wymagałaby odejścia od dokumentu architektury.
@@ -31,6 +31,8 @@ execution: code
 Plan dzieli architekturę Data Concierge v1 na sześć etapów: fundament, rdzeń obliczeń offline, SQL Server, agent, API i ewaluacja. Każdy etap ma jednostki pracy z plikami, scenariuszami testów i kryterium zakończenia, więc można go przekazać do `ce-work` osobno. Pierwsza jednostka nanosi na dokument architektury poprawki wynikające z researchu bibliotek.
 
 **Aktualizacja z 2026-10-12 (architektura v3.5).** Właściciel projektu wybrał wariant B z sekcji 7.7 architektury: agent pisze jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami wyników (narzędzie `query`), a backend odpowiada za bezpieczeństwo i determinizm. Jednostki U6–U7 (zamknięta specyfikacja `transform`, walidator, `SqlQueryBuilder`, `TransformService`), zaimplementowane jako WIP w commicie `8c3e45e`, zastępuje U19 (silnik zapytań `query`). Zmienione są też R2, R4, R5, R10–R14, Scope Boundaries, KTD7, KTD9, KTD10, KTD12, KTD18 i KTD21–KTD23 (oznaczone, historia zachowana), nowe KTD25–KTD31 oraz U11, U13–U16 i U18.
+
+**Aktualizacja z 2026-10-18 (architektura v3.6).** Właściciel projektu zdecydował, że backend nie analizuje treści zapytania `query`. Walidator drzewa parsera (reguły 2–8 z v3.5) i dopisywanie pełnego `ORDER BY` znikają z U19. Bezpieczeństwo daje zablokowane połączenie DuckDB, a backend sprawdza jedną instrukcję `SELECT`, nazwy i typy kolumn z `DESCRIBE` oraz obcięte źródła z planu zapytania (`EXPLAIN`). Zmienione są R12, KTD26, KTD27, KTD29–KTD31 i U19 (oznaczone, historia zachowana), nowe KTD32.
 
 ### Problem Frame
 
@@ -59,7 +61,7 @@ Research bibliotek z 2026-10-11 (Pydantic AI 2.55.0, DuckDB 1.5.6, pyodbc 5.3.0,
 
 - R10. Zestawienia liczy DuckDB według jednego zapytania `SELECT` napisanego przez model nad uchwytami sesji (narzędzie `query`, sekcja 7.2 architektury): łączenie uchwytów, filtry, grupowanie, okna z listy dozwolonych, `PIVOT`. Model nie liczy sam. *(zmienione 2026-10-12, wcześniej: specyfikacja z zamkniętej listy operacji)*
 - R11. Zapytanie przechodzi przed wykonaniem parser DuckDB i reguły z sekcji 7.3 architektury (jedna instrukcja `SELECT`, tylko uchwyty sesji, funkcje z listy dozwolonych, brak funkcji tabelowych poza `range` i `generate_series`, brak DDL, DML, `PRAGMA`, `SET`). Naruszenie reguły, błąd wiązania i błąd wykonania wracają do modelu jako `ModelRetry` z opisem, który pozwala poprawić SQL. *(zmienione 2026-10-12)*
-- R12. Te same dane i ten sam SQL dają ten sam wynik w tej samej kolejności: backend dokłada pełne `ORDER BY` na najwyższym poziomie, odrzuca funkcje niedeterministyczne i zależne od kolejności. Kwoty zostają typem dziesiętnym przez całą ścieżkę, kolumna `DOUBLE`/`FLOAT` w wyniku to błąd, a do JSON trafiają jako tekst. *(zmienione 2026-10-12)*
+- R12. Te same dane i ten sam SQL dają te same sumy: kwoty zostają typem dziesiętnym przez całą ścieżkę, kolumna `DOUBLE`/`FLOAT` w wyniku to błąd, a do JSON trafiają jako tekst. Kolejność wierszy wynika z `ORDER BY` w zapytaniu modelu. *(zmienione 2026-10-12 i 2026-10-18: bez dopisywania `ORDER BY` i bez kontroli funkcji, KTD32)*
 - R13. Połączenie DuckDB nie ma dostępu do plików, sieci ani rozszerzeń, a jego konfiguracja jest zablokowana. Zapytanie ma limit czasu, pamięci i wierszy wyniku. *(uzupełnione 2026-10-12)*
 - R14. Każda tabela w odpowiedzi niesie proweniencję: wszystkich przodków z grafu pochodzenia (procedury z parametrami, zapytania z pełnym SQL od modelu i wykonanym oraz listą uchwytów źródłowych), która pozwala odtworzyć wynik bez modelu. *(zmienione 2026-10-12)*
 
@@ -118,12 +120,13 @@ Research bibliotek z 2026-10-11 (Pydantic AI 2.55.0, DuckDB 1.5.6, pyodbc 5.3.0,
 - KTD23. **[Zmienione 2026-10-12: zasada zostaje jako błąd, a nie ostrzeżenie; sprawdza ją reguła 10 z sekcji 7.3 architektury na wszystkich uchwytach źródłowych zapytania z agregacją, także na obciętym zbiorze użytym tylko jako filtr; `QueryValidationError` zamiast `SpecValidationError`]** **Obcięty wynik procedury nie trafia do agregacji.** Flaga `truncated` przechodzi przez `Lineage` na każdy uchwyt pochodny. `TransformService` odrzuca `aggregate`, `pivot`, `fill_periods` i `facts` na uchwycie z obciętym przodkiem (`SpecValidationError` z prośbą o zawężenie parametrów procedury). Inne kroki przenoszą flagę do `ResultSummary` i do `truncated` tabeli w odpowiedzi. Suma z obciętych danych wyglądałaby na pełną, a wszystkie pozycje zamówień z całego zakresu (121 317) przekraczają domyślne `max_rows` 100 000. Sekcja 7.2 architektury wymaga, żeby wynik nie był po cichu niepełny.
 - KTD24. **Konto agenta to login SQL `agent_reader` z hasłem, a lokalna instancja działa w trybie mieszanym.** Lokalna instancja `MSSQLSERVER` przyjmowała tylko logowanie Windows (`SERVERPROPERTY('IsIntegratedSecurityOnly') = 1`). Użytkownik przełącza ją na tryb mieszany przed etapem 2. `db/deploy.ps1` sprawdza tryb i kończy się czytelnym komunikatem, gdy instancja nadal nie przyjmuje loginów SQL. (session-settled: user-directed — chosen over konto Windows dla agenta: zostaje zgodność z sekcją 5.5 architektury, a backend i testy nie muszą działać jako osobny użytkownik Windows)
 - KTD25. **Wariant B: agent pisze jedno zapytanie `SELECT` w DuckDB nad uchwytami, narzędziem `query`.** Agent decyduje, jakich danych potrzebuje, wywołuje procedury, a łączenie, filtry i zestawienia zapisuje w SQL. Backend odpowiada wyłącznie za bezpieczeństwo i determinizm. Zamknięta specyfikacja `transform` (KTD7, KTD21, KTD22 w dotychczasowym kształcie) znika, a moduł `transform` zastępuje moduł `query` (U19). Zasada „model nie pisze SQL” zostaje dla SQL Server. (session-settled: user-directed — chosen over wariant A z zamkniętą specyfikacją: nie trzeba przygotowywać wszystkich kombinacji, typowa prośba to dwa zbiory połączone `JOIN`; wariant C z Pythonem odłożony)
-- KTD26. **Parser DuckDB (`duckdb.extract_statements`, `json_serialize_sql`, `json_deserialize_sql`), a nie sqlglot.** Ten sam parser, który wykona zapytanie, więc walidacja i wykonanie nie mogą się rozjechać. Brak nowej zależności. Format JSON drzewa jest wewnętrzny, więc walidator odrzuca każdy nieznany typ węzła, wersja DuckDB jest przypięta w `uv.lock`, a testy bezpieczeństwa idą przy każdej aktualizacji. Parser ma własne zablokowane połączenie DuckDB bez danych. Prototyp z 2026-10-12 (DuckDB 1.5.6) potwierdził działanie w zablokowanym połączeniu.
-- KTD27. **Reguły zapytania to listy dozwolonych elementów (sekcja 7.3 architektury).** Jedna instrukcja `SELECT`, tylko uchwyty sesji i CTE (nazwa CTE nie wygląda jak uchwyt), funkcje tabelowe tylko `range` i `generate_series`, funkcje skalarne, agregujące i okna z jednej listy w `query/rules.py`, `LIMIT`/`OFFSET` tylko na najwyższym poziomie, bez `DISTINCT ON`, `SAMPLE`, `WITH RECURSIVE` i parametrów, bez rzutowania na typy zmiennoprzecinkowe i literałów wykładniczych, bez `/`, `avg` i podzapytań w argumentach agregatów i okien, nazwy kolumn wyniku zgodne z `^[A-Za-z][A-Za-z0-9_]*$` i unikalne bez względu na wielkość liter. Każda reguła to osobna klasa (Strategy), a `QueryPolicy` zbiera wszystkie naruszenia do jednego komunikatu.
+- KTD26. **[Zastąpione przez KTD32, 2026-10-18: zostaje tylko `extract_statements` do sprawdzenia jednej instrukcji `SELECT`]** **Parser DuckDB (`duckdb.extract_statements`, `json_serialize_sql`, `json_deserialize_sql`), a nie sqlglot.** Ten sam parser, który wykona zapytanie, więc walidacja i wykonanie nie mogą się rozjechać. Brak nowej zależności. Format JSON drzewa jest wewnętrzny, więc walidator odrzuca każdy nieznany typ węzła, wersja DuckDB jest przypięta w `uv.lock`, a testy bezpieczeństwa idą przy każdej aktualizacji. Parser ma własne zablokowane połączenie DuckDB bez danych. Prototyp z 2026-10-12 (DuckDB 1.5.6) potwierdził działanie w zablokowanym połączeniu.
+- KTD27. **[Zastąpione przez KTD32, 2026-10-18: z list zostają nazwy kolumn wyniku z `DESCRIBE`]** **Reguły zapytania to listy dozwolonych elementów (sekcja 7.3 architektury).** Jedna instrukcja `SELECT`, tylko uchwyty sesji i CTE (nazwa CTE nie wygląda jak uchwyt), funkcje tabelowe tylko `range` i `generate_series`, funkcje skalarne, agregujące i okna z jednej listy w `query/rules.py`, `LIMIT`/`OFFSET` tylko na najwyższym poziomie, bez `DISTINCT ON`, `SAMPLE`, `WITH RECURSIVE` i parametrów, bez rzutowania na typy zmiennoprzecinkowe i literałów wykładniczych, bez `/`, `avg` i podzapytań w argumentach agregatów i okien, nazwy kolumn wyniku zgodne z `^[A-Za-z][A-Za-z0-9_]*$` i unikalne bez względu na wielkość liter. Każda reguła to osobna klasa (Strategy), a `QueryPolicy` zbiera wszystkie naruszenia do jednego komunikatu.
 - KTD28. **Kontrola typów wyniku zamiast rzutowań kompilatora.** Typy kolumn wyniku z `DESCRIBE` mapuje `parse_duckdb_type` w `core/types.py`: `DECIMAL` → `decimal(p,s)`, liczby całkowite → `int` (`HUGEINT`/`UBIGINT` backend rzutuje na `BIGINT`, przepełnienie to błąd), `VARCHAR`, `DATE`, `TIMESTAMP`, `BOOLEAN` bez zmian. `FLOAT`/`REAL`/`DOUBLE` i typy złożone to `QueryValidationError` z prośbą o `CAST(… AS DECIMAL(38,6))`. Backend nie rzutuje `DOUBLE` po cichu, bo nie zna skali, jakiej chce model. Rola kolumny wyniku: dziedziczona z kolumny źródłowej o tej samej nazwie i typie, w przeciwnym razie z typu (`date`/`datetime` → `time`, `decimal`/`int` → `measure`, reszta → `dimension`).
-- KTD29. **Pełne `ORDER BY` dokłada backend w drzewie zapytania.** Do `ORDER BY` najwyższego poziomu, po kluczach modelu, backend dopisuje pozycje wszystkich kolumn wyniku (`1 … n`, `ASC NULLS LAST`), a `LIMIT` modelu działa po tym porządku. Liczbę kolumn daje `DESCRIBE`. Tekst wykonywany powstaje przez `json_deserialize_sql` i trafia do proweniencji obok tekstu od modelu. `CREATE TABLE <uchwyt> AS <SQL wykonany>` zachowuje kolejność, a `fetch` czyta w kolejności wstawienia.
-- KTD30. **Pochodzenie uchwytu to graf.** `QueryLineage` ma `sources` (krotka uchwytów z reguły „tylko uchwyty sesji”), `submitted_sql`, `sql` i liczbę wierszy. `TransformLineage` znika. `ResultService.lineage(handle)` zwraca wszystkich przodków, każdego raz, w kolejności numerów uchwytów (źródło zawsze ma niższy numer, więc to porządek topologiczny). `is_truncated` sprawdza przodków-procedury w tym samym grafie.
-- KTD31. **DuckDB sesji zostaje w procesie backendu w v1.** Obrona: reguły parsera, zablokowane połączenie, `memory_limit`, `threads`, limit czasu przez `interrupt()` i limit wierszy wyniku `query` (domyślnie 100 000, wynik większy jest usuwany z prośbą o agregację). Każda sesja widzi tylko wyniki swoich procedur. Osobny proces roboczy dochodzi przed wieloma użytkownikami lub danymi wrażliwymi (sekcja 7.4a architektury).
+- KTD29. **[Zastąpione przez KTD32, 2026-10-18: backend nie dopisuje `ORDER BY`]** **Pełne `ORDER BY` dokłada backend w drzewie zapytania.** Do `ORDER BY` najwyższego poziomu, po kluczach modelu, backend dopisuje pozycje wszystkich kolumn wyniku (`1 … n`, `ASC NULLS LAST`), a `LIMIT` modelu działa po tym porządku. Liczbę kolumn daje `DESCRIBE`. Tekst wykonywany powstaje przez `json_deserialize_sql` i trafia do proweniencji obok tekstu od modelu. `CREATE TABLE <uchwyt> AS <SQL wykonany>` zachowuje kolejność, a `fetch` czyta w kolejności wstawienia.
+- KTD30. **Pochodzenie uchwytu to graf.** `QueryLineage` ma `sources` (krotka uchwytów sesji, od 2026-10-18 z planu logicznego zapytania), `submitted_sql`, `sql` i liczbę wierszy. `TransformLineage` znika. `ResultService.lineage(handle)` zwraca wszystkich przodków, każdego raz, w kolejności numerów uchwytów (źródło zawsze ma niższy numer, więc to porządek topologiczny). `is_truncated` sprawdza przodków-procedury w tym samym grafie.
+- KTD31. **DuckDB sesji zostaje w procesie backendu w v1.** Obrona (od 2026-10-18 bez reguł parsera, KTD32): jedna instrukcja `SELECT`, zablokowane połączenie, `memory_limit`, `threads`, limit czasu przez `interrupt()` i limit wierszy wyniku `query` (domyślnie 100 000, wynik większy jest usuwany z prośbą o agregację). Każda sesja widzi tylko wyniki swoich procedur. Osobny proces roboczy dochodzi przed wieloma użytkownikami lub danymi wrażliwymi (sekcja 7.4a architektury).
+- KTD32. **Backend nie analizuje treści zapytania `query`.** Bezpieczeństwo daje zablokowane połączenie DuckDB (sondy z 2026-10-18 w sekcji 7.4a architektury), dokładność kwot daje `DECIMAL`, a kolumna `DOUBLE` w wyniku jest odrzucana. Backend sprawdza tylko jedną instrukcję `SELECT` (`extract_statements`), nazwy i typy kolumn z `DESCRIBE` oraz źródła z planu logicznego przed optymalizacją (`EXPLAIN (FORMAT json)`): zapytanie czytające uchwyt z obciętym przodkiem jest odrzucane w całości. Nie dopisuje `ORDER BY`, więc limit wierszy przerywa liczenie od razu, a SQL wykonany to tekst modelu (opakowany tylko rzutowaniem kolumn całkowitych na `BIGINT`). Funkcje niedeterministyczne, remisy przy `LIMIT` i `DOUBLE` w krokach pośrednich zostają bez kontroli, z wskazówkami dla modelu w U14 (sekcje 7.2 i 7.3 architektury). (session-settled: user-directed — chosen over walidator drzewa z listami dozwolonych elementów z v3.5: kosztował większość kodu modułu i chronił głównie przed przypadkami brzegowymi; rozważone też SQLite bez `DECIMAL` i osobna baza SQL Server z kontem bez uprawnień, odłożona jako droga produkcyjna)
 
 ### High-Level Technical Design
 
@@ -195,14 +198,13 @@ flowchart TB
 Przebieg narzędzia `query` w U19 (wskazówka kierunkowa, nie specyfikacja implementacji):
 
 ```text
-QueryService.run(sql):
-  parsed   = parser.parse(sql)                  # extract_statements + json_serialize_sql, one SELECT
-  nodes    = QueryTreeWalker.walk(parsed)       # unknown node type -> QueryValidationError
-  sources  = handles read by the query          # rule 3, checked against the session's handles
-  policy.violations(nodes, sources)             # rules 1-10, all violations in one message
+QueryService.run(sql):            # since 2026-10-18 (KTD32)
+  policy.check_statements(results.statement_types(sql))   # extract_statements: one SELECT
   columns  = results.describe_query(sql)        # DESCRIBE: binder errors -> QueryExecutionError
-  types    = parse_duckdb_type(...) per column  # DOUBLE/FLOAT -> QueryValidationError, HUGEINT -> BIGINT
-  executed = normalizer.complete_order_by(parsed, len(columns))  # json_deserialize_sql
+  types    = policy.check_columns(columns)      # names, DOUBLE/FLOAT -> QueryValidationError
+  sources  = results.sources(sql)               # tables in the unoptimized logical plan
+  policy.check_sources(sources)                 # a truncated ancestor -> QueryValidationError
+  executed = sql, or SELECT * REPLACE (CAST(... AS BIGINT) ...) FROM (sql)
   handle   = results.materialize(executed, schema, QueryLineage(sources, submitted_sql=sql, sql=executed))
   return QuerySummary(results.summarize(handle), sources, executed)
 ```
@@ -222,14 +224,14 @@ src/data_concierge/
   catalog/ (models.py, repository.py, service.py)
   procedures/ (models.py, repository.py, service.py)
   results/ (models.py, repository.py, service.py)
-  query/ (models.py, parser.py, rules.py, normalizer.py, service.py)
+  query/ (models.py, policy.py, service.py)
   agent/ (deps.py, tools.py, registry.py, prompts.py, service.py, assembler.py)
   api/ (schemas.py, service.py, sessions.py, controller.py, cli.py)
   bootstrap.py
 tests/                        # mirrors src/data_concierge/, plus tests/evals/
 ```
 
-Układ modułów i warstw pochodzi z `docs/standards/architektura-warstwowa.md` (sekcja 5). Różnice: `query/rules.py` i `query/normalizer.py` jako osobne klasy pomocnicze serwisu, `agent/registry.py` i `agent/assembler.py` jako osobne pliki, `api/sessions.py` i `api/cli.py`.
+Układ modułów i warstw pochodzi z `docs/standards/architektura-warstwowa.md` (sekcja 5). Różnice: `query/policy.py` jako osobna klasa pomocnicza serwisu, `agent/registry.py` i `agent/assembler.py` jako osobne pliki, `api/sessions.py` i `api/cli.py`.
 
 ### Sequencing
 
@@ -244,9 +246,8 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
 | Dynamiczny model parametrów w domknięciu nie działa przy PEP 649 | narzędzia procedur nie powstaną | wariant zapasowy z KTD8 |
 | Instancja SQL Server nadal przyjmuje tylko logowanie Windows | konto `agent_reader` z hasłem nie połączy się, etap 2 stoi | przełączenie na tryb mieszany przed etapem 2 i kontrola w `db/deploy.ps1` (KTD24) |
 | Procedura `api.*` używa tabel tymczasowych lub dynamicznego SQL | `dm_exec_describe_first_result_set_for_object` nie opisze kolumn i łańcuch właścicielski pęknie | zakaz w U8 i test walidacji katalogu w U10 |
-| Haiku 5.5 pisze błędny SQL DuckDB (zła kolumna, zły `JOIN`, brak `CAST`) | dużo ponowień, wyczerpany budżet kroków albo poprawny składniowo, ale błędny wynik | czytelne komunikaty reguł i wiązania (U19), wskazówki i przykłady w instrukcjach (U14), pomiar w zestawie ewaluacyjnym, w razie potrzeby Sonnet 5.5 |
-| Format drzewa `json_serialize_sql` zmienia się w nowej wersji DuckDB | reguły przestają rozpoznawać węzły | odmowa na nieznanym węźle (KTD26), wersja przypięta w `uv.lock`, testy bezpieczeństwa przy aktualizacji |
-| Luka w regułach albo błąd w DuckDB pozwala obejść zabezpieczenia | odczyt pliku lub zatrzymanie procesu | dwie warstwy: reguły i zablokowane połączenie, limity zasobów, sesja widzi tylko własne dane, osobny proces przed wieloma użytkownikami (KTD31) |
+| Haiku 5.5 pisze błędny SQL DuckDB (zła kolumna, zły `JOIN`, brak `CAST`) | dużo ponowień, wyczerpany budżet kroków albo poprawny składniowo, ale błędny wynik | czytelne komunikaty kontroli i wiązania (U19), wskazówki i przykłady w instrukcjach (U14), pomiar w zestawie ewaluacyjnym, w razie potrzeby Sonnet 5.5 |
+| Nowa wersja DuckDB albo błąd w DuckDB osłabia blokadę połączenia | odczyt pliku lub zatrzymanie procesu | wersja przypięta w `uv.lock`, testy bezpieczeństwa przy każdej aktualizacji, jedna instrukcja `SELECT`, limity zasobów, sesja widzi tylko własne dane, osobny proces przed wieloma użytkownikami (KTD31, KTD32) |
 | Koszt i niedeterminizm ewaluacji | wynik zestawu zmienia się między uruchomieniami | zestaw raportuje odsetek trafień w grupach i nie blokuje zwykłych testów (KTD5) |
 
 ### Sources & Research
@@ -277,7 +278,7 @@ Etap kończy się zielonymi testami swojego zakresu i spełnionym kryterium z De
 | U5 | Magazyn wyników | `src/data_concierge/results/` | U3 |
 | U6 | ~~Specyfikacja i walidacja przekształceń~~ (zastąpione przez U19) | — | — |
 | U7 | ~~Kompilator SQL i TransformService~~ (zastąpione przez U19) | — | — |
-| U19 | Silnik zapytań `query` (parser, reguły, typy, `ORDER BY`, proweniencja wieloźródłowa) | `src/data_concierge/query/`, `src/data_concierge/results/` | U4, U5 |
+| U19 | Silnik zapytań `query` (jedna instrukcja `SELECT`, nazwy i typy wyniku, obcięte źródła, proweniencja wieloźródłowa) | `src/data_concierge/query/`, `src/data_concierge/results/` | U4, U5 |
 | U8 | Skrypty bazy | `db/` | — |
 | U9 | Adapter SQL Server i metadane | `src/data_concierge/procedures/repository.py`, `catalog/repository.py` | U3, U8 |
 | U10 | Walidacja katalogu przy starcie | `src/data_concierge/catalog/service.py` | U4, U9 |
@@ -422,79 +423,54 @@ Zaimplementowane jako WIP w commicie `8c3e45e` (moduł `transform`: `spec.py`, `
 
 Zaimplementowane jako WIP w commicie `8c3e45e` (moduł `transform`: `compiler.py` z `SqlQueryBuilder`, `executor.py`, `service.py`) i wycofane decyzją z 2026-10-12 (wariant B, KTD25). Z U7 przechodzą do U19 syntetyczne dane zamówień z testów i scenariusze determinizmu (odwrócona kolejność wierszy, remisy w top N).
 
-### U19. Silnik zapytań `query`: parser, reguły, typy, pełne `ORDER BY`, proweniencja wieloźródłowa
+### U19. Silnik zapytań `query`: jedna instrukcja `SELECT`, typy, obcięte źródła, proweniencja wieloźródłowa
 
-- **Goal:** SQL napisany przez model nad uchwytami sesji przechodzi parser i reguły, wykonuje się deterministycznie w zablokowanym DuckDB, a wynik trafia pod nowy uchwyt z pełnym SQL i listą źródeł w proweniencji. Wszystko bez bazy i bez modelu.
+Zaimplementowane w commicie `fe491d9` w wersji z walidatorem drzewa (architektura v3.5). Od 2026-10-18 uproszczone według KTD32; poniżej opis po uproszczeniu.
+
+- **Goal:** SQL napisany przez model nad uchwytami sesji wykonuje się w zablokowanym DuckDB, jeśli jest jedną instrukcją `SELECT` z poprawnymi nazwami i typami kolumn i nie czyta obciętych danych, a wynik trafia pod nowy uchwyt z pełnym SQL i listą źródeł w proweniencji. Wszystko bez bazy i bez modelu.
 - **Requirements:** R10, R11, R12, R13, R14
 - **Dependencies:** U4, U5
 - **Files:**
-  - Do usunięcia (moduł `query` zastępuje moduł `transform`):
-    - `src/data_concierge/transform/__init__.py`, `spec.py`, `validator.py`, `compiler.py`, `executor.py`, `service.py`
-    - `tests/transform/test_spec.py`, `test_validator.py`, `test_compiler.py`, `test_service.py` (syntetyczne dane zamówień przenieść do `tests/query/conftest.py`)
-  - Do utworzenia:
-    - `src/data_concierge/query/__init__.py`
-    - `src/data_concierge/query/models.py`: `ParsedQuery`, `QueryNode`, `RuleViolation`, `QueryContext`, `QuerySummary`
-    - `src/data_concierge/query/parser.py`: `SqlParser` (`Protocol`), `DuckDBSqlParser` z własnym zablokowanym połączeniem bez danych, `QueryTreeWalker`
-    - `src/data_concierge/query/rules.py`: `QueryRule` (`Protocol`), reguły 1–10 z sekcji 7.3 architektury jako klasy, listy dozwolonych funkcji i węzłów, `QueryPolicy`
-    - `src/data_concierge/query/normalizer.py`: uzupełnianie `ORDER BY` w drzewie i `json_deserialize_sql`
-    - `src/data_concierge/query/service.py`: `QueryService`
-    - `tests/query/conftest.py`, `test_parser.py`, `test_rules.py`, `test_security.py`, `test_normalizer.py`, `test_service.py`
-  - Do zmiany:
-    - `src/data_concierge/results/models.py`: `TransformLineage` → `QueryLineage` (`sources: tuple[Handle, ...]`, `submitted_sql`, `sql`), właściwość `sources` w obu wariantach `Lineage`. `QueryRecord` znika.
-    - `src/data_concierge/results/service.py`: `lineage_chain` → `lineage(handle)` po grafie: wszyscy przodkowie, każdy raz, w kolejności numerów uchwytów (KTD30). `is_truncated` po tym samym grafie. Nowa metoda `describe_query(sql)` (`DESCRIBE` pod blokadą i limitem czasu magazynu).
-    - `src/data_concierge/results/repository.py`: `describe_query` w `ResultStore`, limit wierszy wyniku w `materialize` (wynik większy niż limit jest usuwany i zgłasza `QueryExecutionError`), `QueryTimeoutError` zamiast `ProcedureTimeoutError` dla zapytań DuckDB, błędy DuckDB wiązania i wykonania jako `QueryExecutionError`.
-    - `src/data_concierge/core/errors.py`: `SpecValidationError` → `QueryError` z podklasami `QueryValidationError`, `QueryExecutionError`, `QueryTimeoutError`.
-    - `src/data_concierge/core/types.py`: `parse_duckdb_type` obok `parse_sql_server_type` (KTD28). `TableSchema.require` i `with_column` usunąć, jeśli po usunięciu `transform` nie mają użytkowników (razem z ich testami w `tests/core/test_types.py`).
-    - `src/data_concierge/core/settings.py`: limit wierszy wyniku `query` (domyślnie 100 000).
-    - `tests/results/test_service.py`, `tests/results/test_duckdb_store.py`: `QueryLineage`, graf pochodzenia, `QueryTimeoutError`.
-    - `catalog/agent-procedures.yaml`: pola `then` w `examples` opisują `query` zamiast `transform`.
-    - `.env.example`: nowy limit, jeśli jest konfigurowalny zmienną.
+  - `src/data_concierge/query/models.py`: `QuerySummary`
+  - `src/data_concierge/query/policy.py`: `QueryPolicy` (nazwy i typy kolumn wyniku, obcięte źródła)
+  - `src/data_concierge/query/service.py`: `QueryService`
+  - `src/data_concierge/results/repository.py`, `service.py`: `statement_types`, `describe_query`, `sources` (plan logiczny z `EXPLAIN`), `materialize` z limitem wierszy
+  - Do usunięcia względem `fe491d9`: `query/parser.py`, `query/rules.py`, `query/normalizer.py` i ich testy (`test_parser.py`, `test_rules.py`, `test_normalizer.py`), `core/sql.py:fold_identifier`, `results/models.py:HANDLE_PATTERN`
+  - Testy: `tests/query/conftest.py`, `test_policy.py`, `test_security.py`, `test_service.py`, `tests/results/*`
 - **Approach:**
-  1. `DuckDBSqlParser.parse(sql)`: `duckdb.extract_statements` musi dać dokładnie jedną instrukcję typu `SELECT`, potem `json_serialize_sql` na połączeniu parsera daje drzewo. Błąd parsowania DuckDB wraca jako `QueryValidationError` z komunikatem DuckDB.
-  2. `QueryTreeWalker` przechodzi drzewo raz i daje listę `QueryNode` (rodzaj, nazwa funkcji lub tabeli, czy w argumencie agregatu lub okna, czy na najwyższym poziomie, zasięg CTE). Nieznany typ węzła lub klucz to `QueryValidationError` (KTD26).
-  3. `QueryPolicy` z regułami z KTD27 zbiera wszystkie naruszenia. Reguła 3 wylicza uchwyty źródłowe, a reguła 10 pyta `ResultService.is_truncated` o każde źródło (KTD23). Listy dozwolonych funkcji są jedynym źródłem także dla fragmentu instrukcji modelu w U14.
-  4. `ResultService.describe_query` wiąże zapytanie (`DESCRIBE`). Typy mapuje `parse_duckdb_type` (KTD28), a role dziedziczy z kolumn źródłowych albo wylicza z typu.
-  5. `QueryNormalizer.complete_order_by(parsed, column_count)` dopisuje pozycje kolumn do `ORDER BY` najwyższego poziomu (KTD29). Kolumny `HUGEINT` dostają `CAST(… AS BIGINT)` w zewnętrznym `SELECT`, który zachowuje kolejność.
-  6. `QueryService.run(sql)`: kroki 1–5, potem `ResultService.materialize` z `QueryLineage` i zwrot `QuerySummary` (opis uchwytu, źródła, SQL wykonany).
-- **Execution note:** zacznij od testów bezpieczeństwa i testu, że drzewo `json_serialize_sql` daje wszystko, czego potrzebują reguły 1–10 (KTD4). Jeśli któraś reguła nie da się sprawdzić na drzewie, zatrzymaj etap (warunek stopu z Goal Capsule).
-- **Patterns to follow:** Strategy (reguły), Visitor (przejście drzewa) i unia dyskryminowana (`Lineage`) z `docs/standards/wzorce-projektowe.md` (sekcje 3, 5, 6). SQL dla P3 i P5 z sekcji 7.4 i 10 architektury jako wzorce zapytań w testach.
+  1. `ResultService.statement_types(sql)`: `extract_statements` na połączeniu sesji. `QueryPolicy.check_statements` wymaga dokładnie jednej instrukcji typu `SELECT`, inaczej `QueryValidationError`. Końcowe średniki backend usuwa, a w opakowaniach wstawia nową linię przed nawiasem, żeby końcowy komentarz `--` nie zjadł nawiasu.
+  2. `ResultService.describe_query(sql)` wiąże zapytanie (`DESCRIBE`). `QueryPolicy.check_columns` sprawdza nazwy kolumn (wzorzec, unikalność bez względu na wielkość liter) i mapuje typy przez `parse_duckdb_type` (KTD28). Role kolumn dziedziczone ze źródła albo z typu.
+  3. `ResultService.sources(sql)`: tabele z planu logicznego przed optymalizacją (`EXPLAIN (FORMAT json)`, `explain_output = 'all'` na głównym połączeniu sesji), dopasowane do uchwytów sesji. `QueryPolicy.check_sources` odrzuca zapytanie, gdy któreś źródło ma obciętego przodka (KTD23, KTD32).
+  4. Kolumny całkowite inne niż `BIGINT` dostają `CAST(… AS BIGINT)` w zewnętrznym `SELECT * REPLACE (…)`.
+  5. `ResultService.materialize` z `QueryLineage` i zwrot `QuerySummary` (opis uchwytu, źródła, SQL wykonany).
+- **Patterns to follow:** unia dyskryminowana (`Lineage`) z `docs/standards/wzorce-projektowe.md` (sekcja 5). SQL dla P3 i P5 z sekcji 7.4 i 10 architektury jako wzorce zapytań w testach.
 - **Test scenarios:**
-  - *Obliczenia i determinizm:*
+  - *Obliczenia:*
     - Zapytanie P3 z sekcji 7.4 architektury na syntetycznej tabeli zamówień z lukami w lutym i grudniu daje 12 wierszy, zera w pustych miesiącach, sumy równe sumom liczonym ręcznie na `Decimal` i typy `month: date`, `net_sales: decimal(38,4)`, `order_count: int`.
     - Zapytanie P5: `JOIN` listy klientów (`r1`) z zamówieniami (`r2`) po `CustomerID` daje sumy tylko dla klientów z listy, a `QueryLineage.sources` to `("r1", "r2")`.
-    - To samo zapytanie na wierszach źródłowych w odwróconej kolejności daje identyczny wynik co do wartości i kolejności.
-    - Zapytanie bez `ORDER BY` daje SQL wykonany z `ORDER BY 1 NULLS LAST, …, n NULLS LAST`. Zapytanie z `ORDER BY net_sales DESC LIMIT 10` zachowuje klucz modelu, dokłada pozycje i daje identyczny top 10 przy remisach na danych w odwróconej kolejności.
-    - `SELECT DISTINCT` i `UNION` z uzupełnionym `ORDER BY` wykonują się poprawnie.
-    - `FROM … PIVOT (sum(line_total) FOR category IN ('Bikes' AS bikes, …))` daje kolumnę na każdą wartość z listy. Wartość z apostrofem („Margie's Travel”) w liście `IN` z aliasem działa.
+    - Zapytanie z agregacją na wierszach źródłowych w odwróconej kolejności daje identyczny wynik.
+    - Kolejność wyniku to kolejność z `ORDER BY` modelu, a SQL wykonany to tekst modelu.
+    - `FROM … PIVOT (sum(line_total) FOR category IN ('Bikes' AS bikes, …))` daje kolumnę na każdą wartość z listy. Wartość z apostrofem („Margie's Travel”) działa.
     - `CAST(avg("SubTotal") AS DECIMAL(38,6))` daje `decimal(38,6)`, a `CAST(sum(a) / NULLIF(sum(b), 0) AS DECIMAL(38,6))` przy zerowym dzielniku daje `NULL`.
     - `sum` po kolumnie całkowitej daje w wyniku `int` (`HUGEINT` rzutowany na `BIGINT`).
-  - *Typy wyniku:*
-    - `avg("SubTotal")` bez `CAST` kończy się `QueryValidationError` z nazwą kolumny i podpowiedzią `CAST(… AS DECIMAL(38,6))`.
-    - `"SubTotal" / 2` bez `CAST` w wyniku kończy się tym samym błędem.
-    - Kolumna typu `LIST`, `STRUCT` albo `INTERVAL` w wyniku kończy się `QueryValidationError`.
-    - Kolumna przeniesiona ze źródła (`CustomerID`) dziedziczy rolę `id`, a `net_sales` dostaje rolę `measure`.
-  - *Reguły (każda reguła: przypadek dozwolony i zakazany):*
-    - Dwie instrukcje (`SELECT 1; SELECT 2`) i instrukcja po średniku (`SELECT 1; DROP TABLE r1`) dają błąd reguły 1.
-    - `row_number() OVER (…)`, `lag(…)`, `any_value(…)`, `string_agg(…)`, `random()`, `now()` dają błąd reguły 5 z podpowiedzią alternatywy, a `rank()` i `dense_rank()` z `QUALIFY` przechodzą.
-    - `LIMIT` w CTE, `DISTINCT ON`, `USING SAMPLE` i `WITH RECURSIVE` dają błąd reguły 6.
-    - `CAST(x AS DOUBLE)`, literał `1e-3`, `sum("SubTotal" / 2)` i `sum(avg(x)) OVER ()` dają błąd reguły 7. `sum(a) / NULLIF(sum(b), 0)` z `CAST` przechodzi.
-    - Parametr `?` daje błąd reguły 8.
-    - Kolumna bez aliasu (`sum("SubTotal")`) i dwie kolumny `Net_Sales` i `net_sales` dają błąd reguły 9.
-    - Zapytanie z wieloma naruszeniami zwraca jeden błąd z listą wszystkich naruszeń.
-    - Agregacja na uchwycie z obciętym przodkiem i `JOIN` z obciętą listą klientów w zapytaniu z `GROUP BY` dają błąd reguły 10 z prośbą o zawężenie parametrów. Zapytanie bez agregacji na obciętym uchwycie przechodzi, a wynik ma `truncated: true`.
-    - Nieznany uchwyt (`r9`) daje błąd z listą istniejących uchwytów. Nieznana kolumna daje błąd wiązania z komunikatem DuckDB (np. „Candidate bindings”).
-  - *Bezpieczeństwo (`test_security.py`, każdy przypadek kończy się odmową przed wykonaniem, a połączenie sesji pozostaje sprawne):*
+  - *Kontrole:*
+    - Dwie instrukcje (`SELECT 1; SELECT 2`), instrukcja po średniku (`SELECT 1; DROP TABLE r1`) i instrukcje inne niż `SELECT` dają `QueryValidationError`.
+    - `avg("SubTotal")` i `"SubTotal" / 2` bez `CAST` w wyniku dają `QueryValidationError` z nazwą kolumny i podpowiedzią `CAST(… AS DECIMAL(38,6))`. Kolumna `LIST`, `STRUCT` albo `INTERVAL` też.
+    - Kolumna bez aliasu (`sum("SubTotal")`) i dwie kolumny `Net_Sales` i `net_sales` dają błąd nazw.
+    - Zapytanie czytające uchwyt z obciętym przodkiem (bezpośrednio, przez dwa kroki pochodzenia, w podzapytaniu, przez `JOIN` z obciętą listą) daje błąd z prośbą o zawężenie parametrów. Zapytanie na innym, nieobciętym uchwycie przechodzi.
+    - Nieznany uchwyt (`r9`) i nieznana kolumna dają błąd wiązania z komunikatem DuckDB.
+    - Kolumna przeniesiona ze źródła (`CustomerID`) dziedziczy rolę `id`, a `net_sales` dostaje rolę `measure`. Uchwyt pisany wielkimi literami (`R2`) jest źródłem `r2`.
+  - *Bezpieczeństwo (`test_security.py`, każdy przypadek kończy się `QueryError`, a dane i połączenie sesji pozostają sprawne):*
     - DDL i DML: `CREATE TABLE`, `DROP TABLE r1`, `INSERT`, `UPDATE`, `DELETE`, `ALTER`, `CREATE MACRO`.
     - Konfiguracja i rozszerzenia: `PRAGMA`, `SET enable_external_access = true`, `RESET`, `INSTALL`, `LOAD`, `ATTACH`, `DETACH`, `USE`, `CALL`, `EXPORT DATABASE`, `COPY`.
-    - Pliki i sieć: `read_csv`, `read_parquet`, `read_json`, `read_text`, `read_blob`, `glob`, `FROM 'x.csv'`, `FROM 'https://…'`, `query_table('r1')`, `query('SELECT 1')`.
-    - Katalog systemowy i środowisko: `information_schema.tables`, `duckdb_tables()`, `duckdb_settings()`, `pg_catalog.pg_tables`, `sqlite_master`, `current_setting('memory_limit')`, `getenv('HOME')`, `version()`.
-    - Obejścia: CTE nazwane `r1` przesłaniające uchwyt, tabela kwalifikowana schematem (`main.r1`), komentarz z drugą instrukcją, wielkie i małe litery w nazwach funkcji (`READ_CSV`), funkcja w podzapytaniu w `WHERE`.
-    - Zasoby: iloczyn kartezjański dwóch dużych uchwytów kończy się `QueryError` (limit czasu, pamięci albo wierszy), który narzędzie zamienia na `ModelRetry`, a nie zatrzymaniem procesu. Kolejne zapytanie w tej samej sesji działa.
+    - Pliki i sieć: `read_csv`, `read_parquet`, `read_json`, `read_text`, `read_blob`, `glob`, `FROM 'x.csv'`, `FROM 'https://…'`, `duckdb_secrets()`, `duckdb_extensions()`.
+    - Instrukcje w tekście: `query('DROP TABLE r1')`, komentarz z drugą instrukcją.
+    - Zasoby: iloczyn kartezjański dwóch dużych uchwytów kończy się `QueryError` (limit czasu, pamięci albo wierszy), a kolejne zapytanie w tej samej sesji działa.
   - *Proweniencja:*
     - Wynik `query` ma `QueryLineage` z `submitted_sql` od modelu, `sql` wykonanym i listą źródeł.
-    - `lineage(r4)` dla `r4` z `r3` z `r1` i `r2` zwraca `r1`, `r2`, `r3`, `r4`, każdy raz, w tej kolejności. Wspólny przodek dwóch źródeł pojawia się raz.
+    - `lineage(r4)` dla `r4` z `r3` z `r1` i `r2` zwraca `r1`, `r2`, `r3`, `r4`, każdy raz, w tej kolejności.
     - Odtworzenie: wykonanie zapisanych `sql` w nowej sesji na tych samych danych źródłowych daje identyczną tabelę.
-- **Verification:** każda reguła z sekcji 7.3 architektury ma testy przypadku dozwolonego i zakazanego, a wszystkie przypadki z `test_security.py` kończą się odmową przed wykonaniem albo błędem uprawnień zablokowanego połączenia. W kodzie nie zostaje moduł `transform` ani `SpecValidationError`.
+- **Verification:** wszystkie przypadki z `test_security.py` kończą się `QueryError` bez zmiany danych sesji, a w kodzie nie zostaje walidator drzewa ani normalizer `ORDER BY`.
 
 ### Etap 2: SQL Server
 
@@ -667,7 +643,7 @@ Zaimplementowane jako WIP w commicie `8c3e45e` (moduł `transform`: `compiler.py
   - `tests/agent/test_live_smoke.py`
 - **Approach:**
   1. `AgentAnswer` (KTD17) jako `ToolOutput(name="present_result")`. `@agent.output_validator` sprawdza, że wskazane uchwyty istnieją, a status `needs_clarification` ma pytanie.
-  2. Instrukcje: zasady z sekcji 7.1 i 8 architektury, część o pisaniu SQL w `query` z sekcji 11.3 architektury (dialekt DuckDB, tabele to uchwyty, cytowanie kolumn, kwoty jako `DECIMAL` z `CAST` dla `avg` i dzielenia, `NULLIF`, `CAST(date_trunc(…) AS DATE)`, siatka okresów z zakresu prośby, `JOIN` po kolumnach `id`, aliasy po angielsku w `snake_case`, lista dozwolonych funkcji generowana z `query/rules.py`, 2–3 przykłady z sekcji 10), polecenie, żeby liczby w komentarzu brać tylko z wyników zapytań widocznych w całości (sekcja 7.5), polecenie zawężenia parametrów albo podania niepełności przy uchwycie z `truncated` (KTD23), skrót katalogu i zakresy danych. Powstają raz (KTD11), a data bieżąca idzie w wiadomości użytkownika.
+  2. Instrukcje: zasady z sekcji 7.1 i 8 architektury, część o pisaniu SQL w `query` z sekcji 11.3 architektury (dialekt DuckDB, tabele to uchwyty, cytowanie kolumn, kwoty jako `DECIMAL` z `CAST` dla `avg` i dzielenia, `NULLIF`, `CAST(date_trunc(…) AS DATE)`, siatka okresów z zakresu prośby, `JOIN` po kolumnach `id`, aliasy po angielsku w `snake_case`, daty jako literały, `ORDER BY` z kolumną rozstrzygającą przy top N, 2–3 przykłady z sekcji 10), polecenie, żeby liczby w komentarzu brać tylko z wyników zapytań widocznych w całości (sekcja 7.5), polecenie zawężenia parametrów albo podania niepełności przy uchwycie z `truncated` (KTD23), skrót katalogu i zakresy danych. Powstają raz (KTD11), a data bieżąca idzie w wiadomości użytkownika.
   3. Ustawienia modelu z konfiguracji: `anthropic_effort`, `anthropic_thinking` z `block_binding`, `anthropic_cache_instructions`, `anthropic_cache_tool_definitions`, jawne `max_tokens`. `UsageLimits(request_limit=10)` (R9). `retries` z konfiguracji.
   4. Asynchroniczna metoda `AgentService.run(prompt, history, deps)` (KTD12) zwraca `AgentAnswer` i nową historię. Testy agenta są asynchroniczne (anyio). `UsageLimitExceeded` i `UnexpectedModelBehavior` zamienia na wynik ze statusem `error`.
 - **Execution note:** najpierw jedno sprawdzenie na prawdziwym API (`test_live_smoke.py`, marker `eval`): czy Haiku 5.5 przyjmuje narzędzia `strict`, `effort: medium` i kontynuację z historią bez ostrzeżenia o nieaktualnym bloku myślenia (KTD4). Wynik niezgodny z KTD9 lub KTD11 to warunek stopu.
@@ -679,7 +655,7 @@ Zaimplementowane jako WIP w commicie `8c3e45e` (moduł `transform`: `compiler.py
   - Pętla wywołań narzędzi bez końca kończy się po 10 żądaniach statusem `error`.
   - Covers R3. Druga tura z historią pierwszej ma instrukcje i definicje narzędzi identyczne bajtowo z pierwszą (żądanie przechwycone przez `MockTransport`).
   - Żądanie do Anthropic zawiera `output_config.effort = "medium"`, `cache_control` na instrukcjach i ostatnim narzędziu, `strict: true` na narzędziach procedur i na `query` oraz brak `strict` na `present_result`.
-  - Instrukcje agenta zawierają listę dozwolonych funkcji z `query/rules.py` i nie zawierają daty bieżącej. Datę dokleja do wiadomości użytkownika `AskService` (U16).
+  - Instrukcje agenta zawierają wskazówki o SQL z sekcji 7.2 architektury i nie zawierają daty bieżącej. Datę dokleja do wiadomości użytkownika `AskService` (U16).
 - **Verification:** testy offline przechodzą bez sieci, a test na żywo przechodzi raz przed zamknięciem etapu.
 
 ### U15. ResponseAssembler

@@ -40,7 +40,7 @@ class ProcedureService:
 
 ## 4. DRY, ale rozsądnie
 
-- **Jedno źródło prawdy dla wiedzy.** Opis procedury żyje w YAML katalogu; definicje narzędzi, schematy i skrót katalogu w prompcie są z niego **generowane**, a nie przepisywane. Listy dozwolonych funkcji i węzłów SQL żyją w jednym module (`query/rules.py`): z nich korzysta walidator i z nich powstaje fragment instrukcji dla modelu o tym, czego wolno używać w `query`.
+- **Jedno źródło prawdy dla wiedzy.** Opis procedury żyje w YAML katalogu; definicje narzędzi, schematy i skrót katalogu w prompcie są z niego **generowane**, a nie przepisywane. Mapowanie typów wyniku `query` żyje w jednym miejscu (`parse_duckdb_type`): z niego korzysta kontrola typów i z niego powstaje fragment instrukcji dla modelu.
 - **Wspólna logika do jednej klasy lub funkcji.** Mapowanie typów (SQL Server → Arrow → DuckDB → JSON) jest w jednym miejscu, a nie w każdym module.
 - **Reguła trzech.** Dwa podobne fragmenty mogą zostać; przy trzecim wydzielamy abstrakcję. Lepsza drobna duplikacja niż zła abstrakcja, która wiąże niezależne rzeczy.
 - DRY dotyczy wiedzy i logiki, nie przypadkowo podobnego kodu. Dwa kawałki, które dziś wyglądają tak samo, ale zmieniają się z różnych powodów, zostają osobno.
