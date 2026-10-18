@@ -9,7 +9,7 @@ import re
 from collections.abc import Sequence
 
 from data_concierge.core.errors import QueryValidationError
-from data_concierge.core.types import ColumnType, case_insensitive_duplicates, parse_duckdb_type
+from data_concierge.core.types import ColumnType, TableSchema
 from data_concierge.results.models import DescribedColumn, Handle
 
 COLUMN_NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
@@ -37,10 +37,12 @@ class QueryPolicy:
                     "underscores, e.g. AS net_sales"
                 )
             try:
-                types.append(parse_duckdb_type(duckdb_type))
+                types.append(ColumnType.from_duckdb(duckdb_type))
             except QueryValidationError:
                 problems.append(self._type_problem(name, duckdb_type))
-        duplicates = sorted(set(case_insensitive_duplicates([name for name, _ in columns])))
+        duplicates = sorted(
+            set(TableSchema.case_insensitive_duplicates([name for name, _ in columns]))
+        )
         if duplicates:
             problems.append(
                 f"result column names must differ ignoring case: {', '.join(duplicates)}"

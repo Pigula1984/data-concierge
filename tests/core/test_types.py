@@ -11,8 +11,6 @@ from data_concierge.core.types import (
     ColumnRole,
     ColumnType,
     TableSchema,
-    parse_duckdb_type,
-    parse_sql_server_type,
 )
 
 
@@ -80,13 +78,13 @@ def test_parse_rejects_invalid_catalog_type(text: str) -> None:
     ],
 )
 def test_sql_server_type_equivalence(sql_type: str, expected: str) -> None:
-    assert parse_sql_server_type(sql_type) == ColumnType.parse(expected)
+    assert ColumnType.from_sql_server(sql_type) == ColumnType.parse(expected)
 
 
 @pytest.mark.parametrize("sql_type", ["xml", "uniqueidentifier", "decimal"])
 def test_sql_server_type_without_equivalent_is_rejected(sql_type: str) -> None:
     with pytest.raises(CatalogError, match=sql_type):
-        parse_sql_server_type(sql_type)
+        ColumnType.from_sql_server(sql_type)
 
 
 def test_table_schema_rejects_duplicate_names_ignoring_case() -> None:
@@ -135,14 +133,14 @@ def test_parse_reports_decimal_bounds_without_pydantic_details() -> None:
         ("BOOLEAN", "bool"),
     ],
 )
-def test_parse_duckdb_type_maps_result_types(duckdb_type: str, expected: str) -> None:
-    assert str(parse_duckdb_type(duckdb_type)) == expected
+def test_from_duckdb_maps_result_types(duckdb_type: str, expected: str) -> None:
+    assert str(ColumnType.from_duckdb(duckdb_type)) == expected
 
 
 @pytest.mark.parametrize(
     "duckdb_type",
     ["DOUBLE", "FLOAT", "INTERVAL", "VARCHAR[]", "STRUCT(a INTEGER)", "TIMESTAMP WITH TIME ZONE"],
 )
-def test_parse_duckdb_type_rejects_types_without_catalog_equivalent(duckdb_type: str) -> None:
+def test_from_duckdb_rejects_types_without_catalog_equivalent(duckdb_type: str) -> None:
     with pytest.raises(QueryValidationError, match="no catalog equivalent"):
-        parse_duckdb_type(duckdb_type)
+        ColumnType.from_duckdb(duckdb_type)

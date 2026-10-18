@@ -36,12 +36,12 @@ class QueryService:
 
     def run(self, sql: str) -> QuerySummary:
         self._policy.check_statements(self._results.statement_types(sql))
-        statement = _without_trailing_semicolons(sql)
+        statement = self._without_trailing_semicolons(sql)
         columns = self._results.describe_query(statement)
         types = self._policy.check_columns(columns)
         sources = self._results.sources(statement)
         self._policy.check_sources([h for h in sources if self._results.is_truncated(h)])
-        executed = _with_bigint_integers(statement, columns)
+        executed = self._with_bigint_integers(statement, columns)
         handle = self._results.materialize(
             executed,
             TableSchema(columns=self._result_columns(columns, types, sources)),
@@ -74,28 +74,28 @@ class QueryService:
             for (name, _), column_type in zip(columns, types, strict=True)
         )
 
+    @staticmethod
+    def _without_trailing_semicolons(sql: str) -> str:
+        """The statement without the `;` that would break the subquery the backend wraps it in.
 
-def _without_trailing_semicolons(sql: str) -> str:
-    """The statement without the `;` that would break the subquery the backend wraps it in.
+        A comment after the `;` stays and ends in a syntax error the model can fix; removing it
+        would need a SQL lexer for `--` inside string literals.
+        """
+        statement = sql.rstrip()
+        while statement.endswith(";"):
+            statement = statement[:-1].rstrip()
+        return statement
 
-    A comment after the `;` stays and ends in a syntax error the model can fix; removing it
-    would need a SQL lexer for `--` inside string literals.
-    """
-    statement = sql.rstrip()
-    while statement.endswith(";"):
-        statement = statement[:-1].rstrip()
-    return statement
-
-
-def _with_bigint_integers(sql: str, columns: Sequence[DescribedColumn]) -> str:
-    """Integer columns other than BIGINT (HUGEINT from sum, INTEGER from literals) are cast in
-    an outer SELECT, which keeps the order of its subquery."""
-    casts = [
-        f"CAST({quote_identifier(name)} AS BIGINT) AS {quote_identifier(name)}"
-        for name, duckdb_type in columns
-        if duckdb_type in DUCKDB_INTEGER_TYPES and duckdb_type != "BIGINT"
-    ]
-    if not casts:
-        return sql
-    # The newline ends a trailing -- comment before the closing parenthesis.
-    return f"SELECT * REPLACE ({', '.join(casts)}) FROM ({sql}\n) AS result"
+    @staticmethod
+    def _with_bigint_integers(sql: str, columns: Sequence[DescribedColumn]) -> str:
+        """Integer columns other than BIGINT (HUGEINT from sum, INTEGER from literals) are cast in
+        an outer SELECT, which keeps the order of its subquery."""
+        casts = [
+            f"CAST({quote_identifier(name)} AS BIGINT) AS {quote_identifier(name)}"
+            for name, duckdb_type in columns
+            if duckdb_type in DUCKDB_INTEGER_TYPES and duckdb_type != "BIGINT"
+        ]
+        if not casts:
+            return sql
+        # The newline ends a trailing -- comment before the closing parenthesis.
+        return f"SELECT * REPLACE ({', '.join(casts)}) FROM ({sql}\n) AS result"
