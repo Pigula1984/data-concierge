@@ -7,9 +7,8 @@ from data_concierge.core.types import Column, ColumnRole, ColumnType, TableSchem
 from data_concierge.results.models import (
     ColumnStats,
     ProcedureLineage,
-    QueryRecord,
+    QueryLineage,
     ResultTable,
-    TransformLineage,
 )
 from data_concierge.results.repository import DuckDBResultStore
 from data_concierge.results.service import ResultService
@@ -100,18 +99,15 @@ def test_export_cuts_at_max_rows_and_flags_truncation() -> None:
 def test_truncation_of_a_procedure_result_is_inherited_by_derived_handles() -> None:
     service, store = _service()
     source = service.save(_orders(5, truncated=True))
+    other = service.save(_orders(3))
+    sql = f'SELECT * FROM "{source}" UNION ALL SELECT * FROM "{other}"'
     derived = store.materialize(
-        f'SELECT * FROM "{source}" ORDER BY "OrderDate"',
-        [],
-        ORDERS_SCHEMA,
-        TransformLineage(
-            source=source, spec={"steps": []}, queries=(QueryRecord(sql="SELECT ..."),)
-        ),
+        sql, ORDERS_SCHEMA, QueryLineage(sources=(source, other), submitted_sql=sql, sql=sql)
     )
 
     summary = service.summarize(derived)
-    chain = service.lineage_chain(derived)
 
     assert summary.truncated is True
     assert service.export(derived, max_rows=100).truncated is True
-    assert [handle for handle, _ in chain] == [source, derived]
+    assert service.is_truncated(other) is False
+    assert [stored.handle for stored in service.lineage(derived)] == [source, other, derived]

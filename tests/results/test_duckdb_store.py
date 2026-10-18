@@ -2,11 +2,14 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
 
-import duckdb
 import pyarrow as pa
 import pytest
 
-from data_concierge.core.errors import ProcedureTimeoutError, UnknownHandleError
+from data_concierge.core.errors import (
+    QueryExecutionError,
+    QueryTimeoutError,
+    UnknownHandleError,
+)
 from data_concierge.core.types import Column, ColumnRole, ColumnType, TableSchema
 from data_concierge.results.models import ProcedureLineage, ResultTable
 from data_concierge.results.repository import DuckDBResultStore
@@ -90,7 +93,7 @@ def test_locked_connection_rejects_file_network_and_config_access(
     existing.write_text("a\n1\n", encoding="utf-8")
     sql = statement.format(existing=existing, new_file=tmp_path / "leak.csv")
 
-    with pytest.raises(duckdb.Error, match=expected):
+    with pytest.raises(QueryExecutionError, match=expected):
         DuckDBResultStore().query(sql)
 
     assert not (tmp_path / "leak.csv").exists()
@@ -99,7 +102,7 @@ def test_locked_connection_rejects_file_network_and_config_access(
 def test_query_over_time_limit_is_stopped() -> None:
     store = DuckDBResultStore(query_timeout_seconds=0.5)
 
-    with pytest.raises(ProcedureTimeoutError, match=r"0.5 s"):
+    with pytest.raises(QueryTimeoutError, match=r"0.5 s"):
         store.query("SELECT sum(a.range * b.range) FROM range(100000) a, range(100000) b")
 
 

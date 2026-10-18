@@ -1,7 +1,5 @@
 """Saving results under handles and describing them for the model and the response."""
 
-from collections.abc import Collection, Sequence
-
 import pyarrow as pa
 
 from data_concierge.core.sql import quote_identifier
@@ -9,6 +7,7 @@ from data_concierge.core.types import Column, ColumnRole, TableSchema
 from data_concierge.results.models import (
     ColumnInfo,
     ColumnStats,
+    DescribedColumn,
     ExportedTable,
     Handle,
     JsonScalar,
@@ -18,6 +17,7 @@ from data_concierge.results.models import (
     ResultTable,
     Rows,
     StoredResult,
+    handle_number,
     to_json_scalar,
 )
 from data_concierge.results.repository import ResultStore
@@ -28,7 +28,7 @@ MAX_LISTED_VALUES = 20
 
 
 class ResultService:
-    """Facade over the session's result store used by procedures, transforms and the agent."""
+    """Facade over the session's result store used by procedures, queries and the agent."""
 
     def __init__(
         self,
@@ -48,32 +48,35 @@ class ResultService:
     def describe(self, handle: Handle) -> StoredResult:
         return self._store.describe(handle)
 
-    def query(self, sql: str, params: Sequence[object] = ()) -> pa.Table:
-        """Runs a read query over the session's handles, subject to the time limit."""
-        return self._store.query(sql, params)
+    def handles(self) -> tuple[Handle, ...]:
+        return self._store.handles()
 
-    def materialize(
-        self, sql: str, params: Sequence[object], schema: TableSchema, lineage: Lineage
-    ) -> Handle:
+    def describe_query(self, sql: str) -> tuple[DescribedColumn, ...]:
+        """Names and DuckDB types of a query's result columns, without running the query."""
+        return self._store.describe_query(sql)
+
+    def materialize(self, sql: str, schema: TableSchema, lineage: Lineage) -> Handle:
         """Stores the result of a query over existing handles under a new handle."""
-        return self._store.materialize(sql, params, schema, lineage)
+        return self._store.materialize(sql, schema, lineage)
 
-    def lineage_chain(self, handle: Handle) -> tuple[tuple[Handle, Lineage], ...]:
-        """The handle's origin, oldest step first, so the result can be reproduced."""
-        chain: list[tuple[Handle, Lineage]] = []
-        current: Handle | None = handle
-        while current is not None:
-            lineage = self._store.describe(current).lineage
-            chain.append((current, lineage))
-            current = None if isinstance(lineage, ProcedureLineage) else lineage.source
-        return tuple(reversed(chain))
+    def lineage(self, handle: Handle) -> tuple[StoredResult, ...]:
+        """The handle and all its ancestors, each once, oldest first, to reproduce the result.
+
+        Handles are numbered in creation order and a source always exists before its result,
+        so ordering by number is a topological order of the lineage graph.
+        """
+        found: dict[Handle, StoredResult] = {}
+        pending = [handle]
+        while pending:
+            current = pending.pop()
+            if current not in found:
+                found[current] = self._store.describe(current)
+                pending.extend(found[current].lineage.sources)
+        return tuple(found[key] for key in sorted(found, key=handle_number))
 
     def is_truncated(self, handle: Handle) -> bool:
         """True when the handle or any ancestor came from a procedure result cut at max_rows."""
-        return any(
-            isinstance(lineage, ProcedureLineage) and lineage.truncated
-            for _, lineage in self.lineage_chain(handle)
-        )
+        return any(_cut_by_procedure(stored.lineage) for stored in self.lineage(handle))
 
     def summarize(self, handle: Handle) -> ResultSummary:
         stored = self._store.describe(handle)
@@ -83,7 +86,7 @@ class ResultService:
             row_count=stored.row_count,
             truncated=self.is_truncated(handle),
             columns=_column_infos(stored),
-            stats=self._stats(stored, stored.table_schema.names),
+            stats=self._stats(stored),
             preview=_rows(self._store.fetch(handle, limit)),
         )
 
@@ -97,16 +100,10 @@ class ResultService:
             truncated=stored.row_count > max_rows or self.is_truncated(handle),
         )
 
-    def column_stats(self, handle: Handle, names: Collection[str]) -> dict[str, ColumnStats]:
-        """Statistics of the named columns only, as in summarize."""
-        return self._stats(self._store.describe(handle), names)
-
-    def _stats(self, stored: StoredResult, names: Collection[str]) -> dict[str, ColumnStats]:
+    def _stats(self, stored: StoredResult) -> dict[str, ColumnStats]:
         table = quote_identifier(stored.handle)
         stats: dict[str, ColumnStats] = {}
         for column in stored.table_schema.columns:
-            if column.name not in names:
-                continue
             name = quote_identifier(column.name)
             if column.role in (ColumnRole.TIME, ColumnRole.MEASURE):
                 low, high = self._single_row(f"SELECT min({name}), max({name}) FROM {table}")
@@ -128,6 +125,10 @@ class ResultService:
 
     def _single_row(self, sql: str) -> tuple[JsonScalar, ...]:
         return _rows(self._store.query(sql))[0]
+
+
+def _cut_by_procedure(lineage: Lineage) -> bool:
+    return isinstance(lineage, ProcedureLineage) and lineage.truncated
 
 
 def _column_infos(stored: StoredResult) -> tuple[ColumnInfo, ...]:

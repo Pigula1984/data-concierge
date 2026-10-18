@@ -1,9 +1,10 @@
 """Result tables stored under handles, their lineage, and what the model sees of them."""
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NamedTuple
 
 import pyarrow as pa
 from pydantic import BaseModel, Field, JsonValue
@@ -11,8 +12,25 @@ from pydantic import BaseModel, Field, JsonValue
 from data_concierge.core.types import ColumnRole, ColumnType, TableSchema, arrow_fields
 
 type Handle = str
+# Handles are r1, r2, ... in creation order; DuckDB resolves table names ignoring case.
+HANDLE_PATTERN = re.compile(r"r[0-9]+", re.IGNORECASE)
 type JsonScalar = str | int | bool | None
 type Rows = tuple[tuple[JsonScalar, ...], ...]
+
+
+def handle_for(number: int) -> Handle:
+    return f"r{number}"
+
+
+def handle_number(handle: Handle) -> int:
+    return int(handle[1:])
+
+
+class DescribedColumn(NamedTuple):
+    """A result column as DuckDB binds it, before it is mapped to a catalog type."""
+
+    name: str
+    duckdb_type: str
 
 
 class ProcedureLineage(BaseModel, frozen=True):
@@ -24,25 +42,22 @@ class ProcedureLineage(BaseModel, frozen=True):
     # The procedure returned more rows than the catalog's max_rows allowed.
     truncated: bool
 
+    @property
+    def sources(self) -> tuple[Handle, ...]:
+        return ()
 
-class QueryRecord(BaseModel, frozen=True):
-    """One executed query with its parameters, enough to rerun it without the model."""
 
+class QueryLineage(BaseModel, frozen=True):
+    """A result computed by a SELECT over other handles, enough to rerun it without the model."""
+
+    step: Literal["query"] = "query"
+    sources: tuple[Handle, ...]
+    # The SQL as the model wrote it and as the backend ran it (with the full ORDER BY).
+    submitted_sql: str
     sql: str
-    params: tuple[JsonValue, ...] = ()
 
 
-class TransformLineage(BaseModel, frozen=True):
-    """A result computed from another handle by a transform specification."""
-
-    step: Literal["transform"] = "transform"
-    source: Handle
-    spec: dict[str, JsonValue]
-    # Every query the step ran, in order (pivot runs a values query before the final one).
-    queries: tuple[QueryRecord, ...]
-
-
-type Lineage = Annotated[ProcedureLineage | TransformLineage, Field(discriminator="step")]
+type Lineage = Annotated[ProcedureLineage | QueryLineage, Field(discriminator="step")]
 
 
 @dataclass(frozen=True, slots=True)

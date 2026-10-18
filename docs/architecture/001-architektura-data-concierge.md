@@ -11,6 +11,7 @@ Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (
 > **v3.3:** nazwy kolumn tworzonych w specyfikacji przekształceń (aliasy, fakty) po angielsku, np. `month`, `net_sales`; instalacja zależności przez uv.
 > **v3.4:** wnioski z researchu bibliotek (Pydantic AI 2.55.0, DuckDB 1.5.6, pyodbc 5.3.0, testy na lokalnym SQL Server) i z planu wdrożenia: (1) agent kończy turę wynikiem `AgentAnswer`, a `Response` składa `ResponseAssembler`; (2) proweniencja żyje przy uchwytach w magazynie wyników; (3) sesje w pamięci procesu za `SessionRepository`; (4) `data_range` czytany procedurą `api.SalesOrder_DataRange`; (5) konto `agent_reader` to login SQL (instancja w trybie mieszanym), a same uprawnienia `EXECUTE` wystarczają także do walidacji katalogu; (6) tryb `strict` tylko dla narzędzi procedur, z budżetem Anthropic; (7) `avg` i dzielenie rzutowane na `DECIMAL(38,6)`, pełna kolejność wierszy, kompilacja `pivot`, zakaz agregacji obciętych wyników; (8) narzędzia synchroniczne, limity czasu w sterownikach, błędy mapowane na `ModelRetry` albo `ToolFailed`; (9) stały początek rozmowy i data bieżąca w wiadomości użytkownika; (10) `find_procedures` poza v1, kandydatem na później jest `defer_loading`.
 > **v3.5:** decyzja właściciela projektu: **wariant B** z sekcji 7.7 zastępuje wariant A. Agent wybiera i wywołuje procedury, każdy wynik trafia do DuckDB pod uchwytem, a obliczenia agent zapisuje jako jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji (narzędzie `query`, w tym `JOIN` kilku uchwytów i filtry po kolumnach wyniku). Zamknięta specyfikacja `transform` (kroki, fakty, walidator semantyczny, `SqlQueryBuilder`) znika. Backend odpowiada za bezpieczeństwo i determinizm: parser DuckDB z listami dozwolonych elementów, wykonanie w zablokowanym połączeniu, pełne `ORDER BY`, kontrola typów wyniku (kwoty nie wychodzą jako `DOUBLE`), proweniencja z pełnym SQL i wieloma źródłami. Zasada „model nie pisze SQL” dotyczy odtąd tylko SQL Server. Python i DataFrame'y (wariant C) odłożone. Zmienione sekcje: 1–4, 5.2, 6, 7 (w całości), 8–10, 11.2, 11.3, 12–14.
+> **v3.5 (uzupełnienie z implementacji silnika zapytań, 2026-10-13):** `POSITIONAL JOIN` i `ASOF JOIN` poza listą (sekcja 7.2); ramka `ROWS` w agregatach okna odpada razem z funkcjami okna zależnymi od kolejności (reguła 5); `SAMPLE` odpada na każdym poziomie (reguła 6); reguła 9 działa na kolumnach z `DESCRIBE`; literały `INTERVAL` rozpoznawane w drzewie; `preserve_insertion_order` ustawione jawnie w połączeniu sesji; reguła 7 wymaga `CAST(… AS DECIMAL)` wokół dzielenia i `avg` w kolumnach wyniku na każdym poziomie zapytania (decyzja właściciela projektu).
 
 ## 1. Cel i zakres
 
@@ -300,7 +301,7 @@ Wynik `query` zwracany modelowi:
   "row_count": 12,
   "truncated": false,
   "sources": ["r1", "r2"],
-  "sql": "WITH … SELECT … ORDER BY m.\"month\", 1 NULLS LAST, 2 NULLS LAST, 3 NULLS LAST",
+  "sql": "WITH … SELECT … ORDER BY m.\"month\", 1 ASC NULLS LAST, 2 ASC NULLS LAST, 3 ASC NULLS LAST",
   "columns": [{"name": "month", "type": "date", "role": "time"}, {"name": "net_sales", "type": "decimal(38,4)", "role": "measure"}, "..."],
   "stats": {"…": "…"},
   "preview": ["… cały wynik, bo ma do 50 wierszy …"]
@@ -337,7 +338,7 @@ Podział odpowiedzialności:
 
 Wejściem jest jeden tekst `sql` (definicja w sekcji 6.2). Zapytanie czyta tabele nazwane jak uchwyty sesji (`r1`, `r2`…) z kolumnami nazwanymi jak w schemacie uchwytu. Dozwolone konstrukcje:
 
-- `WITH` (CTE, bez `RECURSIVE`), `JOIN` wszystkich rodzajów, `WHERE`, `GROUP BY` (także `GROUP BY ALL`), `HAVING`, `QUALIFY`, `CASE`, `UNION`/`INTERSECT`/`EXCEPT`, podzapytania skalarne i w `IN`/`EXISTS`, `SELECT DISTINCT`;
+- `WITH` (CTE, bez `RECURSIVE`), `JOIN` (`INNER`, `LEFT`, `RIGHT`, `FULL`, `CROSS`, `NATURAL`, `SEMI`, `ANTI`; bez `POSITIONAL JOIN`, który łączy wiersze według ich kolejności, i `ASOF JOIN`, który z kilku równych dopasowań wybiera dowolne), `WHERE`, `GROUP BY` (także `GROUP BY ALL`), `HAVING`, `QUALIFY`, `CASE`, `UNION`/`INTERSECT`/`EXCEPT`, podzapytania skalarne i w `IN`/`EXISTS`, `SELECT DISTINCT`;
 - `PIVOT` w składni `FROM … PIVOT (<agregat> FOR <kolumna> IN (<wartości>))` z jawną listą wartości. Uproszczona instrukcja `PIVOT <tabela> ON …` odpada: nie jest instrukcją `SELECT`, a bez listy wartości DuckDB uruchamia pod spodem dodatkowe zapytania. Wartości kolumny obrotu model bierze ze statystyk uchwytu albo z wcześniejszego `query`;
 - `ORDER BY` i `LIMIT` tylko na najwyższym poziomie zapytania (top N);
 - funkcje z listy dozwolonych (sekcja 7.3), w tym `range` i `generate_series` jako jedyne funkcje tabelowe, np. do siatki miesięcy.
@@ -375,12 +376,14 @@ Wybór: **parser DuckDB**. Rozstrzyga zgodność z wykonaniem. Słabość format
 5. **Funkcje skalarne, agregujące i okna z listy dozwolonych.** Lista obejmuje m.in. operatory arytmetyczne i porównania, `coalesce`, `nullif`, `greatest`, `least`, `abs`, `round`, `floor`, `ceil`, funkcje dat (`date_trunc`, `date_part`, `extract`, `year`, `quarter`, `month`, `day`, `strftime`, `make_date`, dodawanie `INTERVAL`), funkcje tekstu (`lower`, `upper`, `trim`, `concat`, `length`, `like`, `ilike`, `starts_with`, `contains`), agregaty `sum`, `count`, `count(DISTINCT …)`, `min`, `max`, `avg`, `bool_and`, `bool_or` oraz funkcje okna `rank`, `dense_rank` i agregaty `OVER (…)`. Lista żyje w kodzie w jednym miejscu, a każde rozszerzenie jest świadome i ma test. Poza listą zostają w szczególności:
    - funkcje niedeterministyczne: `random`, `uuid`, `gen_random_uuid`, `now`, `current_date`, `current_timestamp`, `nextval`, `setseed`;
    - agregaty zależne od kolejności wierszy: `any_value`, `arbitrary`, `first`, `last`, `list`, `string_agg`, `array_agg`;
-   - funkcje okna zależne od kolejności przy remisach: `row_number`, `ntile`, `lag`, `lead`, `first_value`, `last_value`, `nth_value`. Top N w grupach daje `rank`/`dense_rank` z `QUALIFY`, a porównanie z poprzednim okresem `JOIN` po przesuniętej dacie. Funkcje z remisami wrócą, gdy backend nauczy się sprawdzać, że `ORDER BY` okna jest pełne;
+   - funkcje okna zależne od kolejności przy remisach: `row_number`, `ntile`, `lag`, `lead`, `first_value`, `last_value`, `nth_value`. Top N w grupach daje `rank`/`dense_rank` z `QUALIFY`, a porównanie z poprzednim okresem `JOIN` po przesuniętej dacie. Z tego samego powodu odpada ramka `ROWS` w agregatach okna (np. `ROWS BETWEEN 1 PRECEDING AND CURRENT ROW`): przy remisach w `ORDER BY` okna obejmuje inne wiersze, a domyślna ramka `RANGE` traktuje remisy razem. Funkcje z remisami wrócą, gdy backend nauczy się sprawdzać, że `ORDER BY` okna jest pełne;
    - funkcje odczytujące środowisko i ustawienia: `current_setting`, `getenv`, `version` i podobne.
-6. **Brak ukrytych źródeł niedeterminizmu.** `LIMIT`, `OFFSET`, `SAMPLE`/`TABLESAMPLE` i `DISTINCT ON` są dozwolone tylko na najwyższym poziomie (`DISTINCT ON` wcale), bo w CTE i podzapytaniach wybierałyby dowolne wiersze przy remisach. `WITH RECURSIVE` odpada.
-7. **Brak arytmetyki zmiennoprzecinkowej, której wynik zależy od kolejności.** Odpada `CAST`/`TRY_CAST` na `FLOAT`, `REAL`, `DOUBLE` i literały w notacji wykładniczej (`1e-3`, które DuckDB czyta jako `DOUBLE`). W argumentach funkcji agregujących i okien nie wolno dzielić (`/`), używać `avg` ani podzapytań. Suma wartości `DOUBLE` zależy od kolejności dodawania, a przy `threads = 2` ta kolejność się zmienia. Dzielenie i `avg` są dozwolone poza agregatem, czyli na dokładnych sumach, a typ wyniku pilnuje rzutowania na `DECIMAL` (sekcja 7.4).
+
+   Reguła ocenia nazwy funkcji takie, jakie daje parser: `extract(…)` to `date_part`, `LIKE`/`ILIKE` to `~~`/`~~*`, `count(*)` to `count_star`. Literał `INTERVAL 1 MONTH` parser zapisuje jako `to_months(CAST(trunc(CAST(1 AS DOUBLE)) AS INTEGER))`, więc walidator rozpoznaje ten wzorzec jako literał przedziału i nie traktuje go jako rzutowania na `DOUBLE` (reguła 7). Schemat przy nazwie funkcji niczego nie zmienia (parser sam dopisuje `main` np. przy `extract`), więc decyduje sama nazwa. `date_part` (także z `extract`) przechodzi tylko z częścią całkowitą (`year`, `month`, `day` itd.), bo części takie jak `epoch` i `julian` dają `DOUBLE`. Nazwy tabel, CTE i funkcji walidator porównuje tak jak DuckDB: bez względu na wielkość liter tylko w zakresie ASCII. Pełne składanie wielkości liter z Pythona (`casefold`) zamienia np. długie „ſ” na „s”, więc CTE `"ſqlite_master"` udawałoby przesłonięcie widoku systemowego `sqlite_master`, który DuckDB i tak by odczytał.
+6. **Brak ukrytych źródeł niedeterminizmu.** `LIMIT` i `OFFSET` są dozwolone tylko na najwyższym poziomie, bo w CTE i podzapytaniach wybierałyby dowolne wiersze przy remisach. `SAMPLE`/`TABLESAMPLE` (losowe wiersze) i `DISTINCT ON` (dowolny wiersz z grupy) odpadają na każdym poziomie, podobnie `WITH RECURSIVE`.
+7. **Brak arytmetyki zmiennoprzecinkowej, której wynik zależy od kolejności.** Odpada `CAST`/`TRY_CAST` na `FLOAT`, `REAL`, `DOUBLE` i literały w notacji wykładniczej (`1e-3`, które DuckDB czyta jako `DOUBLE`). W argumentach funkcji agregujących i okien nie wolno dzielić (`/`), używać `avg` ani podzapytań. Suma wartości `DOUBLE` zależy od kolejności dodawania, a przy `threads = 2` ta kolejność się zmienia. Dzielenie i `avg` (także `avg(…) OVER (…)`) są dozwolone poza agregatem, czyli na dokładnych sumach, ale w kolumnie wyniku na każdym poziomie zapytania (także w CTE i podzapytaniu) muszą stać wewnątrz `CAST(… AS DECIMAL(p,s))` w tym samym wyrażeniu. Inaczej kolumna `DOUBLE` z CTE mogłaby zostać zsumowana poziom wyżej, a końcowy `CAST` ukryłby to przed kontrolą typów wyniku (sekcja 7.4). Warunki (`WHERE`, `HAVING`, `QUALIFY`, `JOIN … ON`, `FILTER`) i klucze sortowania oraz partycji nie dają wartości kolumny, więc rzutowania nie wymagają.
 8. **Brak parametrów zapytania** (`?`, `$1`, `$name`).
-9. **Nazwy kolumn wyniku** pasują do `^[A-Za-z][A-Za-z0-9_]*$` i są unikalne bez względu na wielkość liter (tak DuckDB rozwiązuje identyfikatory). Wymusza to jawny alias każdej wyliczanej kolumny, bo nazwy nadawane automatycznie przez DuckDB (np. `sum("SubTotal")`) zawierają nawiasy. Kolumny obrotu dostają aliasy w liście `IN ('Bikes' AS bikes, …)`.
+9. **Nazwy kolumn wyniku** (sprawdzane na kolumnach z `DESCRIBE`, bo nazwy kolumn z `*` i kolumn bez aliasu powstają dopiero przy wiązaniu) pasują do `^[A-Za-z][A-Za-z0-9_]*$` i są unikalne bez względu na wielkość liter (tak DuckDB rozwiązuje identyfikatory). Wymusza to jawny alias każdej wyliczanej kolumny, bo nazwy nadawane automatycznie przez DuckDB (np. `sum("SubTotal")`) zawierają nawiasy. Kolumny obrotu dostają aliasy w liście `IN ('Bikes' AS bikes, …)`.
 10. **Obcięte źródła a agregacja.** Gdy którykolwiek uchwyt źródłowy ma w grafie pochodzenia wynik procedury obcięty przez `max_rows`, zapytanie z agregacją (funkcja agregująca, `GROUP BY`, `PIVOT`, agregat w oknie) jest odrzucane z prośbą o zawężenie parametrów procedury. Zapytanie bez agregacji przechodzi, a jego wynik dziedziczy flagę `truncated`, która trafia do odpowiedzi.
 
 **Dlaczego obcięte źródło w agregacji to nadal błąd, a nie ostrzeżenie.** Suma, liczba czy średnia z obciętych danych wygląda na pełną: w tabeli odpowiedzi nie widać, których wierszy brakuje, a wszystkie pozycje zamówień z całego zakresu (121 317) przekraczają domyślne `max_rows` 100 000. Ostrzeżenie zależałoby od tego, czy model przekaże je użytkownikowi, a komentarz w v1 nie jest kontrolowany (sekcja 7.5). Wariant B dokłada nowy przypadek: obcięty zbiór użyty jako filtr (`JOIN` sprzedaży z obciętą listą klientów) po cichu zaniża sumy, więc reguła obejmuje każde źródło, a nie tylko tabelę, po której się sumuje. Wiersze bez agregacji niosą flagę `truncated` jawnie, więc tam ostrzeżenie wystarcza. Agent ma dwie drogi: zawęzić parametry procedury (np. krótszy okres, kategoria) albo zwrócić wiersze z flagą i wyjaśnieniem w `assumptions`.
@@ -416,8 +419,8 @@ Polars jest bardzo szybki i popularny, ale w wariancie B obliczenia są zapisane
 
 ```text
 DECIMAL(p,s)                        -> decimal(p,s)
-TINYINT | SMALLINT | INTEGER | BIGINT -> int
-HUGEINT | UBIGINT                   -> int, cast to BIGINT by the backend (overflow is an error)
+BIGINT                              -> int
+other integer types (TINYINT, INTEGER, HUGEINT, UBIGINT, ...) -> int, cast to BIGINT by the backend (overflow is an error)
 VARCHAR                             -> string
 DATE                                -> date
 TIMESTAMP                           -> datetime
@@ -426,7 +429,7 @@ FLOAT | REAL | DOUBLE               -> rejected: "column net_avg is DOUBLE; CAST
 anything else (LIST, STRUCT, MAP, INTERVAL, TIME, BLOB, UUID, ...) -> rejected
 ```
 
-`HUGEINT` pojawia się przy `sum` po kolumnie całkowitej (np. `sum("OrderQty")`), więc backend rzutuje go na `BIGINT`, zamiast obciążać tym model. Kolumna zmiennoprzecinkowa w wyniku to błąd, a nie ciche rzutowanie, bo backend nie wie, jakiej skali chce model i czy wartość nie powstała z sumy liczb `DOUBLE` (reguła 7). Rola kolumny wyniku: kolumna o tej samej nazwie i typie co kolumna źródłowa dziedziczy jej rolę, pozostałe dostają rolę z typu (`date`/`datetime` → `time`, `decimal`/`int` → `measure`, reszta → `dimension`). Rola służy tylko do statystyk w opisie uchwytu.
+`HUGEINT` pojawia się przy `sum` po kolumnie całkowitej (np. `sum("OrderQty")`), a `INTEGER` przy literałach (`1 AS one`), więc backend rzutuje każdą kolumnę całkowitą inną niż `BIGINT` na `BIGINT` w zewnętrznym `SELECT * REPLACE (…)`, zamiast obciążać tym model. Zewnętrzny `SELECT` nie zmienia kolejności wierszy podzapytania. Kolumna zmiennoprzecinkowa w wyniku to błąd, a nie ciche rzutowanie, bo backend nie wie, jakiej skali chce model i czy wartość nie powstała z sumy liczb `DOUBLE` (reguła 7). Rola kolumny wyniku: kolumna o tej samej nazwie i typie co kolumna źródłowa dziedziczy jej rolę, pozostałe dostają rolę z typu (`date`/`datetime` → `time`, `decimal`/`int` → `measure`, reszta → `dimension`). Rola służy tylko do statystyk w opisie uchwytu.
 
 **Pełna kolejność wierszy.** Backend dokleja do `ORDER BY` najwyższego poziomu, po kluczach podanych przez model, wszystkie kolumny wyniku według pozycji (`1, 2, …, n`, rosnąco, `NULLS LAST`). Dzięki temu remisy w kluczach modelu (np. trzech klientów „Mohamed Pal” z równym `net_sales`) zawsze rozstrzyga się tak samo, a `LIMIT` modelu działa po tym porządku. Przy `threads = 2` bez tego top N mógłby różnić się między uruchomieniami. Pozycje działają też dla `SELECT DISTINCT` i `UNION`, gdzie `ORDER BY` może odwoływać się tylko do kolumn wyniku.
 
@@ -450,7 +453,7 @@ FROM months m LEFT JOIN sales s USING (month)
 ORDER BY m.month
 ```
 
-SQL wykonany przez backend różni się tylko końcem: `ORDER BY m.month, 1 NULLS LAST, 2 NULLS LAST, 3 NULLS LAST`. Wynik: `month DATE`, `net_sales DECIMAL(38,4)`, `order_count BIGINT` → `int` (sumy dokładne, puste miesiące jako 0).
+SQL wykonany przez backend to tekst odtworzony z drzewa (`json_deserialize_sql`), więc różni się od tekstu modelu zapisem (cudzysłowy tylko tam, gdzie potrzebne, `DATE '…'` jako `CAST('…' AS DATE)`, `INTERVAL 1 MONTH` jako `to_months(…)`), a znaczeniem tylko końcem: `ORDER BY m."month", 1 ASC NULLS LAST, 2 ASC NULLS LAST, 3 ASC NULLS LAST`. Literały liczbowe przechodzą przez drzewo bez zmian. Wynik: `month DATE`, `net_sales DECIMAL(38,4)`, `order_count BIGINT` → `int` (sumy dokładne, puste miesiące jako 0).
 
 **Warunki deterministyczności:**
 
@@ -473,6 +476,7 @@ Nie jest to osobny proces ani kontener, a w wariancie B wykonuje SQL napisany pr
    SET autoload_known_extensions = false;
    SET memory_limit = '512MB';
    SET threads = 2;
+   SET preserve_insertion_order = true;    -- the full ORDER BY survives CREATE TABLE AS and reads
    SET lock_configuration = true;           -- settings can no longer change on this connection
    ```
 

@@ -52,6 +52,7 @@ def test_settings_defaults_follow_architecture_limits(monkeypatch: pytest.Monkey
     assert settings.preview_rows == 10
     assert settings.full_preview_max_rows == 50
     assert settings.max_response_rows == 10_000
+    assert settings.max_query_rows == 100_000
 
 
 @pytest.mark.parametrize(

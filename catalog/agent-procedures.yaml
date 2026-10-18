@@ -127,7 +127,7 @@
       call: {date_from: 2025-01-01, date_to: 2025-04-01, customer_id: null}
     - prompt: "raport sprzedaży po miesiącach za 2024"
       call: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null}
-      then: "transform: month from OrderDate, sum of SubTotal"
+      then: "query: sum of SubTotal per month of OrderDate, months without orders as 0"
 
 - procedure: api.SalesOrderLine_List
   tool: sales_order_line_list
@@ -181,7 +181,7 @@
   examples:
     - prompt: "sprzedaż po kategoriach produktów w 2024"
       call: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null, product_category_id: null}
-      then: "transform: aggregate by Category, sum of LineTotal"
+      then: "query: sum of LineTotal per Category"
     - prompt: "sprzedaż rowerów po miesiącach w 2024"
       call: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null, product_category_id: 1}
 

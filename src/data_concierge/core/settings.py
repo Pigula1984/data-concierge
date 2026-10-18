@@ -39,3 +39,5 @@ class Settings(BaseSettings):
     preview_rows: PositiveInt = 10
     full_preview_max_rows: PositiveInt = 50
     max_response_rows: PositiveInt = 10_000
+    # A query result above this is dropped and the model asked to aggregate (section 7.4).
+    max_query_rows: PositiveInt = 100_000

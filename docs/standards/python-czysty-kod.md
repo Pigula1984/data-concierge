@@ -55,7 +55,7 @@ class ProcedureService:
 
 ## 6. Błędy i wyjątki
 
-- **Własna hierarchia wyjątków** z klasą bazową (np. `DataConciergeError`) i podklasami według przyczyny: `CatalogError`, `ProcedureError`, `SpecValidationError`.
+- **Własna hierarchia wyjątków** z klasą bazową (np. `DataConciergeError`) i podklasami według przyczyny: `CatalogError`, `ProcedureError`, `QueryError`.
 - **Wyjątki niosą konkretny komunikat**, bo część z nich wraca do modelu jako błąd narzędzia i musi pozwolić mu się poprawić („`sum` requires a numeric column; `CustomerName` is `string`”).
 - Nie łapiemy gołego `except Exception` poza warstwą controllera, która zamienia błędy na status odpowiedzi.
 - Nie połykamy wyjątków. Przy przepakowaniu używamy `raise ... from exc`.

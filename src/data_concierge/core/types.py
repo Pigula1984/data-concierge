@@ -1,13 +1,15 @@
-"""Column types, roles and table schemas shared by the catalog, results and transforms."""
+"""Column types, roles and table schemas shared by the catalog, results and queries."""
 
 import re
+from collections import Counter
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Self
 
 import pyarrow as pa
 from pydantic import BaseModel, model_serializer, model_validator
 
-from data_concierge.core.errors import CatalogError, SpecValidationError
+from data_concierge.core.errors import CatalogError, QueryValidationError
 
 MAX_DECIMAL_PRECISION = 38
 
@@ -172,6 +174,44 @@ def parse_sql_server_type(type_name: str) -> ColumnType:
     return column_type
 
 
+DUCKDB_INTEGER_TYPES = frozenset(
+    {
+        "TINYINT",
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+        "HUGEINT",
+        "UTINYINT",
+        "USMALLINT",
+        "UINTEGER",
+        "UBIGINT",
+        "UHUGEINT",
+    }
+)
+
+_DUCKDB_FIXED_TYPES: dict[str, ColumnType] = {
+    "VARCHAR": ColumnType(kind=ColumnKind.STRING),
+    "DATE": ColumnType(kind=ColumnKind.DATE),
+    "TIMESTAMP": ColumnType(kind=ColumnKind.DATETIME),
+    "BOOLEAN": ColumnType(kind=ColumnKind.BOOL),
+} | {name: ColumnType(kind=ColumnKind.INT) for name in DUCKDB_INTEGER_TYPES}
+_DUCKDB_DECIMAL_PATTERN = re.compile(r"DECIMAL\((\d+),(\d+)\)")
+
+
+def parse_duckdb_type(type_name: str) -> ColumnType:
+    """Maps a DuckDB result type such as `DECIMAL(38,4)` or `HUGEINT` to its catalog equivalent.
+
+    Integer types other than BIGINT map to `int`; the query normalizer casts them to BIGINT.
+    """
+    column_type = _DUCKDB_FIXED_TYPES.get(type_name)
+    if column_type is not None:
+        return column_type
+    decimal = _DUCKDB_DECIMAL_PATTERN.fullmatch(type_name)
+    if decimal is not None:
+        return ColumnType.decimal(int(decimal.group(1)), int(decimal.group(2)))
+    raise QueryValidationError(f"DuckDB type '{type_name}' has no catalog equivalent")
+
+
 class Column(BaseModel, frozen=True):
     name: str
     type: ColumnType
@@ -188,11 +228,7 @@ class TableSchema(BaseModel, frozen=True):
 
     @model_validator(mode="after")
     def _check_unique_names(self) -> Self:
-        clashes = [
-            name
-            for name in self.names
-            if sum(other.casefold() == name.casefold() for other in self.names) > 1
-        ]
+        clashes = case_insensitive_duplicates(self.names)
         if clashes:
             raise ValueError(f"duplicate column names (case-insensitive): {', '.join(clashes)}")
         return self
@@ -206,33 +242,11 @@ class TableSchema(BaseModel, frozen=True):
         """Names and Arrow types an Arrow table must have to hold data of this schema."""
         return [(column.name, column.type.arrow_type) for column in self.columns]
 
-    def require(self, name: str, role: ColumnRole | None = None) -> Column:
-        """Returns the named column, checking its role when one is given."""
-        column = next((column for column in self.columns if column.name == name), None)
-        if column is None:
-            raise SpecValidationError(
-                f"column '{name}' does not exist; available columns: {', '.join(self.names)}"
-            )
-        if role is not None and column.role is not role:
-            raise SpecValidationError(
-                f"column '{name}' has role '{column.role}', expected '{role}'; "
-                f"available '{role}' columns: {', '.join(self._names_with_role(role)) or 'none'}"
-            )
-        return column
 
-    def with_column(self, name: str, column_type: ColumnType, role: ColumnRole) -> Self:
-        """Returns a new schema with the column appended."""
-        existing = next((n for n in self.names if n.casefold() == name.casefold()), None)
-        if existing is not None:
-            raise SpecValidationError(
-                f"column '{name}' clashes with existing column '{existing}' "
-                "(column names are case-insensitive)"
-            )
-        column = Column(name=name, type=column_type, role=role)
-        return self.model_copy(update={"columns": (*self.columns, column)})
-
-    def _names_with_role(self, role: ColumnRole) -> list[str]:
-        return [column.name for column in self.columns if column.role is role]
+def case_insensitive_duplicates(names: Sequence[str]) -> list[str]:
+    """Names that clash with another name when case is ignored, in their original order."""
+    counts = Counter(name.casefold() for name in names)
+    return [name for name in names if counts[name.casefold()] > 1]
 
 
 def arrow_fields(schema: pa.Schema) -> list[tuple[str, pa.DataType]]:

@@ -176,7 +176,11 @@ Inne miejsca: `CachingCatalogRepository` (katalog YAML czytany raz na proces).
 **Własne dekoratory** dla powtarzalnej obsługi przekrojowej. Przykład: każde narzędzie agenta musi zamienić błąd domenowy na wyjątek Pydantic AI. Błąd wejścia staje się `ModelRetry` (model poprawia wywołanie), a błąd wykonania `ToolFailed` (nie zużywa budżetu ponowień, model nie powtarza tego samego wywołania). Zamiast `try/except` w każdym narzędziu (powtórzenie) jest jeden dekorator. Narzędzia są synchroniczne, bo Pydantic AI uruchamia je w wątkach roboczych (sekcja 11.2 architektury):
 
 ```python
-INPUT_ERRORS = (ParameterValidationError, UnknownHandleError, QueryError)  # QueryError: SQL the model can fix
+INPUT_ERRORS = (
+    ParameterValidationError,
+    UnknownHandleError,
+    QueryError,
+)  # QueryError: SQL the model can fix
 
 
 def retry_on_domain_error[**P, R](tool: Callable[P, R]) -> Callable[P, R]:
