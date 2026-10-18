@@ -12,6 +12,29 @@ Kod, nazwy, komentarze, docstringi, komunikaty wyjątków i logów piszemy po an
 - **Kompozycja zamiast dziedziczenia.** Dziedziczenie tylko dla prawdziwej relacji „jest” i płytkich hierarchii (najwyżej jeden poziom poniżej klasy abstrakcyjnej).
 - **Niemutowalne obiekty wartości.** DTO, konfiguracja, kontekst żądania i wpisy proweniencji to modele Pydantic z `frozen=True` (lub `@dataclass(frozen=True, slots=True)` dla prostych struktur wewnętrznych). Zmiana = nowy obiekt.
 - **Brak stanu globalnego.** Żadnych singletonów modułowych z połączeniami. Obiekty składamy w jednym miejscu (composition root, patrz [architektura-warstwowa.md](architektura-warstwowa.md)).
+- **Zachowanie należy do klasy, która jest właścicielem pojęcia.** Zanim napiszesz funkcję na poziomie modułu, ustal, czyje to pojęcie. Logika, którą woła jedna klasa, to jej metoda (prywatna `_name`, gdy jest wewnętrzna). Fabryka obiektu to `classmethod` tej klasy (`SqlServerClient.from_settings`). Przekształcenie lub odczyt danych modelu to metoda albo `classmethod` tego modelu (`ColumnType.from_duckdb`). Stałe (tabele mapowań, wzorce `re`) zostają na poziomie modułu.
+- **Wyjątki, w których funkcja modułowa jest w porządku:**
+  - gdy żadna istniejąca klasa nie jest właścicielem pojęcia, a korzysta z niego kilka klas z różnych warstw. Funkcja dostaje wtedy komentarz `# module-level: <powód>` bezpośrednio nad `def` (albo nad pierwszym dekoratorem). Komentarz może mieć kilka linii. Nie tworzymy klasy z samymi `staticmethod` tylko po to, żeby obejść regułę.
+  - gdy kształt funkcji narzuca biblioteka: narzędzia agenta (`@agent.tool`), dekoratory (`retry_on_domain_error`), handlery FastAPI, punkt wejścia CLI. Też z komentarzem `# module-level:`.
+  - kod w `tests/`: funkcje testów, fixtures i pomocniki testów.
+
+```python
+# Before: loose functions next to the class that uses them
+def connection_string(settings: Settings) -> SecretStr: ...
+def exec_statement(procedure: str, param_names: Sequence[str]) -> str: ...
+
+
+client = SqlServerClient(connection_string(settings), settings.procedure_timeout_seconds)
+rows = client.fetch(exec_statement(entry.procedure, names), values)
+
+
+# After: the client owns its construction and the EXEC text
+class SqlServerClient:
+    @classmethod
+    def from_settings(cls, settings: Settings) -> SqlServerClient: ...
+
+    def fetch_procedure(self, procedure: str, params: Mapping[str, object]) -> SqlRows: ...
+```
 
 ```python
 class ProcedureService:
@@ -30,7 +53,7 @@ class ProcedureService:
 
 ## 3. Czysty kod
 
-- **Nazwy mówią, co rzecz robi.** Funkcje to czasowniki (`load_catalog`, `parse_query`), klasy to rzeczowniki (`QueryPolicy`). Bez skrótów poza powszechnymi (`id`, `sql`, `db`). Wartości logiczne: `is_`, `has_`, `can_`.
+- **Nazwy mówią, co rzecz robi.** Metody to czasowniki (`load`, `validate`, `fetch_procedure`), fabryki to `from_…` albo `for_…` (`ColumnType.from_duckdb`, `ProcedureArguments.for_entry`), klasy to rzeczowniki (`QueryPolicy`). Bez skrótów poza powszechnymi (`id`, `sql`, `db`). Wartości logiczne: `is_`, `has_`, `can_`.
 - **Małe funkcje na jednym poziomie abstrakcji.** Funkcja robi jedną rzecz. Jeśli ma sekcje oddzielone komentarzami, to są kandydaci na osobne metody.
 - **Mało argumentów.** Więcej niż 3–4 argumenty to sygnał, że brakuje obiektu parametrów (modelu Pydantic).
 - **Wczesny powrót zamiast zagnieżdżeń.** Warunki brzegowe obsługujemy na początku funkcji.
@@ -40,8 +63,8 @@ class ProcedureService:
 
 ## 4. DRY, ale rozsądnie
 
-- **Jedno źródło prawdy dla wiedzy.** Opis procedury żyje w YAML katalogu; definicje narzędzi, schematy i skrót katalogu w prompcie są z niego **generowane**, a nie przepisywane. Mapowanie typów wyniku `query` żyje w jednym miejscu (`parse_duckdb_type`): z niego korzysta kontrola typów i z niego powstaje fragment instrukcji dla modelu.
-- **Wspólna logika do jednej klasy lub funkcji.** Mapowanie typów (SQL Server → Arrow → DuckDB → JSON) jest w jednym miejscu, a nie w każdym module.
+- **Jedno źródło prawdy dla wiedzy.** Opis procedury żyje w YAML katalogu; definicje narzędzi, schematy i skrót katalogu w prompcie są z niego **generowane**, a nie przepisywane. Mapowanie typów wyniku `query` żyje w jednym miejscu (`ColumnType.from_duckdb`): z niego korzysta kontrola typów i z niego powstaje fragment instrukcji dla modelu.
+- **Wspólna logika do jednej klasy.** Mapowanie typów (SQL Server → Arrow → DuckDB → JSON) jest w jednym miejscu, w `ColumnType`, a nie w każdym module.
 - **Reguła trzech.** Dwa podobne fragmenty mogą zostać; przy trzecim wydzielamy abstrakcję. Lepsza drobna duplikacja niż zła abstrakcja, która wiąże niezależne rzeczy.
 - DRY dotyczy wiedzy i logiki, nie przypadkowo podobnego kodu. Dwa kawałki, które dziś wyglądają tak samo, ale zmieniają się z różnych powodów, zostają osobno.
 
