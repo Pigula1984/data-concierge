@@ -8,7 +8,7 @@ Backend asystenta AI: przyjmuje prompt użytkownika, wybiera procedurę składow
 - **Dokumenty po polsku:** analizy, plany, brainstormy, wnioski (`docs/solutions/`), standardy, opisy architektury. Dotyczy to także dokumentów tworzonych przez skille Compound Engineering, nawet jeśli skill domyślnie pisze po angielsku.
 - **Po angielsku:** kod, nazwy (moduły, klasy, funkcje, zmienne), komentarze, docstringi, komunikaty logów i wyjątków, nazwy testów, commity, opisy PR.
 - Fragmenty kodu wewnątrz polskich dokumentów też piszemy po angielsku (identyfikatory i komentarze).
-- Nazwy kolumn w danych też są po angielsku: aliasy i fakty tworzone w specyfikacji `transform` (np. `month`, `net_sales`, `order_count`), w przykładach i w instrukcjach dla modelu. Po polsku zostają tylko teksty dla użytkownika (`message`, `title`, `assumptions`, pytania doprecyzowujące).
+- Nazwy kolumn w danych też są po angielsku: aliasy kolumn w zapytaniach `query`, które agent pisze nad uchwytami wyników (np. `month`, `net_sales`, `order_count`), w przykładach i w instrukcjach dla modelu. Po polsku zostają tylko teksty dla użytkownika (`message`, `title`, `assumptions`, pytania doprecyzowujące).
 
 ## Sposób pracy: Compound Engineering
 
@@ -36,7 +36,7 @@ Obowiązują zasady z [`docs/standards/`](docs/standards/README.md). Najważniej
 
 ## Architektura: controller → service → repository
 
-Usługa jest modułowa (moduły według funkcji: `core`, `catalog`, `procedures`, `results`, `transform`, `agent`, `api`), a wewnątrz modułu obowiązuje podział na warstwy:
+Usługa jest modułowa (moduły według funkcji: `core`, `catalog`, `procedures`, `results`, `query`, `agent`, `api`), a wewnątrz modułu obowiązuje podział na warstwy:
 
 - **controller**: wejścia do systemu, czyli endpoint/CLI `ask()` **oraz narzędzia agenta Pydantic AI**. Cienkie: walidacja wejścia, mapowanie DTO, delegacja do serwisu, zamiana błędów domenowych na odpowiedź (`ModelRetry` w narzędziach, status `error` w endpoincie).
 - **service**: logika biznesowa i orkiestracja.

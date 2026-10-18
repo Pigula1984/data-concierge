@@ -1,0 +1,126 @@
+from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
+from pathlib import Path
+
+import pyarrow as pa
+import pytest
+
+from data_concierge.core.errors import (
+    QueryExecutionError,
+    QueryTimeoutError,
+    UnknownHandleError,
+)
+from data_concierge.core.types import Column, ColumnRole, ColumnType, TableSchema
+from data_concierge.results.models import ProcedureLineage, ResultTable
+from data_concierge.results.repository import DuckDBResultStore
+from data_concierge.results.service import ResultService
+
+AMOUNTS = [Decimal("1234567.8900"), Decimal("0.0000"), Decimal("0.0001"), Decimal("-5.1200")]
+
+
+def _amount_table() -> ResultTable:
+    schema = TableSchema(
+        columns=(Column(name="Amount", type=ColumnType.decimal(19, 4), role=ColumnRole.MEASURE),)
+    )
+    data = pa.table({"Amount": pa.array(AMOUNTS, type=pa.decimal128(19, 4))})
+    lineage = ProcedureLineage(procedure="api.Test", params={}, truncated=False)
+    return ResultTable(data=data, schema=schema, lineage=lineage)
+
+
+def test_decimal_keeps_type_and_scale_from_arrow_through_duckdb_to_text() -> None:
+    store = DuckDBResultStore()
+    handle = store.put(_amount_table())
+
+    duckdb_type = store.query(
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_name = ? AND column_name = 'Amount'",
+        [handle],
+    ).column(0)[0]
+    round_trip = store.fetch(handle)
+    exported = ResultService(store).export(handle, max_rows=10)
+
+    assert duckdb_type.as_py() == "DECIMAL(19,4)"
+    assert round_trip.schema.field("Amount").type == pa.decimal128(19, 4)
+    assert round_trip.column("Amount").to_pylist() == AMOUNTS
+    assert [row[0] for row in exported.rows] == ["1234567.8900", "0.0000", "0.0001", "-5.1200"]
+
+
+def _int_table(count: int) -> ResultTable:
+    schema = TableSchema(
+        columns=(Column(name="Value", type=ColumnType.parse("int"), role=ColumnRole.MEASURE),)
+    )
+    data = pa.table({"Value": pa.array(range(count), type=pa.int64())})
+    lineage = ProcedureLineage(procedure="api.Test", params={}, truncated=False)
+    return ResultTable(data=data, schema=schema, lineage=lineage)
+
+
+def test_handles_are_numbered_per_session() -> None:
+    first_session = DuckDBResultStore()
+    handles = [first_session.put(_int_table(1)) for _ in range(3)]
+
+    assert handles == ["r1", "r2", "r3"]
+    assert DuckDBResultStore().put(_int_table(1)) == "r1"
+
+
+def test_unknown_handle_lists_existing_handles() -> None:
+    store = DuckDBResultStore()
+    store.put(_int_table(1))
+    store.put(_int_table(1))
+
+    with pytest.raises(UnknownHandleError, match="'r9'; available handles: r1, r2"):
+        store.describe("r9")
+
+
+FILE_ACCESS_DISABLED = "file system operations are disabled by configuration"
+CONFIGURATION_LOCKED = "the configuration has been locked"
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected"),
+    [
+        ("SELECT * FROM read_csv('{existing}')", FILE_ACCESS_DISABLED),
+        ("COPY (SELECT 1) TO '{new_file}'", FILE_ACCESS_DISABLED),
+        ("INSTALL httpfs", FILE_ACCESS_DISABLED),
+        ("SET enable_external_access = true", CONFIGURATION_LOCKED),
+        ("SET memory_limit = '64GB'", CONFIGURATION_LOCKED),
+        ("SET threads = 64", CONFIGURATION_LOCKED),
+    ],
+)
+def test_locked_connection_rejects_file_network_and_config_access(
+    tmp_path: Path, statement: str, expected: str
+) -> None:
+    existing = tmp_path / "data.csv"
+    existing.write_text("a\n1\n", encoding="utf-8")
+    sql = statement.format(existing=existing, new_file=tmp_path / "leak.csv")
+
+    with pytest.raises(QueryExecutionError, match=expected):
+        DuckDBResultStore().query(sql)
+
+    assert not (tmp_path / "leak.csv").exists()
+
+
+def test_query_over_time_limit_is_stopped() -> None:
+    store = DuckDBResultStore(query_timeout_seconds=0.5)
+
+    with pytest.raises(QueryTimeoutError, match=r"0.5 s"):
+        store.query("SELECT sum(a.range * b.range) FROM range(100000) a, range(100000) b")
+
+
+def test_parallel_puts_from_threads_get_distinct_handles() -> None:
+    store = DuckDBResultStore()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        handles = list(pool.map(lambda count: store.put(_int_table(count)), [5, 7]))
+
+    assert sorted(handles) == ["r1", "r2"]
+    assert sorted(store.describe(handle).row_count for handle in handles) == [5, 7]
+
+
+def test_result_table_rejects_arrow_types_that_differ_from_the_schema() -> None:
+    schema = TableSchema(
+        columns=(Column(name="Value", type=ColumnType.decimal(19, 4), role=ColumnRole.MEASURE),)
+    )
+    lineage = ProcedureLineage(procedure="api.Test", params={}, truncated=False)
+
+    with pytest.raises(ValueError, match="do not match the schema"):
+        ResultTable(data=pa.table({"Value": [1.5]}), schema=schema, lineage=lineage)

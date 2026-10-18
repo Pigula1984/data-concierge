@@ -1,15 +1,17 @@
 import re
 
 import pyarrow as pa
+import pydantic
 import pytest
 
-from data_concierge.core.errors import CatalogError, SpecValidationError
+from data_concierge.core.errors import CatalogError, QueryValidationError
 from data_concierge.core.types import (
     Column,
     ColumnKind,
     ColumnRole,
     ColumnType,
     TableSchema,
+    parse_duckdb_type,
     parse_sql_server_type,
 )
 
@@ -87,51 +89,60 @@ def test_sql_server_type_without_equivalent_is_rejected(sql_type: str) -> None:
         parse_sql_server_type(sql_type)
 
 
-def _orders_schema() -> TableSchema:
-    return TableSchema(
-        columns=(
-            Column(name="OrderDate", type=ColumnType.parse("date"), role=ColumnRole.TIME),
-            Column(name="Territory", type=ColumnType.parse("string"), role=ColumnRole.DIMENSION),
-            Column(
-                name="SubTotal", type=ColumnType.parse("decimal(19,4)"), role=ColumnRole.MEASURE
-            ),
-            Column(
-                name="TotalDue", type=ColumnType.parse("decimal(19,4)"), role=ColumnRole.MEASURE
-            ),
+def test_table_schema_rejects_duplicate_names_ignoring_case() -> None:
+    column_type = ColumnType.parse("int")
+    with pytest.raises(pydantic.ValidationError, match="SubTotal, subtotal"):
+        TableSchema(
+            columns=(
+                Column(name="SubTotal", type=column_type, role=ColumnRole.MEASURE),
+                Column(name="subtotal", type=column_type, role=ColumnRole.MEASURE),
+            )
         )
+
+
+def test_column_type_reads_and_writes_its_text_form() -> None:
+    column = Column.model_validate({"name": "SubTotal", "type": "decimal(19,4)", "role": "measure"})
+
+    assert column.type == ColumnType.decimal(19, 4)
+    assert column.model_dump(mode="json")["type"] == "decimal(19,4)"
+    assert Column.model_validate(column.model_dump()) == column
+
+
+def test_column_type_text_error_names_the_type() -> None:
+    with pytest.raises(pydantic.ValidationError, match="unknown column type 'money'"):
+        Column.model_validate({"name": "Amount", "type": "money", "role": "measure"})
+
+
+def test_parse_reports_decimal_bounds_without_pydantic_details() -> None:
+    with pytest.raises(CatalogError) as error:
+        ColumnType.parse("decimal(4,6)")
+
+    assert str(error.value) == (
+        "invalid type 'decimal(4,6)': needs 1 <= precision <= 38 and 0 <= scale <= precision"
     )
 
 
-def test_require_returns_column_with_matching_role() -> None:
-    column = _orders_schema().require("SubTotal", role=ColumnRole.MEASURE)
-
-    assert column.name == "SubTotal"
-    assert column.role is ColumnRole.MEASURE
-
-
-def test_require_with_wrong_role_lists_available_columns_of_that_role() -> None:
-    with pytest.raises(SpecValidationError, match="Territory") as error:
-        _orders_schema().require("Territory", role=ColumnRole.MEASURE)
-
-    assert "SubTotal, TotalDue" in str(error.value)
-
-
-def test_require_unknown_column_lists_available_columns() -> None:
-    with pytest.raises(SpecValidationError, match="Discount") as error:
-        _orders_schema().require("Discount")
-
-    assert "OrderDate, Territory, SubTotal, TotalDue" in str(error.value)
+@pytest.mark.parametrize(
+    ("duckdb_type", "expected"),
+    [
+        ("DECIMAL(38,4)", "decimal(38,4)"),
+        ("HUGEINT", "int"),
+        ("INTEGER", "int"),
+        ("BIGINT", "int"),
+        ("VARCHAR", "string"),
+        ("DATE", "date"),
+        ("TIMESTAMP", "datetime"),
+        ("BOOLEAN", "bool"),
+    ],
+)
+def test_parse_duckdb_type_maps_result_types(duckdb_type: str, expected: str) -> None:
+    assert str(parse_duckdb_type(duckdb_type)) == expected
 
 
-def test_with_column_returns_new_schema_and_keeps_original() -> None:
-    original = _orders_schema()
-
-    extended = original.with_column("month", ColumnType.parse("date"), ColumnRole.TIME)
-
-    assert extended.names == ("OrderDate", "Territory", "SubTotal", "TotalDue", "month")
-    assert original.names == ("OrderDate", "Territory", "SubTotal", "TotalDue")
-
-
-def test_with_column_rejects_existing_name() -> None:
-    with pytest.raises(SpecValidationError, match="SubTotal"):
-        _orders_schema().with_column("SubTotal", ColumnType.parse("int"), ColumnRole.MEASURE)
+@pytest.mark.parametrize(
+    "duckdb_type",
+    ["DOUBLE", "FLOAT", "INTERVAL", "VARCHAR[]", "STRUCT(a INTEGER)", "TIMESTAMP WITH TIME ZONE"],
+)
+def test_parse_duckdb_type_rejects_types_without_catalog_equivalent(duckdb_type: str) -> None:
+    with pytest.raises(QueryValidationError, match="no catalog equivalent"):
+        parse_duckdb_type(duckdb_type)

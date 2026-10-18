@@ -2,7 +2,7 @@
 
 ## 1. Zasada
 
-Kod dzielimy na **moduły według funkcji** (core, catalog, procedures, results, transform, agent, api), a wewnątrz modułu na trzy warstwy:
+Kod dzielimy na **moduły według funkcji** (core, catalog, procedures, results, query, agent, api), a wewnątrz modułu na trzy warstwy:
 
 | Warstwa | Odpowiedzialność | Czego nie robi |
 |---------|------------------|----------------|
@@ -19,7 +19,7 @@ To nie jest klasyczny CRUD, dlatego controllery są dwa rodzaje:
 1. **Controller zewnętrzny**: endpoint HTTP i CLI `ask(prompt, user, session_id?) → Response`. Buduje `RequestContext`, woła `AskService`, zamienia wyjątki na status `error`.
 2. **Narzędzia agenta (Pydantic AI tools)**: dla modelu są punktami wejścia tak samo jak endpoint dla klienta HTTP. Dlatego traktujemy je jak controllery: są **cienkie**, przyjmują i walidują argumenty od modelu, wołają serwis i zwracają DTO (`ResultSummary`) albo czytelny błąd do poprawki przez model. Logika (walidacja parametrów procedury, wstrzykiwanie `@UserId`, zapis do magazynu, proweniencja) siedzi w serwisach.
 
-Serwisy nie znają Pydantic AI, więc to warstwa narzędzi tłumaczy błędy domenowe na wyjątki Pydantic AI. Błędy wejścia (`ParameterValidationError`, `SpecValidationError`, `UnknownHandleError`) stają się `ModelRetry`: model dostaje komunikat jako błąd narzędzia i może poprawić wywołanie. Błędy wykonania (`ProcedureError`, `ProcedureTimeoutError`) stają się `ToolFailed`, który nie zużywa budżetu ponowień i mówi modelowi, żeby nie powtarzał tego samego wywołania. Robi to wspólny dekorator `retry_on_domain_error` ([wzorce-projektowe.md, sekcja 10.2](wzorce-projektowe.md)), a nie `try/except` w każdym narzędziu. Tak samo endpoint tłumaczy wyjątki na status `error` w odpowiedzi.
+Serwisy nie znają Pydantic AI, więc to warstwa narzędzi tłumaczy błędy domenowe na wyjątki Pydantic AI. Błędy wejścia (`ParameterValidationError`, `UnknownHandleError`) i wszystkie błędy zapytania (`QueryValidationError`, `QueryExecutionError`, `QueryTimeoutError`) stają się `ModelRetry`: model dostaje komunikat jako błąd narzędzia i może poprawić wywołanie albo SQL. Błędy wykonania procedur (`ProcedureError`, `ProcedureTimeoutError`) stają się `ToolFailed`, który nie zużywa budżetu ponowień i mówi modelowi, żeby nie powtarzał tego samego wywołania. Robi to wspólny dekorator `retry_on_domain_error` ([wzorce-projektowe.md, sekcja 10.2](wzorce-projektowe.md)), a nie `try/except` w każdym narzędziu. Tak samo endpoint tłumaczy wyjątki na status `error` w odpowiedzi.
 
 Narzędzia są funkcjami synchronicznymi. Pydantic AI uruchamia je w wątkach roboczych, więc serwisy, z których korzystają, muszą być bezpieczne przy wywołaniu z innego wątku (sekcja 11.2 architektury).
 
@@ -27,8 +27,9 @@ Narzędzia są funkcjami synchronicznymi. Pydantic AI uruchamia je w wątkach ro
 # controller: thin tool, delegates to the service; the decorator maps domain errors for the model
 @agent.tool
 @retry_on_domain_error
-def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSummary:
-    return ctx.deps.transform_service.apply(spec, ctx.deps.request)
+def query(ctx: RunContext[AgentDeps], sql: str) -> QuerySummary:
+    """Run one read-only SELECT in DuckDB SQL over this session's result handles."""
+    return ctx.deps.query_service.run(sql)
 ```
 
 ## 3. Mapowanie komponentów architektury na warstwy
@@ -36,17 +37,17 @@ def transform(ctx: RunContext[AgentDeps], spec: TransformSpec) -> ResultSummary:
 | Moduł | controller | service | repository |
 |-------|------------|---------|------------|
 | `api` | endpoint HTTP, CLI | `AskService` (fasada) | `SessionRepository` (sesje w pamięci procesu: historia rozmowy i połączenie DuckDB) |
-| `agent` | narzędzia: `transform`, `describe_result`, narzędzia procedur | `AgentService` (konfiguracja i uruchomienie pętli), `ResponseAssembler` (`AgentAnswer` → `Response`), `ToolRegistry` | — |
+| `agent` | narzędzia: `query`, `describe_result`, narzędzia procedur | `AgentService` (konfiguracja i uruchomienie pętli), `ResponseAssembler` (`AgentAnswer` → `Response`), `ToolRegistry` | — |
 | `catalog` | — | `CatalogService` (walidacja YAML z metadanymi przy starcie, zakresy danych) | `CatalogRepository` (YAML), `ProcedureMetadataRepository` (metadane SQL Server) |
 | `procedures` | — | `ProcedureService` (walidacja parametrów, `inject`, limity, proweniencja) | `ProcedureRepository` (adapter SQL Server) |
 | `results` | — | `ResultService` (zapis, odczyt i opis uchwytów: schemat, statystyki, podgląd) | `ResultStore` (tabele DuckDB pod uchwytami) |
-| `transform` | — | `TransformService` (walidacja specyfikacji → wykonanie → fakty) | `TransformExecutor` (DuckDB, później Polars) |
+| `query` | — | `QueryService` (parsowanie → reguły → typy wyniku → pełne `ORDER BY` → wykonanie i zapis przez `ResultService`) | `SqlParser` (parser DuckDB na własnym połączeniu bez danych) |
 
 Moduły bez controllera są wewnętrzne: korzystają z nich serwisy innych modułów.
 
-Magazyn wyników to osobny moduł, bo korzystają z niego trzy inne: `procedures` zapisuje `r1`, `transform` czyta `r1` i zapisuje `r2`, a `agent` (narzędzie `describe_result`, `ResponseAssembler`) czyta uchwyty. Wszyscy idą przez `ResultService`, nie przez `ResultStore`. Moduł `results` jest właścicielem zablokowanego połączenia DuckDB sesji (sekcja 7.4a architektury); `DuckDBExecutor` dostaje to połączenie przez konstruktor.
+Magazyn wyników to osobny moduł, bo korzystają z niego trzy inne: `procedures` zapisuje wyniki procedur, `query` czyta uchwyty i zapisuje wynik zapytania pod nowym uchwytem, a `agent` (narzędzie `describe_result`, `ResponseAssembler`) czyta uchwyty. Wszyscy idą przez `ResultService`, nie przez `ResultStore`. Moduł `results` jest właścicielem zablokowanego połączenia DuckDB sesji (sekcja 7.4a architektury). `QueryService` dostaje przez konstruktor `ResultService` sesji i przez niego wiąże (`DESCRIBE`), wykonuje i zapisuje zapytania, więc blokada i limity działają w jednym miejscu.
 
-Silnik przekształceń trafia do warstwy repository, bo to on wykonuje zapytania na danych w DuckDB. Kompilator specyfikacji (czysta logika bez I/O) jest częścią serwisu albo osobną klasą pomocniczą w module `transform`.
+Parser SQL trafia do warstwy repository, bo woła DuckDB (`json_serialize_sql`, `json_deserialize_sql`). Do parsowania nie potrzebuje danych, więc ma własne zablokowane połączenie bez tabel i nie trzyma blokady magazynu sesji. Reguły i normalizacja (czysta logika na drzewie zapytania, bez I/O) są klasami pomocniczymi serwisu w module `query`.
 
 ## 4. Zasady współpracy modułów
 
@@ -60,7 +61,7 @@ Silnik przekształceń trafia do warstwy repository, bo to on wykonuje zapytania
 ```
 src/data_concierge/
 ├── core/                  # shared domain types, errors, settings
-│   ├── types.py           # ColumnType, ColumnRole, TableSchema
+│   ├── types.py           # ColumnType, ColumnRole, TableSchema, SQL Server and DuckDB type mapping
 │   ├── errors.py
 │   ├── settings.py
 │   └── context.py         # RequestContext
@@ -73,15 +74,13 @@ src/data_concierge/
 │   ├── repository.py      # ProcedureRepository protocol + SqlServer adapter
 │   └── service.py         # ProcedureService
 ├── results/
-│   ├── models.py          # Handle, ResultTable, ResultSummary, Lineage
+│   ├── models.py          # Handle, ResultTable, ResultSummary, ProcedureLineage | QueryLineage
 │   ├── repository.py      # ResultStore protocol + DuckDB implementation (owns the connection)
 │   └── service.py         # ResultService
-├── transform/
-│   ├── spec.py            # TransformSpec, step classes (discriminated union)
-│   ├── validator.py       # semantic validation, step by step
-│   ├── compiler.py        # SqlQueryBuilder, spec -> CompiledQuery
-│   ├── executor.py        # TransformExecutor protocol, DuckDBExecutor
-│   └── service.py         # TransformService
+├── query/
+│   ├── models.py          # QuerySummary
+│   ├── policy.py          # QueryPolicy: result column names and types, truncated sources
+│   └── service.py         # QueryService
 ├── agent/
 │   ├── deps.py            # AgentDeps
 │   ├── tools.py           # tools = controllers for the model

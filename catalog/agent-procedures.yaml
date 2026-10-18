@@ -1,0 +1,336 @@
+# Agent catalog: read procedures described for the model (architecture, section 5).
+# Columns of api.* procedures are the contract the db/ scripts implement (plan U8);
+# columns of dbo.* procedures follow their current result sets in AdventureWorks2025.
+# Startup validation compares every entry with the database metadata (plan U10).
+
+- procedure: api.Customer_Search
+  tool: customer_search
+  summary: Klienci (osoby i sklepy), których nazwa pasuje do podanego tekstu, z numerem konta, terytorium i liczbą zamówień.
+  use_when:
+    - prośba wskazuje klienta po nazwie, a potrzebny jest jego CustomerID
+    - trzeba rozróżnić kilku klientów o tej samej nazwie
+  not_for:
+    - lista klientów z miasta, kraju lub typu → użyj customer_list
+  grain: jeden wiersz = jeden klient
+  synonyms: [klient, kontrahent, odbiorca, sklep]
+  max_rows: 1000
+  params:
+    - name: Name
+      arg: name
+      type: string
+      required: true
+      hint: Nazwa klienta lub jej fragment, np. „Mohamed Pal” albo nazwa sklepu.
+    - name: UserId
+      type: int
+      inject: request_context.user_id
+  columns:
+    - {name: CustomerID,    type: int,    role: id}
+    - {name: AccountNumber, type: string, role: id, hint: Numer konta klienta}
+    - {name: CustomerName,  type: string, role: dimension}
+    - {name: CustomerType,  type: string, role: dimension, values: [individual, store]}
+    - {name: Territory,     type: string, role: dimension}
+    - {name: CountryRegion, type: string, role: dimension}
+    - {name: OrderCount,    type: int,    role: measure, hint: Liczba wszystkich zamówień klienta}
+  examples:
+    - prompt: "pokaż klienta Mohamed Pal"
+      call: {name: Mohamed Pal}
+
+- procedure: api.Customer_List
+  tool: customer_list
+  summary: Klienci (osoby i sklepy) z adresem, opcjonalnie zawężeni do miasta, kraju i typu klienta.
+  use_when:
+    - pytanie o listę klientów z miejscowości, regionu lub kraju
+    - pytanie o klientów danego typu (osoby albo sklepy)
+  not_for:
+    - wyszukanie jednego klienta po nazwie → użyj customer_search
+    - sprzedaż klientów → użyj sales_order_list
+  grain: jeden wiersz = jeden adres klienta (sklep może mieć kilka adresów)
+  synonyms: [klienci, baza klientów, adresy]
+  max_rows: 50000
+  params:
+    - name: City
+      arg: city
+      type: string
+      required: false
+      hint: Nazwa miejscowości, np. „Berlin”. Ta sama nazwa może występować w kilku regionach.
+    - name: CountryRegionCode
+      arg: country_region_code
+      type: string
+      required: false
+      hint: Dwuliterowy kod kraju ISO, np. DE, US, GB.
+    - name: CustomerType
+      arg: customer_type
+      type: string
+      required: false
+      hint: individual (osoba) albo store (sklep).
+    - name: UserId
+      type: int
+      inject: request_context.user_id
+  columns:
+    - {name: CustomerID,    type: int,    role: id}
+    - {name: AccountNumber, type: string, role: id}
+    - {name: CustomerName,  type: string, role: dimension}
+    - {name: CustomerType,  type: string, role: dimension, values: [individual, store]}
+    - {name: AddressType,   type: string, role: dimension, hint: "Rodzaj adresu, np. Home, Main Office, Shipping"}
+    - {name: City,          type: string, role: dimension}
+    - {name: StateProvince, type: string, role: dimension}
+    - {name: CountryRegion, type: string, role: dimension}
+    - {name: Territory,     type: string, role: dimension}
+  examples:
+    - prompt: "daj mi listę klientów z miejscowości Berlin"
+      call: {city: Berlin, country_region_code: null, customer_type: null}
+    - prompt: "sklepy z Niemiec"
+      call: {city: null, country_region_code: DE, customer_type: store}
+
+- procedure: api.SalesOrder_List
+  tool: sales_order_list
+  summary: Zamówienia sprzedaży (nagłówki) w okresie, opcjonalnie dla jednego klienta.
+  use_when:
+    - pytanie dotyczy sprzedaży, obrotów lub zamówień w czasie
+    - potrzebny jest raport sprzedaży po dniach, miesiącach, latach, klientach lub terytoriach
+  not_for:
+    - sprzedaż w podziale na produkty lub kategorie → użyj sales_order_line_list
+    - wyszukanie klienta po nazwie → najpierw customer_search
+  grain: jeden wiersz = jedno zamówienie, dane nie są zgrupowane
+  synonyms: [sprzedaż, zamówienia, obroty]
+  params:
+    - name: DateFrom
+      arg: date_from
+      type: date
+      required: true
+      hint: Początek okresu, włącznie (OrderDate). Dla „2024” podaj 2024-01-01.
+    - name: DateTo
+      arg: date_to
+      type: date
+      required: true
+      hint: Koniec okresu, wyłącznie. Dla „2024” podaj 2025-01-01.
+    - name: CustomerID
+      arg: customer_id
+      type: int
+      required: false
+      hint: Id klienta. Wartość bierz wyłącznie z wyniku customer_search, nigdy nie zgaduj.
+    - name: UserId
+      type: int
+      inject: request_context.user_id
+  columns:
+    - {name: SalesOrderID, type: int,           role: id}
+    - {name: OrderDate,    type: date,          role: time,      hint: Data zamówienia}
+    - {name: CustomerID,   type: int,           role: id}
+    - {name: CustomerName, type: string,        role: dimension}
+    - {name: CustomerType, type: string,        role: dimension, values: [individual, store]}
+    - {name: Territory,    type: string,        role: dimension}
+    - {name: SubTotal,     type: "decimal(19,4)", role: measure,   hint: "Sprzedaż netto, bez podatku i frachtu", default_for: [sprzedaż]}
+    - {name: TotalDue,     type: "decimal(19,4)", role: measure,   hint: Kwota z podatkiem i frachtem}
+  data_range: {procedure: api.SalesOrder_DataRange}
+  examples:
+    - prompt: "sprzedaż za I kwartał 2025"
+      call: {date_from: 2025-01-01, date_to: 2025-04-01, customer_id: null}
+    - prompt: "raport sprzedaży po miesiącach za 2024"
+      call: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null}
+      then: "query: sum of SubTotal per month of OrderDate, months without orders as 0"
+
+- procedure: api.SalesOrderLine_List
+  tool: sales_order_line_list
+  summary: Pozycje zamówień sprzedaży w okresie z produktem, podkategorią i kategorią, opcjonalnie dla jednego klienta lub jednej kategorii.
+  use_when:
+    - sprzedaż w podziale na produkty, podkategorie lub kategorie
+    - ilości sprzedanych produktów
+  not_for:
+    - sprzedaż w czasie, po klientach lub terytoriach bez podziału na produkty → użyj sales_order_list
+  grain: jeden wiersz = jedna pozycja zamówienia, dane nie są zgrupowane
+  synonyms: [pozycje, produkty sprzedane, sprzedaż produktów]
+  params:
+    - name: DateFrom
+      arg: date_from
+      type: date
+      required: true
+      hint: Początek okresu, włącznie (OrderDate). Dla „2024” podaj 2024-01-01.
+    - name: DateTo
+      arg: date_to
+      type: date
+      required: true
+      hint: Koniec okresu, wyłącznie. Dla „2024” podaj 2025-01-01.
+    - name: CustomerID
+      arg: customer_id
+      type: int
+      required: false
+      hint: Id klienta. Wartość bierz wyłącznie z wyniku customer_search, nigdy nie zgaduj.
+    - name: ProductCategoryID
+      arg: product_category_id
+      type: int
+      required: false
+      hint: Id kategorii produktu. 1 Bikes, 2 Components, 3 Clothing, 4 Accessories.
+    - name: UserId
+      type: int
+      inject: request_context.user_id
+  columns:
+    - {name: SalesOrderID,       type: int,           role: id}
+    - {name: SalesOrderDetailID, type: int,           role: id}
+    - {name: OrderDate,          type: date,          role: time,      hint: Data zamówienia}
+    - {name: CustomerID,         type: int,           role: id}
+    - {name: CustomerName,       type: string,        role: dimension}
+    - {name: Territory,          type: string,        role: dimension}
+    - {name: ProductID,          type: int,           role: id}
+    - {name: ProductName,        type: string,        role: dimension}
+    - {name: Subcategory,        type: string,        role: dimension}
+    - {name: Category,           type: string,        role: dimension}
+    - {name: OrderQty,           type: int,           role: measure,   hint: Liczba sztuk}
+    - {name: UnitPrice,          type: "decimal(19,4)", role: measure,   hint: Cena jednostkowa}
+    - {name: LineTotal,          type: "decimal(38,6)", role: measure,   hint: Wartość netto pozycji, default_for: [sprzedaż]}
+  data_range: {procedure: api.SalesOrder_DataRange}
+  examples:
+    - prompt: "sprzedaż po kategoriach produktów w 2024"
+      call: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null, product_category_id: null}
+      then: "query: sum of LineTotal per Category"
+    - prompt: "sprzedaż rowerów po miesiącach w 2024"
+      call: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null, product_category_id: 1}
+
+- procedure: api.Product_Search
+  tool: product_search
+  summary: Produkty, których nazwa pasuje do podanego tekstu, z numerem, kolorem, rozmiarem, podkategorią i kategorią.
+  use_when:
+    - prośba wskazuje produkt po nazwie, a potrzebny jest jego ProductID (np. do struktury materiałowej)
+  not_for:
+    - sprzedaż produktów → użyj sales_order_line_list
+  grain: jeden wiersz = jeden produkt (wariant koloru i rozmiaru to osobny produkt)
+  synonyms: [produkt, towar, wyrób, rama, rower]
+  max_rows: 1000
+  params:
+    - name: Name
+      arg: name
+      type: string
+      required: true
+      hint: Nazwa produktu lub jej fragment, np. „HL Mountain Frame”.
+    - name: UserId
+      type: int
+      inject: request_context.user_id
+  columns:
+    - {name: ProductID,     type: int,           role: id}
+    - {name: ProductNumber, type: string,        role: id}
+    - {name: ProductName,   type: string,        role: dimension}
+    - {name: Color,         type: string,        role: dimension}
+    - {name: Size,          type: string,        role: dimension}
+    - {name: Subcategory,   type: string,        role: dimension}
+    - {name: Category,      type: string,        role: dimension}
+    - {name: ListPrice,     type: "decimal(19,4)", role: measure, hint: Cena katalogowa}
+  examples:
+    - prompt: "pokaż strukturę materiałową produktu HL Mountain Frame"
+      call: {name: HL Mountain Frame}
+      then: "get_bill_of_materials for the chosen ProductID"
+
+- procedure: api.SalesOrder_DataRange
+  tool: sales_order_data_range
+  exposed: false
+  summary: Najwcześniejsza i najpóźniejsza data zamówienia; backend czyta ją raz przy starcie.
+  grain: jeden wiersz
+  columns:
+    - {name: MinOrderDate, type: date, role: time}
+    - {name: MaxOrderDate, type: date, role: time}
+
+- procedure: dbo.uspGetBillOfMaterials
+  tool: get_bill_of_materials
+  summary: Struktura materiałowa (BOM) produktu na dany dzień, wszystkie poziomy komponentów.
+  use_when:
+    - pytanie o strukturę materiałową, komponenty lub części produktu
+  not_for:
+    - w jakich produktach użyto komponentu → użyj get_where_used_product
+  grain: jeden wiersz = jeden komponent na danym poziomie struktury
+  synonyms: [BOM, struktura materiałowa, komponenty, części]
+  params:
+    - name: StartProductID
+      arg: start_product_id
+      type: int
+      required: true
+      hint: Id produktu. Wartość bierz wyłącznie z wyniku product_search, nigdy nie zgaduj.
+    - name: CheckDate
+      arg: check_date
+      type: datetime
+      required: true
+      hint: Dzień, na który obowiązuje struktura. Bez daty w prośbie podaj dzisiejszą datę.
+  columns:
+    - {name: ProductAssemblyID, type: int,           role: id}
+    - {name: ComponentID,       type: int,           role: id}
+    - {name: ComponentDesc,     type: string,        role: dimension, hint: Nazwa komponentu}
+    - {name: TotalQuantity,     type: "decimal(38,2)", role: measure,   hint: Ilość komponentu w zespole}
+    - {name: StandardCost,      type: "decimal(19,4)", role: measure}
+    - {name: ListPrice,         type: "decimal(19,4)", role: measure}
+    - {name: BOMLevel,          type: int,           role: dimension, hint: Poziom w strukturze}
+    - {name: RecursionLevel,    type: int,           role: dimension}
+
+- procedure: dbo.uspGetWhereUsedProductID
+  tool: get_where_used_product
+  summary: Produkty i zespoły, w których użyto danego komponentu, na dany dzień.
+  use_when:
+    - pytanie, gdzie lub w czym użyto komponentu
+  not_for:
+    - z czego składa się produkt → użyj get_bill_of_materials
+  grain: jeden wiersz = jedno użycie komponentu na danym poziomie
+  synonyms: [gdzie użyto, zastosowanie komponentu]
+  params:
+    - name: StartProductID
+      arg: start_product_id
+      type: int
+      required: true
+      hint: Id komponentu. Wartość bierz wyłącznie z wyniku product_search, nigdy nie zgaduj.
+    - name: CheckDate
+      arg: check_date
+      type: datetime
+      required: true
+      hint: Dzień, na który obowiązuje struktura. Bez daty w prośbie podaj dzisiejszą datę.
+  columns:
+    - {name: ProductAssemblyID, type: int,           role: id}
+    - {name: ComponentID,       type: int,           role: id}
+    - {name: ComponentDesc,     type: string,        role: dimension}
+    - {name: TotalQuantity,     type: "decimal(38,2)", role: measure}
+    - {name: StandardCost,      type: "decimal(19,4)", role: measure}
+    - {name: ListPrice,         type: "decimal(19,4)", role: measure}
+    - {name: BOMLevel,          type: int,           role: dimension}
+    - {name: RecursionLevel,    type: int,           role: dimension}
+
+- procedure: dbo.uspGetEmployeeManagers
+  tool: get_employee_managers
+  summary: Łańcuch przełożonych pracownika aż do szczytu organizacji.
+  use_when:
+    - pytanie o przełożonych lub ścieżkę służbową pracownika
+  not_for:
+    - podwładni pracownika → użyj get_manager_employees
+  grain: jeden wiersz = jeden poziom łańcucha przełożonych
+  synonyms: [przełożeni, kierownik, szef]
+  params:
+    - name: BusinessEntityID
+      arg: employee_id
+      type: int
+      required: true
+      hint: Id pracownika (BusinessEntityID). Nie ma narzędzia do wyszukiwania pracowników, więc bierz je tylko z prośby lub wcześniejszego wyniku.
+  columns:
+    - {name: RecursionLevel,   type: int,    role: dimension}
+    - {name: BusinessEntityID, type: int,    role: id}
+    - {name: FirstName,        type: string, role: dimension}
+    - {name: LastName,         type: string, role: dimension}
+    - {name: OrganizationNode, type: string, role: dimension}
+    - {name: ManagerFirstName, type: string, role: dimension}
+    - {name: ManagerLastName,  type: string, role: dimension}
+
+- procedure: dbo.uspGetManagerEmployees
+  tool: get_manager_employees
+  summary: Wszyscy podwładni kierownika, bezpośredni i pośredni.
+  use_when:
+    - pytanie o podwładnych, zespół lub strukturę pod kierownikiem
+  not_for:
+    - przełożeni pracownika → użyj get_employee_managers
+  grain: jeden wiersz = jeden podwładny
+  synonyms: [podwładni, zespół, struktura organizacyjna]
+  params:
+    - name: BusinessEntityID
+      arg: manager_id
+      type: int
+      required: true
+      hint: Id kierownika (BusinessEntityID). Nie ma narzędzia do wyszukiwania pracowników, więc bierz je tylko z prośby lub wcześniejszego wyniku.
+  columns:
+    - {name: RecursionLevel,   type: int,    role: dimension}
+    - {name: OrganizationNode, type: string, role: dimension}
+    - {name: ManagerFirstName, type: string, role: dimension}
+    - {name: ManagerLastName,  type: string, role: dimension}
+    - {name: BusinessEntityID, type: int,    role: id}
+    - {name: FirstName,        type: string, role: dimension}
+    - {name: LastName,         type: string, role: dimension}

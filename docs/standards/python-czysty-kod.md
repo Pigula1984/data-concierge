@@ -8,9 +8,9 @@ Kod, nazwy, komentarze, docstringi, komunikaty wyjątków i logów piszemy po an
 
 - **Jedna klasa, jedna odpowiedzialność.** Klasa ma jeden powód do zmiany. `ProcedureRepository` wywołuje procedury, ale nie waliduje katalogu i nie buduje odpowiedzi.
 - **Zależności przez konstruktor.** Klasa nie tworzy sama swoich zależności (połączeń, klientów, repozytoriów), tylko dostaje je w `__init__`. Dzięki temu w testach podstawiamy atrapy bez patchowania.
-- **Interfejsy jako `typing.Protocol`.** Kod zależy od abstrakcji (`ProcedureRepository`, `TransformExecutor`), a nie od konkretnej implementacji. `Protocol` nie wymaga dziedziczenia, więc atrapa w teście to zwykła klasa z tymi samymi metodami. `abc.ABC` stosujemy tylko wtedy, gdy klasa bazowa dostarcza wspólną implementację.
+- **Interfejsy jako `typing.Protocol`.** Kod zależy od abstrakcji (`ProcedureRepository`, `SqlParser`), a nie od konkretnej implementacji. `Protocol` nie wymaga dziedziczenia, więc atrapa w teście to zwykła klasa z tymi samymi metodami. `abc.ABC` stosujemy tylko wtedy, gdy klasa bazowa dostarcza wspólną implementację.
 - **Kompozycja zamiast dziedziczenia.** Dziedziczenie tylko dla prawdziwej relacji „jest” i płytkich hierarchii (najwyżej jeden poziom poniżej klasy abstrakcyjnej).
-- **Niemutowalne obiekty wartości.** DTO, konfiguracja, kontekst żądania i kroki specyfikacji to modele Pydantic z `frozen=True` (lub `@dataclass(frozen=True, slots=True)` dla prostych struktur wewnętrznych). Zmiana = nowy obiekt.
+- **Niemutowalne obiekty wartości.** DTO, konfiguracja, kontekst żądania i wpisy proweniencji to modele Pydantic z `frozen=True` (lub `@dataclass(frozen=True, slots=True)` dla prostych struktur wewnętrznych). Zmiana = nowy obiekt.
 - **Brak stanu globalnego.** Żadnych singletonów modułowych z połączeniami. Obiekty składamy w jednym miejscu (composition root, patrz [architektura-warstwowa.md](architektura-warstwowa.md)).
 
 ```python
@@ -30,7 +30,7 @@ class ProcedureService:
 
 ## 3. Czysty kod
 
-- **Nazwy mówią, co rzecz robi.** Funkcje to czasowniki (`load_catalog`, `compile_spec`), klasy to rzeczowniki (`TransformCompiler`). Bez skrótów poza powszechnymi (`id`, `sql`, `db`). Wartości logiczne: `is_`, `has_`, `can_`.
+- **Nazwy mówią, co rzecz robi.** Funkcje to czasowniki (`load_catalog`, `parse_query`), klasy to rzeczowniki (`QueryPolicy`). Bez skrótów poza powszechnymi (`id`, `sql`, `db`). Wartości logiczne: `is_`, `has_`, `can_`.
 - **Małe funkcje na jednym poziomie abstrakcji.** Funkcja robi jedną rzecz. Jeśli ma sekcje oddzielone komentarzami, to są kandydaci na osobne metody.
 - **Mało argumentów.** Więcej niż 3–4 argumenty to sygnał, że brakuje obiektu parametrów (modelu Pydantic).
 - **Wczesny powrót zamiast zagnieżdżeń.** Warunki brzegowe obsługujemy na początku funkcji.
@@ -40,8 +40,8 @@ class ProcedureService:
 
 ## 4. DRY, ale rozsądnie
 
-- **Jedno źródło prawdy dla wiedzy.** Opis procedury żyje w YAML katalogu; definicje narzędzi, schematy i skrót katalogu w prompcie są z niego **generowane**, a nie przepisywane. Schemat specyfikacji przekształceń to model Pydantic, z którego powstaje JSON Schema narzędzia `transform`.
-- **Wspólna logika do jednej klasy lub funkcji.** Mapowanie typów (SQL Server → Arrow → DuckDB → JSON) jest w jednym miejscu, a nie w każdym wykonawcy.
+- **Jedno źródło prawdy dla wiedzy.** Opis procedury żyje w YAML katalogu; definicje narzędzi, schematy i skrót katalogu w prompcie są z niego **generowane**, a nie przepisywane. Mapowanie typów wyniku `query` żyje w jednym miejscu (`parse_duckdb_type`): z niego korzysta kontrola typów i z niego powstaje fragment instrukcji dla modelu.
+- **Wspólna logika do jednej klasy lub funkcji.** Mapowanie typów (SQL Server → Arrow → DuckDB → JSON) jest w jednym miejscu, a nie w każdym module.
 - **Reguła trzech.** Dwa podobne fragmenty mogą zostać; przy trzecim wydzielamy abstrakcję. Lepsza drobna duplikacja niż zła abstrakcja, która wiąże niezależne rzeczy.
 - DRY dotyczy wiedzy i logiki, nie przypadkowo podobnego kodu. Dwa kawałki, które dziś wyglądają tak samo, ale zmieniają się z różnych powodów, zostają osobno.
 
@@ -55,7 +55,7 @@ class ProcedureService:
 
 ## 6. Błędy i wyjątki
 
-- **Własna hierarchia wyjątków** z klasą bazową (np. `DataConciergeError`) i podklasami według przyczyny: `CatalogError`, `ProcedureError`, `SpecValidationError`.
+- **Własna hierarchia wyjątków** z klasą bazową (np. `DataConciergeError`) i podklasami według przyczyny: `CatalogError`, `ProcedureError`, `QueryError`.
 - **Wyjątki niosą konkretny komunikat**, bo część z nich wraca do modelu jako błąd narzędzia i musi pozwolić mu się poprawić („`sum` requires a numeric column; `CustomerName` is `string`”).
 - Nie łapiemy gołego `except Exception` poza warstwą controllera, która zamienia błędy na status odpowiedzi.
 - Nie połykamy wyjątków. Przy przepakowaniu używamy `raise ... from exc`.
