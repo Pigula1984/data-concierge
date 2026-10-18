@@ -3,7 +3,7 @@
 from collections import Counter
 from datetime import date
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Literal, NamedTuple, Self
 
 from pydantic import BaseModel, PositiveInt, model_validator
 
@@ -17,6 +17,12 @@ type ExampleValue = str | int | bool | date | None
 
 class _CatalogModel(BaseModel, frozen=True, extra="forbid"):
     """Rejects unknown keys, so a typo in the YAML fails loudly instead of being dropped."""
+
+    @staticmethod
+    def _require_unique(kind: str, names: list[str]) -> None:
+        duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
+        if duplicates:
+            raise ValueError(f"duplicate {kind} names: {', '.join(duplicates)}")
 
 
 class InjectSource(StrEnum):
@@ -99,9 +105,9 @@ class CatalogEntry(_CatalogModel):
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Self:
-        _require_unique("parameter", [param.name.casefold() for param in self.params])
-        _require_unique("argument", [param.arg for param in self.params if param.arg])
-        _require_unique("column", [column.name.casefold() for column in self.columns])
+        self._require_unique("parameter", [param.name.casefold() for param in self.params])
+        self._require_unique("argument", [param.arg for param in self.params if param.arg])
+        self._require_unique("column", [column.name.casefold() for column in self.columns])
         model_args = {param.arg for param in self.params if param.arg}
         for example in self.examples:
             unknown = sorted(set(example.call) - model_args)
@@ -131,7 +137,7 @@ class Catalog(_CatalogModel):
 
     @model_validator(mode="after")
     def _check_references(self) -> Self:
-        _require_unique("procedure", [entry.procedure.casefold() for entry in self.entries])
+        self._require_unique("procedure", [entry.procedure.casefold() for entry in self.entries])
         owners: dict[str, str] = {}
         for entry in self.entries:
             if entry.tool in owners:
@@ -160,7 +166,23 @@ class Catalog(_CatalogModel):
         raise CatalogError(f"procedure '{procedure}' is not in the catalog")
 
 
-def _require_unique(kind: str, names: list[str]) -> None:
-    duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
-    if duplicates:
-        raise ValueError(f"duplicate {kind} names: {', '.join(duplicates)}")
+class SqlField(NamedTuple):
+    """A procedure parameter (name without `@`) or result column as SQL Server describes it."""
+
+    name: str
+    sql_type: str
+
+
+class ProcedureMetadata(BaseModel, frozen=True):
+    """What the database says about a procedure; `columns` is None when it cannot describe
+    the result set (temporary tables, dynamic SQL, several result sets)."""
+
+    params: tuple[SqlField, ...]
+    columns: tuple[SqlField, ...] | None
+
+
+class DataRange(BaseModel, frozen=True):
+    """First and last date of the data behind a procedure, read once at startup."""
+
+    first: date
+    last: date
