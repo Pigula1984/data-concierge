@@ -1,11 +1,13 @@
 """Saving results under handles and describing them for the model and the response."""
 
+from datetime import date, datetime
+from decimal import Decimal
+
 import pyarrow as pa
 
 from data_concierge.core.sql import quote_identifier
 from data_concierge.core.types import Column, ColumnRole, TableSchema
 from data_concierge.results.models import (
-    ColumnInfo,
     ColumnStats,
     DescribedColumn,
     ExportedTable,
@@ -17,8 +19,6 @@ from data_concierge.results.models import (
     ResultTable,
     Rows,
     StoredResult,
-    handle_number,
-    to_json_scalar,
 )
 from data_concierge.results.repository import ResultStore
 
@@ -70,8 +70,8 @@ class ResultService:
     def lineage(self, handle: Handle) -> tuple[StoredResult, ...]:
         """The handle and all its ancestors, each once, oldest first, to reproduce the result.
 
-        Handles are numbered in creation order and a source always exists before its result,
-        so ordering by number is a topological order of the lineage graph.
+        The store lists handles in creation order and a source always exists before its
+        result, so that order is a topological order of the lineage graph.
         """
         found: dict[Handle, StoredResult] = {}
         pending = [handle]
@@ -80,11 +80,11 @@ class ResultService:
             if current not in found:
                 found[current] = self._store.describe(current)
                 pending.extend(found[current].lineage.sources)
-        return tuple(found[key] for key in sorted(found, key=handle_number))
+        return tuple(found[key] for key in self._store.handles() if key in found)
 
     def is_truncated(self, handle: Handle) -> bool:
         """True when the handle or any ancestor came from a procedure result cut at max_rows."""
-        return any(_cut_by_procedure(stored.lineage) for stored in self.lineage(handle))
+        return any(self._cut_by_procedure(stored.lineage) for stored in self.lineage(handle))
 
     def summarize(self, handle: Handle) -> ResultSummary:
         stored = self._store.describe(handle)
@@ -93,20 +93,32 @@ class ResultService:
             handle=handle,
             row_count=stored.row_count,
             truncated=self.is_truncated(handle),
-            columns=_column_infos(stored),
+            columns=stored.column_infos,
             stats=self._stats(stored),
-            preview=_rows(self._store.fetch(handle, limit)),
+            preview=self._rows(self._store.fetch(handle, limit)),
         )
 
     def export(self, handle: Handle, max_rows: int) -> ExportedTable:
         stored = self._store.describe(handle)
         return ExportedTable(
             handle=handle,
-            columns=_column_infos(stored),
-            rows=_rows(self._store.fetch(handle, max_rows)),
+            columns=stored.column_infos,
+            rows=self._rows(self._store.fetch(handle, max_rows)),
             row_count=stored.row_count,
             truncated=stored.row_count > max_rows or self.is_truncated(handle),
         )
+
+    @staticmethod
+    def to_json_scalar(value: object) -> JsonScalar:
+        """Converts one Arrow value to JSON without passing decimals through float."""
+        if value is None or isinstance(value, bool | int | str):
+            return value
+        if isinstance(value, datetime | date):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            # format(..., "f") keeps the scale and never switches to exponent notation.
+            return format(value, "f")
+        raise TypeError(f"unsupported value type {type(value).__name__}")
 
     def _stats(self, stored: StoredResult) -> dict[str, ColumnStats]:
         table = quote_identifier(stored.handle)
@@ -129,25 +141,20 @@ class ResultService:
         values = self._store.query(
             f"SELECT DISTINCT {name} FROM {table} WHERE {name} IS NOT NULL ORDER BY {name}"
         )
-        return ColumnStats(values=tuple(to_json_scalar(v) for v in values.column(0).to_pylist()))
+        return ColumnStats(
+            values=tuple(self.to_json_scalar(v) for v in values.column(0).to_pylist())
+        )
 
     def _single_row(self, sql: str) -> tuple[JsonScalar, ...]:
-        return _rows(self._store.query(sql))[0]
+        return self._rows(self._store.query(sql))[0]
 
+    @staticmethod
+    def _cut_by_procedure(lineage: Lineage) -> bool:
+        return isinstance(lineage, ProcedureLineage) and lineage.truncated
 
-def _cut_by_procedure(lineage: Lineage) -> bool:
-    return isinstance(lineage, ProcedureLineage) and lineage.truncated
-
-
-def _column_infos(stored: StoredResult) -> tuple[ColumnInfo, ...]:
-    return tuple(
-        ColumnInfo(name=column.name, type=column.type, role=column.role)
-        for column in stored.table_schema.columns
-    )
-
-
-def _rows(table: pa.Table) -> Rows:
-    columns = [column.to_pylist() for column in table.columns]
-    return tuple(
-        tuple(to_json_scalar(value) for value in row) for row in zip(*columns, strict=True)
-    )
+    @classmethod
+    def _rows(cls, table: pa.Table) -> Rows:
+        columns = [column.to_pylist() for column in table.columns]
+        return tuple(
+            tuple(cls.to_json_scalar(value) for value in row) for row in zip(*columns, strict=True)
+        )

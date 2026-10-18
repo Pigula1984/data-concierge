@@ -84,6 +84,12 @@ explicit_package_bases = true
 module = ["pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
+# pyodbc is a single extension module; its pyodbc.pyi cannot be marked py.typed (PEP 561),
+# so mypy does not read it and the API is typed as Any.
+[[tool.mypy.overrides]]
+module = ["pyodbc"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true

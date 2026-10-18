@@ -54,6 +54,7 @@ Parser SQL trafia do warstwy repository, bo woła DuckDB (`json_serialize_sql`, 
 - Moduł udostępnia na zewnątrz **serwisy i DTO** (przez `__init__.py`), nie repozytoria. Inny moduł nie sięga do cudzego repozytorium bezpośrednio.
 - Serwis może wołać serwis innego modułu (np. `ProcedureService` korzysta z `CatalogService`), ale bez cykli. Cykl oznacza, że granica modułów jest źle postawiona.
 - Wspólne typy domenowe (`TableSchema`, `ColumnType`, `ColumnRole`) i hierarchia wyjątków żyją w module `core`, który nie zależy od żadnego innego modułu.
+- Tam też żyje `SqlServerClient`, z którego korzystają dwa repozytoria. Zablokowane połączenie DuckDB tworzy sam `DuckDBResultStore`, jego jedyny użytkownik. Klient SQL Server otwiera połączenie na każde wywołanie, ustawia limit czasu i zamienia błędy sterownika na `ProcedureError` bez danych logowania. Korzystają z niego `SqlServerProcedureRepository` (moduł `procedures`) i `SqlServerMetadataRepository` (moduł `catalog`), więc żadne repozytorium nie sięga do cudzego.
 - Konfiguracja (`Settings` z `pydantic-settings`, moduł `core`) jest wczytywana raz w composition root i wstrzykiwana. Żaden moduł nie czyta zmiennych środowiskowych samodzielnie.
 
 ## 5. Układ katalogów
@@ -64,7 +65,9 @@ src/data_concierge/
 │   ├── types.py           # ColumnType, ColumnRole, TableSchema, SQL Server and DuckDB type mapping
 │   ├── errors.py
 │   ├── settings.py
-│   └── context.py         # RequestContext
+│   ├── context.py         # RequestContext
+│   ├── sql.py             # quote_identifier: the one module-level function (used by two layers)
+│   └── sqlserver.py       # SqlServerClient: the only module that imports pyodbc
 ├── catalog/
 │   ├── models.py          # CatalogEntry, ParamSpec, ColumnSpec
 │   ├── repository.py      # CatalogRepository, ProcedureMetadataRepository

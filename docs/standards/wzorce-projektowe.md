@@ -35,7 +35,7 @@ Serwisy znają tylko `Protocol`, a testy dostają implementację w pamięci.
 
 ## 2. Adapter
 
-Konkretna implementacja repozytorium dopasowuje zewnętrzne API do naszego interfejsu. `SqlServerProcedureRepository` zamienia wywołanie na `EXEC` przez pyodbc, a wiersze na `ResultTable` z typami z katalogu. To **jedyne** miejsce zależne od silnika bazy (wymaganie z sekcji 2 architektury). Inna baza = nowy adapter, reszta kodu bez zmian.
+Konkretna implementacja repozytorium dopasowuje zewnętrzne API do naszego interfejsu. `SqlServerProcedureRepository` zamienia wywołanie na `EXEC`, a wiersze na tabelę Arrow z typami z katalogu. Wykonuje je przez `SqlServerClient` z `core/sqlserver.py`, jedyny moduł, który importuje pyodbc. Z tego samego klienta korzysta `SqlServerMetadataRepository`. Te dwa repozytoria i klient to **jedyne** miejsca zależne od silnika bazy (wymaganie z sekcji 2 architektury). Inna baza = nowy adapter, reszta kodu bez zmian.
 
 ## 3. Strategy: reguły zapytania jako obiekty (wycofane w v3.6)
 
@@ -133,7 +133,7 @@ class LoggingProcedureRepository:
 
 
 # bootstrap.py
-procedures = LoggingProcedureRepository(SqlServerProcedureRepository(connection), logger)
+procedures = LoggingProcedureRepository(SqlServerProcedureRepository(client), logger)
 ```
 
 Inne miejsca: `CachingCatalogRepository` (katalog YAML czytany raz na proces).

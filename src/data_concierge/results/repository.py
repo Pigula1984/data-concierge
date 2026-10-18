@@ -8,7 +8,6 @@ from typing import Protocol
 import duckdb
 import pyarrow as pa
 
-from data_concierge.core.duckdb_connection import connect_locked
 from data_concierge.core.errors import (
     QueryExecutionError,
     QueryTimeoutError,
@@ -16,14 +15,13 @@ from data_concierge.core.errors import (
     UnknownHandleError,
 )
 from data_concierge.core.sql import quote_identifier
-from data_concierge.core.types import TableSchema, arrow_fields
+from data_concierge.core.types import TableSchema
 from data_concierge.results.models import (
     DescribedColumn,
     Handle,
     Lineage,
     ResultTable,
     StoredResult,
-    handle_for,
 )
 
 DEFAULT_MEMORY_LIMIT = "512MB"
@@ -69,7 +67,7 @@ class DuckDBResultStore:
         query_timeout_seconds: float = DEFAULT_QUERY_TIMEOUT_SECONDS,
         max_query_rows: int = DEFAULT_MAX_QUERY_ROWS,
     ) -> None:
-        self._connection = connect_locked(
+        self._connection = self._connect_locked(
             f"SET memory_limit = '{memory_limit}'",
             f"SET threads = {int(threads)}",
             # The ORDER BY of the model's query must survive CREATE TABLE AS and fetch.
@@ -119,10 +117,11 @@ class DuckDBResultStore:
             # A fresh cursor: a timer firing as the query ends must not interrupt these checks.
             cursor = self._connection.cursor()
             actual = cursor.execute(f"SELECT * FROM {table} LIMIT 0").to_arrow_table()
-            expected = schema.arrow_fields
-            if arrow_fields(actual.schema) != expected:
+            if not schema.matches_arrow(actual.schema):
                 cursor.execute(f"DROP TABLE {table}")
-                raise TypeError(f"query result {actual.schema} does not match {expected}")
+                raise TypeError(
+                    f"query result {actual.schema} does not match {schema.arrow_fields}"
+                )
             if row_count > self._max_query_rows:
                 cursor.execute(f"DROP TABLE {table}")
                 raise QueryExecutionError(
@@ -148,7 +147,7 @@ class DuckDBResultStore:
             try:
                 statements = self._connection.cursor().extract_statements(sql)
             except duckdb.Error as exc:
-                raise QueryValidationError(_brief(str(exc))) from exc
+                raise QueryValidationError(self._brief(str(exc))) from exc
             return tuple(statement.type.name for statement in statements)
 
     def read_tables(self, sql: str) -> frozenset[str]:
@@ -167,7 +166,7 @@ class DuckDBResultStore:
                 strict=True,
             )
         )
-        return frozenset(_scanned_tables(json.loads(by_kind["logical_plan"])))
+        return frozenset(self._scanned_tables(json.loads(by_kind["logical_plan"])))
 
     def describe(self, handle: Handle) -> StoredResult:
         with self._lock:
@@ -208,12 +207,13 @@ class DuckDBResultStore:
                 f"query exceeded the {self._timeout:g} s time limit and was stopped"
             ) from exc
         except duckdb.Error as exc:
-            raise QueryExecutionError(_brief(str(exc))) from exc
+            raise QueryExecutionError(self._brief(str(exc))) from exc
         finally:
             timer.cancel()
 
     def _next_handle(self) -> Handle:
-        return handle_for(len(self._results) + 1)
+        # Handles are r1, r2, ... in creation order.
+        return f"r{len(self._results) + 1}"
 
     def _record(
         self, handle: Handle, schema: TableSchema, lineage: Lineage, row_count: int
@@ -230,22 +230,39 @@ class DuckDBResultStore:
             raise UnknownHandleError(f"unknown handle '{handle}'; available handles: {available}")
         return result
 
+    @staticmethod
+    def _connect_locked(*settings: str) -> duckdb.DuckDBPyConnection:
+        """An in-memory connection without file, network or extension access.
 
-def _scanned_tables(node: object) -> Iterator[str]:
-    """Names of the tables a plan scans, e.g. r1 from memory.main.r1."""
-    if isinstance(node, dict):
-        info = node.get("extra_info")
-        if isinstance(info, dict) and isinstance(info.get("Table"), str):
-            yield info["Table"].rsplit(".", 1)[-1]
-        for value in node.values():
-            yield from _scanned_tables(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _scanned_tables(value)
+        The given settings run before `lock_configuration`, after which no setting can change.
+        """
+        connection = duckdb.connect(":memory:")
+        for statement in (
+            "SET enable_external_access = false",
+            "SET autoinstall_known_extensions = false",
+            "SET autoload_known_extensions = false",
+            *settings,
+            "SET lock_configuration = true",
+        ):
+            connection.execute(statement)
+        return connection
 
+    @classmethod
+    def _scanned_tables(cls, node: object) -> Iterator[str]:
+        """Names of the tables a plan scans, e.g. r1 from memory.main.r1."""
+        if isinstance(node, dict):
+            info = node.get("extra_info")
+            if isinstance(info, dict) and isinstance(info.get("Table"), str):
+                yield info["Table"].rsplit(".", 1)[-1]
+            for value in node.values():
+                yield from cls._scanned_tables(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from cls._scanned_tables(value)
 
-def _brief(message: str) -> str:
-    lines = [line for line in message.splitlines() if line.strip()]
-    if len(lines) > MAX_ERROR_LINES:
-        lines = [*lines[:MAX_ERROR_LINES], "..."]
-    return "\n".join(lines)
+    @staticmethod
+    def _brief(message: str) -> str:
+        lines = [line for line in message.splitlines() if line.strip()]
+        if len(lines) > MAX_ERROR_LINES:
+            lines = [*lines[:MAX_ERROR_LINES], "..."]
+        return "\n".join(lines)

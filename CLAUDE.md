@@ -30,6 +30,7 @@ Nie commitujemy bez prośby użytkownika.
 Obowiązują zasady z [`docs/standards/`](docs/standards/README.md). Najważniejsze:
 
 - Kod obiektowy: klasy z jedną odpowiedzialnością, zależności wstrzykiwane przez konstruktor, interfejsy jako `typing.Protocol`.
+- Bez luźnych funkcji na poziomie modułu: zachowanie to metoda klasy, która jest właścicielem pojęcia (metoda prywatna, `classmethod` jako fabryka, metoda modelu). Wyjątki tylko z komentarzem `# module-level: <powód>` ([`python-czysty-kod.md`](docs/standards/python-czysty-kod.md), sekcja 2). Hook po edycji pliku w `src/` zgłasza nowe funkcje modułowe bez tego komentarza.
 - Czysty kod i DRY: małe funkcje, czytelne nazwy, brak duplikacji logiki, pełne type hints.
 - Modele danych i DTO na granicach warstw: Pydantic (niemutowalne, `frozen=True`, tam gdzie to możliwe).
 - Wzorce projektowe tylko tam, gdzie rozwiązują konkretny problem. Katalog wzorców dla tego projektu: [`docs/standards/wzorce-projektowe.md`](docs/standards/wzorce-projektowe.md).

@@ -1,27 +1,17 @@
 """Result tables stored under handles, their lineage, and what the model sees of them."""
 
 from dataclasses import dataclass
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Annotated, Literal, NamedTuple
 
 import pyarrow as pa
 from pydantic import BaseModel, Field, JsonValue
 
-from data_concierge.core.types import ColumnRole, ColumnType, TableSchema, arrow_fields
+from data_concierge.core.types import ColumnRole, ColumnType, TableSchema
 
 # Handles are r1, r2, ... in creation order.
 type Handle = str
 type JsonScalar = str | int | bool | None
 type Rows = tuple[tuple[JsonScalar, ...], ...]
-
-
-def handle_for(number: int) -> Handle:
-    return f"r{number}"
-
-
-def handle_number(handle: Handle) -> int:
-    return int(handle[1:])
 
 
 class DescribedColumn(NamedTuple):
@@ -67,10 +57,11 @@ class ResultTable:
     lineage: Lineage
 
     def __post_init__(self) -> None:
-        expected = self.schema.arrow_fields
-        actual = arrow_fields(self.data.schema)
-        if actual != expected:
-            raise ValueError(f"arrow columns {actual} do not match the schema {expected}")
+        if not self.schema.matches_arrow(self.data.schema):
+            raise ValueError(
+                f"arrow columns {self.data.schema} do not match the schema "
+                f"{self.schema.arrow_fields}"
+            )
 
 
 class StoredResult(BaseModel, frozen=True):
@@ -80,6 +71,13 @@ class StoredResult(BaseModel, frozen=True):
     table_schema: TableSchema
     lineage: Lineage
     row_count: int
+
+    @property
+    def column_infos(self) -> tuple[ColumnInfo, ...]:
+        return tuple(
+            ColumnInfo(name=column.name, type=column.type, role=column.role)
+            for column in self.table_schema.columns
+        )
 
 
 class ColumnInfo(BaseModel, frozen=True):
@@ -116,15 +114,3 @@ class ExportedTable(BaseModel, frozen=True):
     rows: Rows
     row_count: int
     truncated: bool
-
-
-def to_json_scalar(value: object) -> JsonScalar:
-    """Converts one Arrow value to JSON without passing decimals through float."""
-    if value is None or isinstance(value, bool | int | str):
-        return value
-    if isinstance(value, datetime | date):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        # format(..., "f") keeps the scale and never switches to exponent notation.
-        return format(value, "f")
-    raise TypeError(f"unsupported value type {type(value).__name__}")

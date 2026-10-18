@@ -42,7 +42,11 @@ _ARROW_TYPES: dict[ColumnKind, pa.DataType] = {
 
 
 class ColumnType(BaseModel, frozen=True):
-    """Catalog column type; `decimal` carries precision and scale, other kinds carry neither."""
+    """Catalog column type; `decimal` carries precision and scale, other kinds carry neither.
+
+    It also owns the mapping from SQL Server and DuckDB types to catalog types, so every
+    module compares and converts types through this one class.
+    """
 
     kind: ColumnKind
     precision: int | None = None
@@ -68,7 +72,7 @@ class ColumnType(BaseModel, frozen=True):
             return self
         if self.precision is None or self.scale is None:
             raise ValueError("type 'decimal' needs precision and scale")
-        bounds_error = _decimal_bounds_error(self.precision, self.scale)
+        bounds_error = self._decimal_bounds_error(self.precision, self.scale)
         if bounds_error is not None:
             raise ValueError(f"{self} {bounds_error}")
         return self
@@ -84,7 +88,7 @@ class ColumnType(BaseModel, frozen=True):
     @classmethod
     def parse(cls, text: str) -> ColumnType:
         """Parses a catalog type such as `int` or `decimal(19,4)`."""
-        name, args = _split_type(text)
+        name, args = cls._split_type(text)
         try:
             kind = ColumnKind(name)
         except ValueError:
@@ -92,10 +96,36 @@ class ColumnType(BaseModel, frozen=True):
                 f"unknown column type '{text}'; expected one of: {', '.join(ColumnKind)}"
             ) from None
         if kind is ColumnKind.DECIMAL:
-            return _parse_decimal(text, args)
+            return cls._parse_decimal(text, args)
         if args is not None:
             raise CatalogError(f"column type '{text}' takes no arguments")
         return cls(kind=kind)
+
+    @classmethod
+    def from_sql_server(cls, type_name: str) -> ColumnType:
+        """Maps a SQL Server type such as `nvarchar(50)` or `money` to its catalog equivalent."""
+        name, args = cls._split_type(type_name)
+        if name in _SQL_SERVER_DECIMAL_TYPES:
+            return cls._parse_decimal(type_name, args)
+        column_type = _SQL_SERVER_FIXED_TYPES.get(name)
+        if column_type is None:
+            raise CatalogError(f"SQL Server type '{type_name}' has no catalog equivalent")
+        return column_type
+
+    @classmethod
+    def from_duckdb(cls, type_name: str) -> ColumnType:
+        """Maps a DuckDB result type such as `DECIMAL(38,4)` or `HUGEINT` to its catalog
+        equivalent.
+
+        Integer types other than BIGINT map to `int`; the query service casts them to BIGINT.
+        """
+        column_type = _DUCKDB_FIXED_TYPES.get(type_name)
+        if column_type is not None:
+            return column_type
+        decimal = _DUCKDB_DECIMAL_PATTERN.fullmatch(type_name)
+        if decimal is not None:
+            return cls.decimal(int(decimal.group(1)), int(decimal.group(2)))
+        raise QueryValidationError(f"DuckDB type '{type_name}' has no catalog equivalent")
 
     @property
     def is_numeric(self) -> bool:
@@ -116,30 +146,30 @@ class ColumnType(BaseModel, frozen=True):
             return f"decimal({self.precision},{self.scale})"
         return self.kind.value
 
+    @staticmethod
+    def _split_type(text: str) -> tuple[str, list[str] | None]:
+        """Splits `name(a, b)` into its lowercase name and stripped arguments."""
+        match = _TYPE_PATTERN.match(re.sub(r"\s+", "", text).lower())
+        if match is None:
+            raise CatalogError(f"cannot parse type '{text}'")
+        args = match.group("args")
+        return match.group("name"), None if args is None else args.split(",")
 
-def _split_type(text: str) -> tuple[str, list[str] | None]:
-    """Splits `name(a, b)` into its lowercase name and stripped arguments."""
-    match = _TYPE_PATTERN.match(re.sub(r"\s+", "", text).lower())
-    if match is None:
-        raise CatalogError(f"cannot parse type '{text}'")
-    args = match.group("args")
-    return match.group("name"), None if args is None else args.split(",")
+    @staticmethod
+    def _decimal_bounds_error(precision: int, scale: int) -> str | None:
+        if 1 <= precision <= MAX_DECIMAL_PRECISION and 0 <= scale <= precision:
+            return None
+        return f"needs 1 <= precision <= {MAX_DECIMAL_PRECISION} and 0 <= scale <= precision"
 
-
-def _decimal_bounds_error(precision: int, scale: int) -> str | None:
-    if 1 <= precision <= MAX_DECIMAL_PRECISION and 0 <= scale <= precision:
-        return None
-    return f"needs 1 <= precision <= {MAX_DECIMAL_PRECISION} and 0 <= scale <= precision"
-
-
-def _parse_decimal(text: str, args: list[str] | None) -> ColumnType:
-    if args is None or len(args) != 2 or not all(arg.isdecimal() for arg in args):
-        raise CatalogError(f"type '{text}' must have the form decimal(precision,scale)")
-    precision, scale = int(args[0]), int(args[1])
-    bounds_error = _decimal_bounds_error(precision, scale)
-    if bounds_error is not None:
-        raise CatalogError(f"invalid type '{text}': {bounds_error}")
-    return ColumnType.decimal(precision, scale)
+    @classmethod
+    def _parse_decimal(cls, text: str, args: list[str] | None) -> ColumnType:
+        if args is None or len(args) != 2 or not all(arg.isdecimal() for arg in args):
+            raise CatalogError(f"type '{text}' must have the form decimal(precision,scale)")
+        precision, scale = int(args[0]), int(args[1])
+        bounds_error = cls._decimal_bounds_error(precision, scale)
+        if bounds_error is not None:
+            raise CatalogError(f"invalid type '{text}': {bounds_error}")
+        return cls.decimal(precision, scale)
 
 
 _SQL_SERVER_FIXED_TYPES: dict[str, ColumnType] = {
@@ -161,18 +191,6 @@ _SQL_SERVER_FIXED_TYPES: dict[str, ColumnType] = {
 
 # numeric is a synonym of decimal in SQL Server (e.g. SalesOrderDetail.LineTotal is numeric(38,6)).
 _SQL_SERVER_DECIMAL_TYPES = frozenset({"decimal", "numeric"})
-
-
-def parse_sql_server_type(type_name: str) -> ColumnType:
-    """Maps a SQL Server type such as `nvarchar(50)` or `money` to its catalog equivalent."""
-    name, args = _split_type(type_name)
-    if name in _SQL_SERVER_DECIMAL_TYPES:
-        return _parse_decimal(type_name, args)
-    column_type = _SQL_SERVER_FIXED_TYPES.get(name)
-    if column_type is None:
-        raise CatalogError(f"SQL Server type '{type_name}' has no catalog equivalent")
-    return column_type
-
 
 DUCKDB_INTEGER_TYPES = frozenset(
     {
@@ -198,20 +216,6 @@ _DUCKDB_FIXED_TYPES: dict[str, ColumnType] = {
 _DUCKDB_DECIMAL_PATTERN = re.compile(r"DECIMAL\((\d+),(\d+)\)")
 
 
-def parse_duckdb_type(type_name: str) -> ColumnType:
-    """Maps a DuckDB result type such as `DECIMAL(38,4)` or `HUGEINT` to its catalog equivalent.
-
-    Integer types other than BIGINT map to `int`; the query normalizer casts them to BIGINT.
-    """
-    column_type = _DUCKDB_FIXED_TYPES.get(type_name)
-    if column_type is not None:
-        return column_type
-    decimal = _DUCKDB_DECIMAL_PATTERN.fullmatch(type_name)
-    if decimal is not None:
-        return ColumnType.decimal(int(decimal.group(1)), int(decimal.group(2)))
-    raise QueryValidationError(f"DuckDB type '{type_name}' has no catalog equivalent")
-
-
 class Column(BaseModel, frozen=True):
     name: str
     type: ColumnType
@@ -228,10 +232,16 @@ class TableSchema(BaseModel, frozen=True):
 
     @model_validator(mode="after")
     def _check_unique_names(self) -> Self:
-        clashes = case_insensitive_duplicates(self.names)
+        clashes = self.case_insensitive_duplicates(self.names)
         if clashes:
             raise ValueError(f"duplicate column names (case-insensitive): {', '.join(clashes)}")
         return self
+
+    @staticmethod
+    def case_insensitive_duplicates(names: Sequence[str]) -> list[str]:
+        """Names that clash with another name when case is ignored, in their original order."""
+        counts = Counter(name.casefold() for name in names)
+        return [name for name in names if counts[name.casefold()] > 1]
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -242,13 +252,6 @@ class TableSchema(BaseModel, frozen=True):
         """Names and Arrow types an Arrow table must have to hold data of this schema."""
         return [(column.name, column.type.arrow_type) for column in self.columns]
 
-
-def case_insensitive_duplicates(names: Sequence[str]) -> list[str]:
-    """Names that clash with another name when case is ignored, in their original order."""
-    counts = Counter(name.casefold() for name in names)
-    return [name for name in names if counts[name.casefold()] > 1]
-
-
-def arrow_fields(schema: pa.Schema) -> list[tuple[str, pa.DataType]]:
-    """Names and types of an Arrow schema, comparable with TableSchema.arrow_fields."""
-    return [(field.name, field.type) for field in schema]
+    def matches_arrow(self, schema: pa.Schema) -> bool:
+        """True when an Arrow schema has exactly these column names and types, in order."""
+        return [(field.name, field.type) for field in schema] == self.arrow_fields

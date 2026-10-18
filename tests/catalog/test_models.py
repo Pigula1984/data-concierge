@@ -1,19 +1,6 @@
 """Checks on the repository's own catalog file, catalog/agent-procedures.yaml."""
 
-from pathlib import Path
-
-import pytest
-
 from data_concierge.catalog.models import Catalog
-from data_concierge.catalog.repository import YamlCatalogRepository
-from data_concierge.core.settings import Settings
-
-CATALOG_FILE = Path(__file__).parents[2] / Settings.model_fields["catalog_path"].default
-
-
-@pytest.fixture(scope="module")
-def catalog() -> Catalog:
-    return YamlCatalogRepository(CATALOG_FILE).load()
 
 
 def test_catalog_describes_every_read_procedure(catalog: Catalog) -> None:
