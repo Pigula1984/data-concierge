@@ -1,10 +1,11 @@
-"""Shared pytest configuration: tests never call a real model by default.
+"""Shared pytest configuration: only tests marked `eval` call a real model.
 
 Integration fixtures connect to the local SQL Server deployed with db/deploy.ps1 and read the
 connection settings from `.env`; only tests marked `integration` request them.
 """
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,16 @@ os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 models.ALLOW_MODEL_REQUESTS = False
 
 CATALOG_PATH = Path(__file__).parents[1] / Settings.model_fields["catalog_path"].default
+
+
+@pytest.fixture(autouse=True)
+def allow_model_requests_for_eval(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Only tests marked `eval` may call a real model."""
+    if request.node.get_closest_marker("eval") is None:
+        yield
+        return
+    with models.override_allow_model_requests(True):
+        yield
 
 
 @pytest.fixture(scope="session")
