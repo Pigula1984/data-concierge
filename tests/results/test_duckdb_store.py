@@ -2,12 +2,14 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pytest
 
 from data_concierge.core.errors import (
     QueryExecutionError,
     QueryTimeoutError,
+    ResultStoreError,
     UnknownHandleError,
 )
 from data_concierge.core.types import Column, ColumnRole, ColumnType, TableSchema
@@ -124,3 +126,26 @@ def test_result_table_rejects_arrow_types_that_differ_from_the_schema() -> None:
 
     with pytest.raises(ValueError, match="do not match the schema"):
         ResultTable(data=pa.table({"Value": [1.5]}), schema=schema, lineage=lineage)
+
+
+class BrokenCursor:
+    """A cursor of a connection DuckDB has invalidated after an internal error."""
+
+    def __init__(self, error: duckdb.Error) -> None:
+        self._error = error
+
+    def execute(self, sql: str, params: list[object]) -> None:
+        raise self._error
+
+    def interrupt(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    "error", [duckdb.InternalException("assertion failed"), duckdb.FatalException("invalidated")]
+)
+def test_engine_failure_is_not_a_query_error_the_model_could_fix(error: duckdb.Error) -> None:
+    store = DuckDBResultStore()
+
+    with pytest.raises(ResultStoreError, match="failed internally"):
+        store._execute(BrokenCursor(error), "SELECT 1", ())  # type: ignore[arg-type]

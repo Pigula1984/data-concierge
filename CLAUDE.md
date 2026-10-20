@@ -21,7 +21,9 @@ Pracujemy skillami z pluginu `compound-engineering` (włączony w `.claude/setti
 5. `ce-commit` / `ce-commit-push-pr`: commit, ewentualnie PR
 6. `ce-compound`: zapis nieoczywistej wiedzy z rozwiązanego problemu → `docs/solutions/`
 
-Pomocniczo: `ce-debug` (błędy), `ce-ideate` (pomysły), `ce-doc-review` (przegląd planów i dokumentów), `ce-explain` (wyjaśnienia). Katalogiem bazowym artefaktów CE jest `docs/` (brak `.compound-engineering/config.yaml`).
+Pomocniczo: `ce-debug` (błędy), `ce-ideate` (pomysły), `ce-doc-review` (przegląd planów i dokumentów), `ce-explain` (wyjaśnienia). Katalogiem bazowym artefaktów CE jest `docs/` (`.compound-engineering/config.yaml` nie ustawia `docs_root`).
+
+Pracujemy tylko na modelach Anthropic. `ce-code-review` nie wysyła kodu do modeli innych dostawców (`cross_model_review_mode: off` w `.compound-engineering/config.yaml`), a soczewkę adwersarialną pokrywa lokalny recenzent.
 
 Nie commitujemy bez prośby użytkownika.
 
