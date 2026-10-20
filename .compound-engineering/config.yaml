@@ -1,0 +1,3 @@
+# Compound Engineering settings for this repository.
+# Only Anthropic models: ce-code-review runs no cross-model peer (in-process adversarial reviewer instead).
+cross_model_review_mode: off
