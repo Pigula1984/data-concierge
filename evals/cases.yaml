@@ -1,0 +1,655 @@
+# Evaluation set (plan U18, architecture section 13): prompts run through ask() on the real
+# model and database. Each case names the expected status, the procedure calls with their model
+# arguments (matched as a subset; unlisted arguments are not checked) and, for an `ok` answer,
+# a reference query run in SQL Server. Results are compared by values, not column names.
+# `today` defaults to 2025-07-01 (data covers 2022-05-30 to 2025-06-29).
+# Run: uv run pytest -m eval tests/evals
+
+# --- Lists with a filter ---------------------------------------------------------------------
+
+- id: lista-berlin
+  group: listy
+  prompt: daj mi listę klientów z miejscowości Berlin
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_list
+        args: {city: Berlin, country_region_code: null, customer_type: null}
+    result:
+      rule: contains
+      sql: |
+        SELECT DISTINCT v.CustomerName
+        FROM api.vCustomer AS v
+        JOIN Person.BusinessEntityAddress AS bea ON bea.BusinessEntityID = v.BusinessEntityID
+        JOIN Person.Address AS a ON a.AddressID = bea.AddressID
+        WHERE a.City = N'Berlin'
+
+- id: sklepy-niemcy
+  group: listy
+  prompt: sklepy z Niemiec
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_list
+        args: {city: null, country_region_code: DE, customer_type: store}
+    result:
+      rule: contains
+      sql: |
+        SELECT DISTINCT v.CustomerName
+        FROM api.vCustomer AS v
+        JOIN Person.BusinessEntityAddress AS bea ON bea.BusinessEntityID = v.BusinessEntityID
+        JOIN Person.Address AS a ON a.AddressID = bea.AddressID
+        JOIN Person.StateProvince AS sp ON sp.StateProvinceID = a.StateProvinceID
+        WHERE sp.CountryRegionCode = 'DE' AND v.CustomerType = 'store'
+
+- id: osoby-paryz
+  group: listy
+  prompt: osoby prywatne z Paryża
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_list
+        args: {city: Paris, customer_type: individual}
+    result:
+      rule: contains
+      sql: |
+        SELECT DISTINCT v.CustomerName
+        FROM api.vCustomer AS v
+        JOIN Person.BusinessEntityAddress AS bea ON bea.BusinessEntityID = v.BusinessEntityID
+        JOIN Person.Address AS a ON a.AddressID = bea.AddressID
+        WHERE a.City = N'Paris' AND v.CustomerType = 'individual'
+
+- id: klient-mohamed-pal
+  group: listy
+  prompt: pokaż klienta Mohamed Pal
+  expect:
+    # Three customers share the name: listing them or asking which one are both right.
+    status: [ok, needs_clarification]
+    calls:
+      - tool: customer_search
+        args: {name: Mohamed Pal}
+    result:
+      columns: [CustomerID]
+      sql: |
+        SELECT CustomerID FROM api.vCustomer WHERE CustomerName LIKE N'%Mohamed Pal%'
+
+# --- Sales for a period ----------------------------------------------------------------------
+
+- id: sprzedaz-q1-2025
+  group: sprzedaż za okres
+  prompt: sprzedaż za I kwartał 2025
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2025-01-01, date_to: 2025-04-01, customer_id: null}
+    result:
+      # The total as one row, or a monthly breakdown with the total in the comment.
+      - rule: contains
+        sql: |
+          SELECT SUM(h.SubTotal) AS net_sales
+          FROM Sales.SalesOrderHeader AS h
+          JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+          WHERE h.OrderDate >= '2025-01-01' AND h.OrderDate < '2025-04-01'
+      - rule: contains
+        columns: [month, net_sales]
+        sql: |
+          SELECT DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1) AS month,
+                 SUM(h.SubTotal) AS net_sales
+          FROM Sales.SalesOrderHeader AS h
+          JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+          WHERE h.OrderDate >= '2025-01-01' AND h.OrderDate < '2025-04-01'
+          GROUP BY DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1)
+
+- id: sprzedaz-2023
+  group: sprzedaż za okres
+  prompt: Jaka była łączna sprzedaż netto w 2023 roku?
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2023-01-01, date_to: 2024-01-01}
+    result:
+      # The total as one row, or a monthly breakdown with the total in the comment.
+      - rule: contains
+        sql: |
+          SELECT SUM(h.SubTotal) AS net_sales
+          FROM Sales.SalesOrderHeader AS h
+          JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+          WHERE h.OrderDate >= '2023-01-01' AND h.OrderDate < '2024-01-01'
+      - rule: contains
+        columns: [month, net_sales]
+        sql: |
+          SELECT DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1) AS month,
+                 SUM(h.SubTotal) AS net_sales
+          FROM Sales.SalesOrderHeader AS h
+          JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+          WHERE h.OrderDate >= '2023-01-01' AND h.OrderDate < '2024-01-01'
+          GROUP BY DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1)
+
+- id: terytoria-2024
+  group: sprzedaż za okres
+  prompt: sprzedaż w 2024 według terytoriów
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    result:
+      sql: |
+        SELECT t.Name AS territory, SUM(h.SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        JOIN Sales.SalesTerritory AS t ON t.TerritoryID = h.TerritoryID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+        GROUP BY t.Name
+
+- id: top5-klientow-2024
+  group: sprzedaż za okres
+  prompt: 5 klientów z największą sprzedażą netto w 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    result:
+      ordered: true
+      sql: |
+        SELECT TOP 5 v.CustomerName, SUM(h.SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+        GROUP BY h.CustomerID, v.CustomerName
+        ORDER BY net_sales DESC, h.CustomerID
+
+- id: zamowienia-wg-typu-2024
+  group: sprzedaż za okres
+  prompt: ile zamówień w 2024 złożyli klienci indywidualni, a ile sklepy?
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    result:
+      # Only the counts: the model may name the customer types in Polish.
+      columns: [order_count]
+      sql: |
+        SELECT v.CustomerType, COUNT(*) AS order_count
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+        GROUP BY v.CustomerType
+
+- id: srednia-zamowienia-2024
+  group: sprzedaż za okres
+  # No result check: avg is cast to DECIMAL(38,6) in DuckDB and rounds differently in SQL Server.
+  prompt: jaka była średnia wartość zamówienia netto w 2024?
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+
+# --- Sales of one customer -------------------------------------------------------------------
+
+- id: p2-mohamed-pal
+  group: sprzedaż klienta
+  prompt: Pokaż sprzedaż klienta Mohamed Pal w 2024
+  followups: [Chodzi o klienta 12698]
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_search
+        args: {name: Mohamed Pal}
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: 12698}
+    result:
+      rule: contains
+      sql: |
+        SELECT SUM(SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader
+        WHERE CustomerID = 12698 AND OrderDate >= '2024-01-01' AND OrderDate < '2025-01-01'
+
+- id: zamowienia-aaron-wright
+  group: sprzedaż klienta
+  prompt: zamówienia klienta Aaron Wright w 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_search
+        args: {name: Aaron Wright}
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: 12650}
+    result:
+      columns: [SalesOrderID]
+      sql: |
+        SELECT SalesOrderID
+        FROM Sales.SalesOrderHeader
+        WHERE CustomerID = 12650 AND OrderDate >= '2024-01-01' AND OrderDate < '2025-01-01'
+
+- id: suma-aaron-wright
+  group: sprzedaż klienta
+  prompt: ile netto wydał klient Aaron Wright w 2024?
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_search
+        args: {name: Aaron Wright}
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: 12650}
+    result:
+      # The total as one row, or the customer's orders with the total in the comment.
+      - rule: contains
+        sql: |
+          SELECT SUM(SubTotal) AS net_sales
+          FROM Sales.SalesOrderHeader
+          WHERE CustomerID = 12650 AND OrderDate >= '2024-01-01' AND OrderDate < '2025-01-01'
+      - columns: [SalesOrderID, SubTotal]
+        sql: |
+          SELECT SalesOrderID, SubTotal
+          FROM Sales.SalesOrderHeader
+          WHERE CustomerID = 12650 AND OrderDate >= '2024-01-01' AND OrderDate < '2025-01-01'
+
+# --- Reports over time and pivots ------------------------------------------------------------
+
+- id: p3-raport-miesiace-2024
+  group: raporty i pivoty
+  prompt: raport sprzedaży po miesiącach za 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null}
+    result:
+      columns: [month, net_sales]
+      sql: |
+        SELECT DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1) AS month,
+               SUM(h.SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+        GROUP BY DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1)
+
+- id: kategorie-2024
+  group: raporty i pivoty
+  prompt: sprzedaż po kategoriach produktów w 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_line_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null, product_category_id: null}
+    result:
+      sql: |
+        SELECT pc.Name AS category, SUM(d.LineTotal) AS net_sales
+        FROM Sales.SalesOrderDetail AS d
+        JOIN Sales.SalesOrderHeader AS h ON h.SalesOrderID = d.SalesOrderID
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        JOIN Production.Product AS p ON p.ProductID = d.ProductID
+        JOIN Production.ProductSubcategory AS ps ON ps.ProductSubcategoryID = p.ProductSubcategoryID
+        JOIN Production.ProductCategory AS pc ON pc.ProductCategoryID = ps.ProductCategoryID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+        GROUP BY pc.Name
+
+- id: rowery-miesiace-2024
+  group: raporty i pivoty
+  prompt: sprzedaż rowerów po miesiącach w 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_line_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null, product_category_id: 1}
+    result:
+      columns: [month, net_sales]
+      sql: |
+        SELECT DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1) AS month,
+               SUM(d.LineTotal) AS net_sales
+        FROM Sales.SalesOrderDetail AS d
+        JOIN Sales.SalesOrderHeader AS h ON h.SalesOrderID = d.SalesOrderID
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        JOIN Production.Product AS p ON p.ProductID = d.ProductID
+        JOIN Production.ProductSubcategory AS ps ON ps.ProductSubcategoryID = p.ProductSubcategoryID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+          AND ps.ProductCategoryID = 1
+        GROUP BY DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1)
+
+- id: pivot-kwartaly-kategorie-2024
+  group: raporty i pivoty
+  prompt: tabela sprzedaży w 2024 - kwartały w wierszach, kategorie produktów w kolumnach
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_line_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    result:
+      # The quarter label is the model's choice, so only the four category totals are compared.
+      columns: [accessories, bikes, clothing, components]
+      sql: |
+        SELECT DATEPART(quarter, h.OrderDate) AS quarter,
+               SUM(CASE WHEN pc.Name = N'Accessories' THEN d.LineTotal END) AS accessories,
+               SUM(CASE WHEN pc.Name = N'Bikes' THEN d.LineTotal END) AS bikes,
+               SUM(CASE WHEN pc.Name = N'Clothing' THEN d.LineTotal END) AS clothing,
+               SUM(CASE WHEN pc.Name = N'Components' THEN d.LineTotal END) AS components
+        FROM Sales.SalesOrderDetail AS d
+        JOIN Sales.SalesOrderHeader AS h ON h.SalesOrderID = d.SalesOrderID
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        JOIN Production.Product AS p ON p.ProductID = d.ProductID
+        JOIN Production.ProductSubcategory AS ps ON ps.ProductSubcategoryID = p.ProductSubcategoryID
+        JOIN Production.ProductCategory AS pc ON pc.ProductCategoryID = ps.ProductCategoryID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+        GROUP BY DATEPART(quarter, h.OrderDate)
+
+- id: sprzedaz-po-latach
+  group: raporty i pivoty
+  prompt: sprzedaż netto po latach za cały okres danych
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+    result:
+      # Only the totals: the year may be a number or a date.
+      columns: [net_sales]
+      sql: |
+        SELECT YEAR(h.OrderDate) AS year, SUM(h.SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        GROUP BY YEAR(h.OrderDate)
+
+# --- Joining two sets (P5) -------------------------------------------------------------------
+
+- id: p5-berlin-miesiace-2024
+  group: łączenie zbiorów
+  prompt: Sprzedaż po miesiącach w 2024 dla klientów z Berlina
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_list
+        args: {city: Berlin}
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    result:
+      rule: contains
+      columns: [month, net_sales]
+      sql: |
+        SELECT DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1) AS month,
+               SUM(h.SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+          AND h.CustomerID IN (
+            SELECT c.CustomerID
+            FROM api.vCustomer AS c
+            JOIN Person.BusinessEntityAddress AS bea ON bea.BusinessEntityID = c.BusinessEntityID
+            JOIN Person.Address AS a ON a.AddressID = bea.AddressID
+            WHERE a.City = N'Berlin')
+        GROUP BY DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1)
+
+- id: sklepy-berlin-rowery-2024
+  group: łączenie zbiorów
+  prompt: Klienci typu sklep z Berlina, którzy w 2024 kupili rowery
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_list
+        args: {city: Berlin}
+      - tool: sales_order_line_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    result:
+      # Exactly these stores: the store and bike filters are done in query.
+      columns: [CustomerName]
+      sql: |
+        SELECT DISTINCT v.CustomerName
+        FROM api.vCustomer AS v
+        WHERE v.CustomerType = 'store'
+          AND v.CustomerID IN (
+            SELECT c.CustomerID
+            FROM api.vCustomer AS c
+            JOIN Person.BusinessEntityAddress AS bea ON bea.BusinessEntityID = c.BusinessEntityID
+            JOIN Person.Address AS a ON a.AddressID = bea.AddressID
+            WHERE a.City = N'Berlin')
+          AND v.CustomerID IN (
+            SELECT h.CustomerID
+            FROM Sales.SalesOrderDetail AS d
+            JOIN Sales.SalesOrderHeader AS h ON h.SalesOrderID = d.SalesOrderID
+            JOIN Production.Product AS p ON p.ProductID = d.ProductID
+            JOIN Production.ProductSubcategory AS ps
+              ON ps.ProductSubcategoryID = p.ProductSubcategoryID
+            WHERE ps.ProductCategoryID = 1
+              AND h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01')
+
+- id: klienci-berlin-sprzedaz-2024
+  group: łączenie zbiorów
+  prompt: którzy klienci z Berlina kupowali w 2024 i za ile netto?
+  expect:
+    status: [ok]
+    calls:
+      - tool: customer_list
+        args: {city: Berlin}
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    result:
+      columns: [CustomerName, net_sales]
+      sql: |
+        SELECT h.CustomerID, v.CustomerName, SUM(h.SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+          AND h.CustomerID IN (
+            SELECT c.CustomerID
+            FROM api.vCustomer AS c
+            JOIN Person.BusinessEntityAddress AS bea ON bea.BusinessEntityID = c.BusinessEntityID
+            JOIN Person.Address AS a ON a.AddressID = bea.AddressID
+            WHERE a.City = N'Berlin')
+        GROUP BY h.CustomerID, v.CustomerName
+
+# --- Other domains ---------------------------------------------------------------------------
+
+- id: p4-bom-hl-mountain-frame
+  group: inne dziedziny
+  prompt: pokaż strukturę materiałową produktu HL Mountain Frame
+  followups: ["Czarny, rozmiar 38"]
+  expect:
+    status: [ok]
+    calls:
+      - tool: product_search
+        args: {name: HL Mountain Frame}
+      - tool: get_bill_of_materials
+        args: {start_product_id: 747}
+    result:
+      rule: contains
+      columns: [ComponentDesc]
+      sql: |
+        SET NOCOUNT ON;
+        EXEC dbo.uspGetBillOfMaterials @StartProductID = 747, @CheckDate = '2025-07-01'
+
+- id: gdzie-uzyto-hl-fork
+  group: inne dziedziny
+  prompt: W jakich produktach użyto komponentu HL Fork?
+  expect:
+    status: [ok]
+    calls:
+      - tool: product_search
+        args: {name: HL Fork}
+      - tool: get_where_used_product
+        args: {start_product_id: 804}
+    result:
+      rule: contains
+      columns: [ComponentDesc]
+      sql: |
+        SET NOCOUNT ON;
+        EXEC dbo.uspGetWhereUsedProductID @StartProductID = 804, @CheckDate = '2025-07-01'
+
+- id: przelozeni-pracownika-4
+  group: inne dziedziny
+  prompt: Pokaż łańcuch przełożonych pracownika o id 4
+  expect:
+    status: [ok]
+    calls:
+      - tool: get_employee_managers
+        args: {employee_id: 4}
+    result:
+      rule: contains
+      columns: [ManagerFirstName, ManagerLastName]
+      sql: |
+        SET NOCOUNT ON;
+        EXEC dbo.uspGetEmployeeManagers @BusinessEntityID = 4
+
+- id: podwladni-kierownika-2
+  group: inne dziedziny
+  prompt: Wymień wszystkich podwładnych kierownika o id 2
+  expect:
+    status: [ok]
+    calls:
+      - tool: get_manager_employees
+        args: {manager_id: 2}
+    result:
+      rule: contains
+      columns: [FirstName, LastName]
+      sql: |
+        SET NOCOUNT ON;
+        EXEC dbo.uspGetManagerEmployees @BusinessEntityID = 2
+
+# --- Hard cases (architecture, sections 8 and 13) --------------------------------------------
+
+- id: ostatni-kwartal-w-danych
+  group: trudne
+  prompt: Sprzedaż w ostatnim kwartale
+  today: 2025-04-15
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2025-01-01, date_to: 2025-04-01}
+    # The resolved period is shown to the user (plan U18).
+    assumptions:
+      - ["2025-01-01", "1 stycznia 2025", "01.01.2025", "I kwartał 2025", "Q1 2025"]
+      - ["2025-03-31", "31 marca 2025", "31.03.2025", "2025-04-01", "I kwartał 2025", "Q1 2025"]
+    result:
+      - rule: contains
+        sql: |
+          SELECT SUM(h.SubTotal) AS net_sales
+          FROM Sales.SalesOrderHeader AS h
+          JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+          WHERE h.OrderDate >= '2025-01-01' AND h.OrderDate < '2025-04-01'
+      - rule: contains
+        columns: [month, net_sales]
+        sql: |
+          SELECT DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1) AS month,
+                 SUM(h.SubTotal) AS net_sales
+          FROM Sales.SalesOrderHeader AS h
+          JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+          WHERE h.OrderDate >= '2025-01-01' AND h.OrderDate < '2025-04-01'
+          GROUP BY DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1)
+
+- id: ostatni-kwartal-poza-danymi
+  group: trudne
+  prompt: Sprzedaż w ostatnim kwartale
+  today: 2026-10-20
+  expect:
+    status: [no_data]
+
+- id: rok-poza-danymi
+  group: trudne
+  prompt: Pokaż sprzedaż za 2030 rok
+  expect:
+    status: [no_data]
+
+- id: sprzedaz-bez-miary-marzec-2024
+  group: trudne
+  prompt: ile wyniosła sprzedaż w marcu 2024?
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-03-01, date_to: 2024-04-01}
+    result:
+      # "Sprzedaż" without a measure means SubTotal (default_for in the catalog).
+      rule: contains
+      sql: |
+        SELECT SUM(h.SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        WHERE h.OrderDate >= '2024-03-01' AND h.OrderDate < '2024-04-01'
+
+- id: sklepy-miesiace-2024
+  group: trudne
+  # A filter on a column the procedure has no parameter for: done in query.
+  prompt: sprzedaż do sklepów po miesiącach w 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    result:
+      rule: contains
+      columns: [month, net_sales]
+      sql: |
+        SELECT DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1) AS month,
+               SUM(h.SubTotal) AS net_sales
+        FROM Sales.SalesOrderHeader AS h
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        WHERE h.OrderDate >= '2024-01-01' AND h.OrderDate < '2025-01-01'
+          AND v.CustomerType = 'store'
+        GROUP BY DATEFROMPARTS(YEAR(h.OrderDate), MONTH(h.OrderDate), 1)
+
+- id: klient-niejednoznaczny
+  group: trudne
+  prompt: Sprzedaż klienta Mohamed Pal w 2024
+  expect:
+    status: [needs_clarification]
+    calls:
+      - tool: customer_search
+        args: {name: Mohamed Pal}
+
+- id: produkt-niejednoznaczny
+  group: trudne
+  prompt: Struktura materiałowa produktu HL Mountain Frame
+  expect:
+    status: [needs_clarification]
+    calls:
+      - tool: product_search
+        args: {name: HL Mountain Frame}
+
+- id: klient-nie-istnieje
+  group: trudne
+  prompt: Pokaż sprzedaż klienta Zzyzx Qwerty w 2024
+  expect:
+    status: [no_data]
+    calls:
+      - tool: customer_search
+        args: {name: Zzyzx Qwerty}
+
+- id: przelozony-bez-id
+  group: trudne
+  # No tool searches employees by name, so the model must ask for the id or decline.
+  prompt: Kto jest przełożonym Kena Sáncheza?
+  expect:
+    status: [needs_clarification, unsupported]
+
+- id: reklamacje
+  group: trudne
+  prompt: Pokaż klientów, którzy złożyli reklamację
+  expect:
+    status: [unsupported]
+
+- id: stan-magazynowy
+  group: trudne
+  prompt: Jaki jest stan magazynowy produktu HL Fork?
+  expect:
+    status: [unsupported]
+
+- id: obciety-wynik-produkty
+  group: trudne
+  # All order lines of the data range exceed max_rows, so a sum over one call would be partial.
+  # Asking to narrow, declining, or narrowing calls whose sums add up are all right.
+  prompt: Sprzedaż po produktach za cały okres danych
+  expect:
+    status: [needs_clarification, unsupported, ok]
+    result:
+      columns: [ProductName, net_sales]
+      sql: |
+        SELECT p.Name AS ProductName, SUM(d.LineTotal) AS net_sales
+        FROM Sales.SalesOrderDetail AS d
+        JOIN Sales.SalesOrderHeader AS h ON h.SalesOrderID = d.SalesOrderID
+        JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
+        JOIN Production.Product AS p ON p.ProductID = d.ProductID
+        GROUP BY p.Name

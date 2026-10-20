@@ -80,7 +80,7 @@ class CompositionRoot:
             settings,
             SqlServerMetadataRepository(client),
             SqlServerProcedureRepository(client),
-            cls._model(settings),
+            cls.configured_model(settings),
         )
 
     @classmethod
@@ -110,7 +110,7 @@ class CompositionRoot:
         return cls(AskService(agent, sessions, factory, today))
 
     @staticmethod
-    def _model(settings: Settings) -> Model:
+    def configured_model(settings: Settings) -> Model:
         """The `provider:model` from the settings (R15); the Anthropic key comes from the
         settings, because `.env` is not in the process environment the provider reads."""
         key = settings.anthropic_api_key

@@ -45,7 +45,7 @@ def test_configured_anthropic_model_gets_the_key_from_the_settings(
         update={"model": "anthropic:claude-sonnet-5-5", "anthropic_api_key": SecretStr("sk-test")}
     )
 
-    model = CompositionRoot._model(settings)
+    model = CompositionRoot.configured_model(settings)
 
     assert isinstance(model, AnthropicModel)
     assert model.model_name == "claude-sonnet-5-5"
@@ -56,7 +56,7 @@ def test_configured_anthropic_model_gets_the_key_from_the_settings(
 def test_model_comes_from_the_model_setting(agent_settings: Settings) -> None:
     settings = agent_settings.model_copy(update={"model": "test"})
 
-    assert isinstance(CompositionRoot._model(settings), TestModel)
+    assert isinstance(CompositionRoot.configured_model(settings), TestModel)
 
 
 def test_each_session_has_its_own_result_store(

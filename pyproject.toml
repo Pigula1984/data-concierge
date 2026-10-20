@@ -68,6 +68,8 @@ docstring-code-format = true
 testpaths = ["tests"]
 # importlib mode: tests mirror the package, so basenames like test_service.py repeat across modules
 addopts = ["--import-mode=importlib", "--strict-markers", "-m", "not integration and not eval"]
+# Helper modules of the evaluation set (cases, harness, report), imported by its tests.
+pythonpath = ["tests/evals"]
 markers = [
     "integration: needs a local SQL Server with the deployed database (db/deploy.ps1)",
     "eval: calls the real Claude API and needs an Anthropic key",
@@ -79,7 +81,7 @@ strict = true
 plugins = ["pydantic.mypy"]
 files = ["src", "tests"]
 # Test files without __init__.py repeat basenames (test_service.py, conftest.py) across modules.
-mypy_path = "src"
+mypy_path = "src,tests/evals"
 explicit_package_bases = true
 
 # pyarrow ships neither inline types nor py.typed; its API is typed as Any.
