@@ -506,7 +506,7 @@ Zaimplementowane w commicie `fe491d9` w wersji z walidatorem drzewa (architektur
   - `api.SalesOrder_List` za 2024 zwraca liczbę zamówień zgodną z zapytaniem kontrolnym na tabelach.
   - `api.SalesOrder_DataRange` zwraca 2022-05-30 i 2025-06-29.
   - `deploy.ps1` na instancji bez trybu mieszanego kończy się komunikatem o wymaganym trybie i nie tworzy loginu.
-  - Jako `agent_reader`: `EXEC` procedur z katalogu działa, a `SELECT` z `Sales.SalesOrderHeader` i `EXEC dbo.uspUpdateEmployeeLogin` kończą się odmową dostępu.
+  - Jako `agent_reader`: `EXEC` procedur z katalogu działa, a `SELECT` z `Sales.SalesOrderHeader` i `EXEC HumanResources.uspUpdateEmployeeLogin` kończą się odmową dostępu. *(poprawione 2026-10-20, wcześniej błędnie `dbo.uspUpdateEmployeeLogin`; procedura jest w schemacie `HumanResources`)*
   - Ponowne uruchomienie `deploy.ps1` kończy się sukcesem bez zmian.
 - **Verification:** testy integracyjne z U9 i U10 przechodzą na wdrożonej bazie.
 
