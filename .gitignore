@@ -14,3 +14,6 @@ dist/
 
 # Local configuration with secrets
 .env
+
+# Evaluation run archives (uv run pytest -m eval tests/evals)
+evals/runs/
