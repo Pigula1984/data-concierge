@@ -1,0 +1,234 @@
+"""AskService over real sessions: scripted model turns, real tools and DuckDB, fake SQL Server."""
+
+import logging
+from collections.abc import Callable
+from datetime import date
+from typing import Any, cast
+
+import pytest
+from pydantic_ai import Tool
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    UserPromptPart,
+)
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+from data_concierge.agent.deps import AgentDeps
+from data_concierge.agent.service import AgentService
+from data_concierge.api.service import AskService
+from data_concierge.api.sessions import InMemorySessionRepository
+from data_concierge.bootstrap import DuckDBSessionFactory
+from data_concierge.core.errors import ResultStoreError
+from data_concierge.core.settings import Settings
+from data_concierge.procedures.repository import ProcedureRepository
+from data_concierge.results.repository import DuckDBResultStore
+
+pytestmark = pytest.mark.anyio
+
+TODAY = date(2025, 4, 15)
+YEAR_2024 = {"date_from": "2024-01-01", "date_to": "2025-01-01"}
+MONTHLY_SQL = (
+    "SELECT CAST(date_trunc('month', \"OrderDate\") AS DATE) AS month, "
+    'sum("SubTotal") AS net_sales FROM r1 GROUP BY 1 ORDER BY month'
+)
+
+
+@pytest.fixture
+def ask_service(
+    agent_tools: tuple[Tool[AgentDeps], ...],
+    instructions: str,
+    agent_settings: Settings,
+    repository: ProcedureRepository,
+) -> Callable[[FunctionModel], AskService]:
+    def build(model: FunctionModel) -> AskService:
+        agent = AgentService(model, agent_tools, instructions, agent_settings)
+        factory = DuckDBSessionFactory(repository, agent_settings)
+        return AskService(agent, InMemorySessionRepository(), factory, today=lambda: TODAY)
+
+    return build
+
+
+def present(status: str = "ok", **fields: object) -> ToolCallPart:
+    return ToolCallPart("present_result", {"status": status, "message": "Gotowe.", **fields})
+
+
+def requests(model: FunctionModel) -> list[list[ModelMessage]]:
+    """Messages of every request the scripted model received (ScriptedModel.requests)."""
+    seen: list[list[ModelMessage]] = cast(Any, model.function).requests
+    return seen
+
+
+def user_prompts(messages: list[ModelMessage]) -> list[str]:
+    return [
+        str(part.content)
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart)
+    ]
+
+
+async def test_second_ask_continues_the_conversation_with_its_history_and_handles(
+    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        present(tables=[{"handle": "r1", "title": "Zamówienia 2024"}]),
+        ToolCallPart("query", {"sql": MONTHLY_SQL}),
+        present(tables=[{"handle": "r2", "title": "Sprzedaż po miesiącach"}]),
+    )
+    service = ask_service(model)
+
+    first = await service.ask("Zamówienia z 2024", user_id=7)
+    second = await service.ask("A teraz po miesiącach", user_id=7, session_id=first.session_id)
+
+    assert first.status == "ok"
+    assert second.status == "ok"
+    assert second.session_id == first.session_id
+    assert [table.handle for table in second.tables] == ["r2"]
+    assert [step.handle for step in second.provenance] == ["r1", "r2"]
+    # The first request of the second turn carries the whole first turn.
+    second_turn_start = requests(model)[2]
+    assert [prompt.split("\n")[0] for prompt in user_prompts(second_turn_start)] == [
+        "Zamówienia z 2024",
+        "A teraz po miesiącach",
+    ]
+
+
+async def test_ask_without_session_id_starts_a_new_conversation(
+    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    service = ask_service(scripted(present(), present()))
+
+    first = await service.ask("Pierwsza rozmowa", user_id=7)
+    second = await service.ask("Druga rozmowa", user_id=7)
+
+    assert first.session_id != second.session_id
+
+
+async def test_clarification_answer_continues_with_the_chosen_customer(
+    ask_service: Callable[[FunctionModel], AskService],
+    scripted: Callable[..., FunctionModel],
+    procedure_calls: list[tuple[str, dict[str, object]]],
+) -> None:
+    candidates = [
+        {"id": 12698, "description": "AW00012698, Germany"},
+        {"id": 20550, "description": "AW00020550, Germany"},
+    ]
+    service = ask_service(
+        scripted(
+            ToolCallPart("customer_search", {"name": "Mohamed Pal"}),
+            present(
+                "needs_clarification",
+                clarification={"question": "Którego klienta chodzi?", "candidates": candidates},
+            ),
+            ToolCallPart("sales_order_list", {**YEAR_2024, "customer_id": 12698}),
+            present(tables=[{"handle": "r2", "title": "Zamówienia klienta 12698"}]),
+        )
+    )
+
+    first = await service.ask("Sprzedaż klienta Mohamed Pal w 2024", user_id=7)
+    second = await service.ask("Ten z kontem AW00012698", user_id=7, session_id=first.session_id)
+
+    assert first.status == "needs_clarification"
+    assert first.clarification is not None
+    assert [candidate.id for candidate in first.clarification.candidates] == [12698, 20550]
+    assert second.status == "ok"
+    assert [name for name, _ in procedure_calls] == ["api.Customer_Search", "api.SalesOrder_List"]
+    assert procedure_calls[1][1]["CustomerID"] == 12698
+    assert [params["UserId"] for _, params in procedure_calls] == [7, 7]
+
+
+async def test_failure_in_the_agent_layer_gives_an_error_with_the_correlation_id(
+    ask_service: Callable[[FunctionModel], AskService],
+    scripted: Callable[..., FunctionModel],
+    fail_procedures: Callable[[Exception], None],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    model = scripted(ToolCallPart("sales_order_list", YEAR_2024), present())
+    service = ask_service(model)
+    fail_procedures(RuntimeError("driver crashed"))
+
+    with caplog.at_level(logging.ERROR, logger="data_concierge.api.service"):
+        failed = await service.ask("Zamówienia z 2024", user_id=7)
+
+    assert failed.status == "error"
+    assert failed.tables == ()
+    [record] = caplog.records
+    correlation_id = str(record.args[0]) if isinstance(record.args, tuple) else ""
+    assert correlation_id
+    assert correlation_id in failed.message
+    assert record.exc_info is not None
+    assert "driver crashed" in str(record.exc_info[1])
+
+    # The session continues from the history before the failed turn.
+    retried = await service.ask("Spróbuj jeszcze raz", user_id=7, session_id=failed.session_id)
+
+    assert retried.status == "ok"
+    assert user_prompts(requests(model)[-1])[0].startswith("Spróbuj jeszcze raz")
+
+
+async def test_unknown_session_is_not_continued_and_the_agent_is_not_called(
+    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(present())
+
+    response = await ask_service(model).ask("Dalej", user_id=7, session_id="no-such-session")
+
+    assert response.status == "error"
+    assert response.session_id == "no-such-session"
+    assert "wygasła" in response.message
+    assert requests(model) == []
+
+
+async def test_prompt_for_the_agent_carries_the_date_from_the_injected_clock(
+    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(present())
+
+    await ask_service(model).ask("Sprzedaż w ostatnim kwartale", user_id=7)
+
+    assert user_prompts(requests(model)[0]) == [
+        "Sprzedaż w ostatnim kwartale\n\nCurrent date: 2025-04-15"
+    ]
+
+
+async def test_broken_session_store_ends_the_turn_and_the_session(
+    ask_service: Callable[[FunctionModel], AskService],
+    scripted: Callable[..., FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ask_service(
+        scripted(
+            ToolCallPart("sales_order_list", YEAR_2024), ToolCallPart("query", {"sql": MONTHLY_SQL})
+        )
+    )
+
+    def broken(self: DuckDBResultStore, sql: str) -> None:
+        raise ResultStoreError("the session's DuckDB failed internally: invalidated")
+
+    monkeypatch.setattr(DuckDBResultStore, "describe_query", broken)
+
+    failed = await service.ask("Sprzedaż po miesiącach w 2024", user_id=7)
+    continued = await service.ask("Dalej", user_id=7, session_id=failed.session_id)
+
+    assert failed.status == "error"
+    assert "Identyfikator zgłoszenia" in failed.message
+    assert not service.has_session(failed.session_id)
+    assert "wygasła" in continued.message
+
+
+async def test_model_provider_error_gives_an_error_response(
+    ask_service: Callable[[FunctionModel], AskService],
+) -> None:
+    def overloaded(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(529, "claude-haiku-5-5", {"type": "overloaded_error"})
+
+    response = await ask_service(FunctionModel(overloaded)).ask("Raport", user_id=7)
+
+    assert response.status == "error"
+    assert "Identyfikator zgłoszenia" in response.message

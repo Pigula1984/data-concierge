@@ -3,6 +3,7 @@
 import json
 import threading
 from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import Protocol
 
 import duckdb
@@ -12,6 +13,7 @@ from data_concierge.core.errors import (
     QueryExecutionError,
     QueryTimeoutError,
     QueryValidationError,
+    ResultStoreError,
     UnknownHandleError,
 )
 from data_concierge.core.sql import quote_identifier
@@ -30,6 +32,9 @@ DEFAULT_QUERY_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_QUERY_ROWS = 100_000
 # DuckDB error texts can list dozens of candidate functions; the model needs the first lines.
 MAX_ERROR_LINES = 4
+# A bug or a broken state of the engine, not of the query: DuckDB invalidates the database,
+# so the session ends instead of the model being asked to fix its SQL (section 11.2).
+ENGINE_FAILURES = (duckdb.FatalException, duckdb.InternalException)
 
 
 class ResultStore(Protocol):
@@ -86,14 +91,15 @@ class DuckDBResultStore:
         with self._lock:
             handle = self._next_handle()
             incoming = f"_incoming_{handle}"
-            cursor = self._connection.cursor()
-            cursor.register(incoming, table.data)
-            try:
-                cursor.execute(
-                    f"CREATE TABLE {quote_identifier(handle)} AS SELECT * FROM {incoming}"
-                )
-            finally:
-                cursor.unregister(incoming)
+            with self._engine_guard():
+                cursor = self._connection.cursor()
+                cursor.register(incoming, table.data)
+                try:
+                    cursor.execute(
+                        f"CREATE TABLE {quote_identifier(handle)} AS SELECT * FROM {incoming}"
+                    )
+                finally:
+                    cursor.unregister(incoming)
             return self._record(handle, table.schema, table.lineage, table.data.num_rows)
 
     def materialize(self, sql: str, schema: TableSchema, lineage: Lineage) -> Handle:
@@ -115,19 +121,20 @@ class DuckDBResultStore:
             # CREATE TABLE AS returns one row with the number of rows it inserted.
             row_count = int(created.column(0)[0].as_py())
             # A fresh cursor: a timer firing as the query ends must not interrupt these checks.
-            cursor = self._connection.cursor()
-            actual = cursor.execute(f"SELECT * FROM {table} LIMIT 0").to_arrow_table()
-            if not schema.matches_arrow(actual.schema):
-                cursor.execute(f"DROP TABLE {table}")
-                raise TypeError(
-                    f"query result {actual.schema} does not match {schema.arrow_fields}"
-                )
-            if row_count > self._max_query_rows:
-                cursor.execute(f"DROP TABLE {table}")
-                raise QueryExecutionError(
-                    f"the query result has more than the limit of {self._max_query_rows} rows; "
-                    "aggregate the data or narrow the query"
-                )
+            with self._engine_guard():
+                cursor = self._connection.cursor()
+                actual = cursor.execute(f"SELECT * FROM {table} LIMIT 0").to_arrow_table()
+                if not schema.matches_arrow(actual.schema):
+                    cursor.execute(f"DROP TABLE {table}")
+                    raise TypeError(
+                        f"query result {actual.schema} does not match {schema.arrow_fields}"
+                    )
+                if row_count > self._max_query_rows:
+                    cursor.execute(f"DROP TABLE {table}")
+                    raise QueryExecutionError(
+                        f"the query result has more than the limit of {self._max_query_rows} "
+                        "rows; aggregate the data or narrow the query"
+                    )
             return self._record(handle, schema, lineage, row_count)
 
     def describe_query(self, sql: str) -> tuple[DescribedColumn, ...]:
@@ -146,6 +153,8 @@ class DuckDBResultStore:
         with self._lock:
             try:
                 statements = self._connection.cursor().extract_statements(sql)
+            except ENGINE_FAILURES as exc:
+                raise self._engine_failure(exc) from exc
             except duckdb.Error as exc:
                 raise QueryValidationError(self._brief(str(exc))) from exc
             return tuple(statement.type.name for statement in statements)
@@ -206,6 +215,8 @@ class DuckDBResultStore:
             raise QueryTimeoutError(
                 f"query exceeded the {self._timeout:g} s time limit and was stopped"
             ) from exc
+        except ENGINE_FAILURES as exc:
+            raise self._engine_failure(exc) from exc
         except duckdb.Error as exc:
             raise QueryExecutionError(self._brief(str(exc))) from exc
         finally:
@@ -259,6 +270,17 @@ class DuckDBResultStore:
         elif isinstance(node, list):
             for value in node:
                 yield from cls._scanned_tables(value)
+
+    @contextmanager
+    def _engine_guard(self) -> Iterator[None]:
+        try:
+            yield
+        except ENGINE_FAILURES as exc:
+            raise self._engine_failure(exc) from exc
+
+    @staticmethod
+    def _engine_failure(exc: duckdb.Error) -> ResultStoreError:
+        return ResultStoreError(f"the session's DuckDB failed internally: {exc}")
 
     @staticmethod
     def _brief(message: str) -> str:

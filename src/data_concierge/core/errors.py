@@ -41,5 +41,9 @@ class QueryTimeoutError(QueryError):
     """A DuckDB query exceeded its time limit."""
 
 
+class ResultStoreError(DataConciergeError):
+    """The session's DuckDB failed internally and cannot be used again; not the query's fault."""
+
+
 class UnknownHandleError(DataConciergeError):
     """A result handle does not exist in the session."""

@@ -26,13 +26,8 @@ class ResponseAssembler:
         self._max_rows = max_rows
 
     def assemble(self, answer: AgentAnswer, session_id: str, correlation_id: str) -> Response:
-        """An `error` answer gets a generic message with the correlation id and no details."""
         if answer.status == "error":
-            return Response(
-                status="error",
-                session_id=session_id,
-                message=ERROR_MESSAGE.format(correlation_id=correlation_id),
-            )
+            return self.failure(session_id, correlation_id)
         return Response(
             status=answer.status,
             session_id=session_id,
@@ -41,6 +36,15 @@ class ResponseAssembler:
             assumptions=answer.assumptions,
             clarification=answer.clarification,
             provenance=self._provenance([ref.handle for ref in answer.tables]),
+        )
+
+    @staticmethod
+    def failure(session_id: str, correlation_id: str) -> Response:
+        """A failed turn: a generic message with the correlation id and no details."""
+        return Response(
+            status="error",
+            session_id=session_id,
+            message=ERROR_MESSAGE.format(correlation_id=correlation_id),
         )
 
     def _table(self, ref: TableRef) -> ResponseTable:
