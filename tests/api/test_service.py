@@ -99,6 +99,27 @@ async def test_second_ask_continues_the_conversation_with_its_history_and_handle
     ]
 
 
+async def test_response_has_the_value_and_the_next_turn_sees_the_anchor(
+    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    total = 'SELECT CAST(sum("SubTotal") AS DECIMAL(38,2)) AS net_sales FROM r1'
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": total}),
+        present(message="Sprzedaż netto w 2024: {r2.net_sales}."),
+        present("no_data"),
+    )
+    service = ask_service(model)
+
+    first = await service.ask("Sprzedaż w 2024", user_id=7)
+    await service.ask("A w 2019?", user_id=7, session_id=first.session_id)
+
+    assert first.message == "Sprzedaż netto w 2024: 159,75."
+    second_turn_start = str(requests(model)[3])
+    assert "{r2.net_sales}" in second_turn_start
+    assert "159,75" not in second_turn_start
+
+
 async def test_ask_without_session_id_starts_a_new_conversation(
     ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
 ) -> None:
@@ -110,35 +131,41 @@ async def test_ask_without_session_id_starts_a_new_conversation(
     assert first.session_id != second.session_id
 
 
-async def test_clarification_answer_continues_with_the_chosen_customer(
+async def test_clarification_candidates_come_from_the_handle_and_the_choice_continues(
     ask_service: Callable[[FunctionModel], AskService],
     scripted: Callable[..., FunctionModel],
     procedure_calls: list[tuple[str, dict[str, object]]],
 ) -> None:
-    candidates = [
-        {"id": 12698, "description": "AW00012698, Germany"},
-        {"id": 20550, "description": "AW00020550, Germany"},
-    ]
-    service = ask_service(
-        scripted(
-            ToolCallPart("customer_search", {"name": "Mohamed Pal"}),
-            present(
-                "needs_clarification",
-                clarification={"question": "Którego klienta chodzi?", "candidates": candidates},
-            ),
-            ToolCallPart("sales_order_list", {**YEAR_2024, "customer_id": 12698}),
-            present(tables=[{"handle": "r2", "title": "Zamówienia klienta 12698"}]),
-        )
+    candidates_sql = (
+        'SELECT "CustomerID", "AccountNumber", "StateProvince" FROM r1 ORDER BY "CustomerID"'
     )
+    clarification = {
+        "question": "Znaleziono {r2#rows} klientów o tej nazwie. Którego wybierasz?",
+        "candidates_from": {"handle": "r2", "id_column": "CustomerID"},
+    }
+    model = scripted(
+        ToolCallPart("customer_list", {"city": "Berlin"}),
+        ToolCallPart("query", {"sql": candidates_sql}),
+        present("needs_clarification", clarification=clarification),
+        ToolCallPart("sales_order_list", {**YEAR_2024, "customer_id": 12698}),
+        present(tables=[{"handle": "r3", "title": "Zamówienia klienta 12698"}]),
+    )
+    service = ask_service(model)
 
-    first = await service.ask("Sprzedaż klienta Mohamed Pal w 2024", user_id=7)
+    first = await service.ask("Sprzedaż klienta Mohamed Pal z Berlina w 2024", user_id=7)
     second = await service.ask("Ten z kontem AW00012698", user_id=7, session_id=first.session_id)
 
     assert first.status == "needs_clarification"
     assert first.clarification is not None
-    assert [candidate.id for candidate in first.clarification.candidates] == [12698, 20550]
+    assert first.clarification.question == "Znaleziono 2 klientów o tej nazwie. Którego wybierasz?"
+    assert [(c.id, c.description) for c in first.clarification.candidates] == [
+        (12698, "AW00012698, Brandenburg"),
+        (20550, "AW00020550, Hessen"),
+    ]
+    # The model never saw the account numbers it asked the user to choose by.
+    assert "AW00012698" not in str(requests(model)[:3])
     assert second.status == "ok"
-    assert [name for name, _ in procedure_calls] == ["api.Customer_Search", "api.SalesOrder_List"]
+    assert [name for name, _ in procedure_calls] == ["api.Customer_List", "api.SalesOrder_List"]
     assert procedure_calls[1][1]["CustomerID"] == 12698
     assert [params["UserId"] for _, params in procedure_calls] == [7, 7]
 

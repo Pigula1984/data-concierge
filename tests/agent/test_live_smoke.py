@@ -1,5 +1,7 @@
 """One check on the real Claude API (plan U14, KTD4): the configured model accepts the strict
-catalog tools and `effort`, and continues a conversation without dropping thinking blocks.
+catalog tools and `effort`, writes the total of its comment as an anchor in the configured
+mode (architecture 002, section 6.1), and continues a conversation without dropping thinking
+blocks.
 
 Procedures still run against the fake repository, so no SQL Server is needed.
 """
@@ -9,13 +11,14 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
+from data_concierge.agent.anchors import ANCHOR, Anchors
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import AgentTurn
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
 from data_concierge.catalog.models import Catalog, DataRange
-from data_concierge.core.settings import Settings
+from data_concierge.core.settings import ModelExposure, Settings
 
 pytestmark = [pytest.mark.eval, pytest.mark.anyio]
 
@@ -32,8 +35,10 @@ def service(
         name, provider=AnthropicProvider(api_key=settings.anthropic_api_key.get_secret_value())
     )
     strict = settings.strict_tools
-    tools = ToolRegistry(catalog, ProcedureToolFactory(data_ranges, strict), strict).tools()
-    return AgentService(model, tools, AgentInstructions(catalog, data_ranges).text(), settings)
+    exposure = ModelExposure.from_settings(settings)
+    tools = ToolRegistry(catalog, ProcedureToolFactory(data_ranges, strict), strict, exposure)
+    instructions = AgentInstructions(catalog, data_ranges, exposure, settings.model_max_rows)
+    return AgentService(model, tools.tools(), instructions.text(), settings)
 
 
 def dropped_thinking(turn: AgentTurn, since: int) -> list[object]:
@@ -52,12 +57,17 @@ async def test_model_answers_and_continues_with_history(
     procedure_calls: list[tuple[str, dict[str, object]]],
 ) -> None:
     first = await service.run(
-        "Zrób raport sprzedaży po miesiącach za 2024. Dzisiejsza data: 2026-10-18.", [], deps
+        "Zrób raport sprzedaży po miesiącach za 2024 i podaj w komentarzu sumę roczną. "
+        "Dzisiejsza data: 2026-10-18.",
+        [],
+        deps,
     )
 
     assert first.answer.status == "ok", first.answer
     assert procedure_calls, "the model did not call a procedure"
     assert first.answer.tables
+    assert ANCHOR.search(first.answer.message), first.answer.message
+    assert not ANCHOR.search(Anchors(deps.results).fill(first.answer.message))
 
     second = await service.run("A teraz tylko pierwszy kwartał 2024.", first.messages, deps)
 

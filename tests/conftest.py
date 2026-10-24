@@ -29,7 +29,7 @@ from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.catalog.models import Catalog, CatalogEntry, DataRange
 from data_concierge.catalog.repository import YamlCatalogRepository
 from data_concierge.core.context import RequestContext
-from data_concierge.core.settings import Settings
+from data_concierge.core.settings import ModelDataAccess, ModelExposure, Settings
 from data_concierge.core.sqlserver import SqlServerClient
 from data_concierge.procedures.models import ProcedureResult
 from data_concierge.procedures.service import ProcedureService
@@ -105,6 +105,69 @@ CUSTOMERS: tuple[Row, ...] = (
 ROWS_BY_PROCEDURE: dict[str, tuple[Row, ...]] = {
     "api.SalesOrder_List": ORDERS,
     "api.Customer_List": CUSTOMERS,
+}
+
+# Rows whose every value that is not an id or a date is unique and long enough to find in
+# the traffic to the model; sums and averages of the amounts are recognizable too (plan KTD10).
+SENTINEL_ORDERS: tuple[Row, ...] = (
+    (
+        90001,
+        date(2024, 2, 3),
+        77001,
+        "SENTINEL-NAME-7Q",
+        "SENTINEL-TYPE-4K",
+        "SENTINEL-TERRITORY-9M",
+        Decimal("98765.4321"),
+        Decimal("87654.3219"),
+    ),
+    (
+        90002,
+        date(2024, 2, 17),
+        77002,
+        "SENTINEL-NAME-8R",
+        "SENTINEL-TYPE-4K",
+        "SENTINEL-TERRITORY-9M",
+        Decimal("12345.6789"),
+        Decimal("23456.7891"),
+    ),
+    (
+        90003,
+        date(2024, 5, 9),
+        77001,
+        "SENTINEL-NAME-7Q",
+        "SENTINEL-TYPE-5L",
+        "SENTINEL-TERRITORY-3P",
+        Decimal("45678.9123"),
+        Decimal("56789.1234"),
+    ),
+)
+SENTINEL_CUSTOMERS: tuple[Row, ...] = (
+    (
+        77001,
+        "SENTINEL-ACCOUNT-1A",
+        "SENTINEL-NAME-7Q",
+        "SENTINEL-TYPE-4K",
+        "SENTINEL-ADDRESS-6T",
+        "SENTINEL-CITY-2B",
+        "SENTINEL-STATE-8W",
+        "SENTINEL-COUNTRY-5C",
+        "SENTINEL-TERRITORY-9M",
+    ),
+    (
+        77002,
+        "SENTINEL-ACCOUNT-2D",
+        "SENTINEL-NAME-8R",
+        "SENTINEL-TYPE-4K",
+        "SENTINEL-ADDRESS-6T",
+        "SENTINEL-CITY-2B",
+        "SENTINEL-STATE-3X",
+        "SENTINEL-COUNTRY-5C",
+        "SENTINEL-TERRITORY-9M",
+    ),
+)
+SENTINEL_ROWS_BY_PROCEDURE: dict[str, tuple[Row, ...]] = {
+    "api.SalesOrder_List": SENTINEL_ORDERS,
+    "api.Customer_List": SENTINEL_CUSTOMERS,
 }
 
 
@@ -189,15 +252,30 @@ def data_ranges() -> dict[str, DataRange]:
 
 
 @pytest.fixture
-def agent_tools(catalog: Catalog, data_ranges: dict[str, DataRange]) -> tuple[Tool[AgentDeps], ...]:
-    """The tools of the repository catalog with strict schemas."""
-    factory = ProcedureToolFactory(data_ranges, strict=True)
-    return ToolRegistry(catalog, factory, strict=True).tools()
+def mode() -> ModelDataAccess:
+    """The process's mode of model data access; a test parametrizes `mode` to change it."""
+    return "none"
 
 
 @pytest.fixture
-def instructions(catalog: Catalog, data_ranges: dict[str, DataRange]) -> str:
-    return AgentInstructions(catalog, data_ranges).text()
+def exposure(mode: ModelDataAccess) -> ModelExposure:
+    return ModelExposure.for_mode(mode)
+
+
+@pytest.fixture
+def agent_tools(
+    catalog: Catalog, data_ranges: dict[str, DataRange], exposure: ModelExposure
+) -> tuple[Tool[AgentDeps], ...]:
+    """The tools of the repository catalog with strict schemas."""
+    factory = ProcedureToolFactory(data_ranges, strict=True)
+    return ToolRegistry(catalog, factory, True, exposure).tools()
+
+
+@pytest.fixture
+def instructions(
+    catalog: Catalog, data_ranges: dict[str, DataRange], exposure: ModelExposure
+) -> str:
+    return AgentInstructions(catalog, data_ranges, exposure).text()
 
 
 @pytest.fixture
@@ -238,12 +316,24 @@ def truncate_procedures(repository: FakeProcedureRepository) -> Callable[[bool],
 
 
 @pytest.fixture
-def results() -> ResultService:
-    return ResultService(DuckDBResultStore(query_timeout_seconds=30.0))
+def results(exposure: ModelExposure) -> ResultService:
+    return ResultService(DuckDBResultStore(query_timeout_seconds=30.0), exposure)
 
 
 @pytest.fixture
 def deps(repository: FakeProcedureRepository, results: ResultService) -> AgentDeps:
+    return AgentDeps(
+        context=RequestContext(user_id=7, role="analyst"),
+        procedures=ProcedureService(repository, results),
+        queries=QueryService(results, QueryPolicy()),
+        results=results,
+    )
+
+
+@pytest.fixture
+def sentinel_deps(results: ResultService) -> AgentDeps:
+    """A session whose procedures return the sentinel rows."""
+    repository = FakeProcedureRepository(rows=SENTINEL_ROWS_BY_PROCEDURE)
     return AgentDeps(
         context=RequestContext(user_id=7, role="analyst"),
         procedures=ProcedureService(repository, results),

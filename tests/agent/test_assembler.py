@@ -7,7 +7,12 @@ import pytest
 
 from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.deps import AgentDeps
-from data_concierge.agent.models import AgentAnswer, TableRef
+from data_concierge.agent.models import (
+    AgentAnswer,
+    CandidatesFrom,
+    ClarificationRequest,
+    TableRef,
+)
 from data_concierge.api.schemas import Candidate, Clarification, ProcedureStep, QueryStep
 from data_concierge.catalog.models import Catalog
 
@@ -214,23 +219,62 @@ def test_json_has_no_floating_point_numbers(
     )
 
 
-def test_clarification_has_candidates_and_no_tables(assembler: ResponseAssembler) -> None:
-    candidates = tuple(
-        Candidate(id=customer_id, description=f"AW000{customer_id}")
-        for customer_id in (12698, 20550, 28763)
-    )
-    answer = AgentAnswer(
+def clarify(handle: str, id_column: str) -> AgentAnswer:
+    return AgentAnswer(
         status="needs_clarification",
-        message="Znalazłem trzech klientów o tej nazwie.",
-        clarification=Clarification(question="Którego klienta wybrać?", candidates=candidates),
+        message="Znalazłem kilku klientów o tej nazwie.",
+        clarification=ClarificationRequest(
+            question=f"Którego z {{{handle}#rows}} klientów wybrać?",
+            candidates_from=CandidatesFrom(handle=handle, id_column=id_column),
+        ),
     )
 
-    response = assembler.assemble(answer, session_id="s1", correlation_id="c1")
+
+def test_candidates_are_the_handle_rows_described_by_the_other_columns(
+    assembler: ResponseAssembler, deps: AgentDeps, call: Callable[[str, Mapping[str, object]], str]
+) -> None:
+    call("customer_list", {"city": "Berlin"})
+    call("sales_order_list", YEAR_2024)
+    deps.queries.run(
+        'SELECT c."CustomerID", c."AccountNumber", c."CountryRegion" AS territory, '
+        'count(o."SalesOrderID") AS order_count FROM r1 AS c '
+        'LEFT JOIN r2 AS o ON o."CustomerID" = c."CustomerID" '
+        'GROUP BY ALL ORDER BY c."CustomerID"'
+    )
+
+    response = assembler.assemble(clarify("r3", "CustomerID"), "s1", "c1")
 
     assert response.tables == ()
-    assert response.provenance == ()
     assert response.clarification is not None
-    assert [c.id for c in response.clarification.candidates] == [12698, 20550, 28763]
+    assert response.clarification.question == "Którego z 2 klientów wybrać?"
+    assert response.clarification.candidates == (
+        Candidate(id=12698, description="AW00012698, Germany, 1"),
+        Candidate(id=20550, description="AW00020550, Germany, 1"),
+    )
+    assert [step.handle for step in response.provenance] == ["r1", "r2", "r3"]
+
+
+def test_text_id_column_gives_text_ids(
+    assembler: ResponseAssembler, call: Callable[[str, Mapping[str, object]], str]
+) -> None:
+    call("customer_list", {"city": "Berlin"})
+
+    response = assembler.assemble(clarify("r1", "accountnumber"), "s1", "c1")
+
+    assert response.clarification is not None
+    assert [c.id for c in response.clarification.candidates] == ["AW00012698", "AW00020550"]
+
+
+def test_question_without_candidates_has_none(assembler: ResponseAssembler) -> None:
+    answer = AgentAnswer(
+        status="needs_clarification",
+        message="Brakuje okresu.",
+        clarification=ClarificationRequest(question="Za jaki okres?"),
+    )
+
+    response = assembler.assemble(answer, "s1", "c1")
+
+    assert response.clarification == Clarification(question="Za jaki okres?")
 
 
 def test_table_derived_from_a_truncated_procedure_is_marked_truncated(
@@ -260,3 +304,27 @@ def test_error_has_a_generic_message_with_the_correlation_id(
     assert "abc123" in response.message
     assert response.tables == ()
     assert response.provenance == ()
+
+
+TOTAL_SQL = 'SELECT CAST(sum("SubTotal") AS DECIMAL(38,2)) AS net_sales FROM r1'
+
+
+def test_anchors_in_every_text_are_filled_and_their_handles_join_provenance(
+    assembler: ResponseAssembler, deps: AgentDeps, call: Callable[[str, Mapping[str, object]], str]
+) -> None:
+    call("customer_list", {"city": "Berlin"})
+    call("sales_order_list", YEAR_2024)
+    deps.queries.run(TOTAL_SQL.replace("r1", "r2"))
+    answer = AgentAnswer(
+        status="ok",
+        message="Sprzedaż netto: {r3.net_sales}.",
+        tables=(TableRef(handle="r1", title="Klienci ({r1#rows})"),),
+        assumptions=("zamówień: {r2#rows}",),
+    )
+
+    response = assembler.assemble(answer, session_id="s1", correlation_id="c1")
+
+    assert response.message == "Sprzedaż netto: 159,75."
+    assert response.tables[0].title == "Klienci (2)"
+    assert response.assumptions == ("zamówień: 3",)
+    assert [step.handle for step in response.provenance] == ["r1", "r2", "r3"]

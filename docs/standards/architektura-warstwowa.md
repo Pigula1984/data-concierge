@@ -40,7 +40,7 @@ def query(ctx: RunContext[AgentDeps], sql: str) -> QuerySummary:
 | `agent` | narzędzia: `query`, `describe_result`, narzędzia procedur | `AgentService` (konfiguracja i uruchomienie pętli), `ResponseAssembler` (`AgentAnswer` → `Response`), `ToolRegistry` | — |
 | `catalog` | — | `CatalogService` (walidacja YAML z metadanymi przy starcie, zakresy danych) | `CatalogRepository` (YAML), `ProcedureMetadataRepository` (metadane SQL Server) |
 | `procedures` | — | `ProcedureService` (walidacja parametrów, `inject`, limity, proweniencja) | `ProcedureRepository` (adapter SQL Server) |
-| `results` | — | `ResultService` (zapis, odczyt i opis uchwytów: schemat, statystyki, podgląd) | `ResultStore` (tabele DuckDB pod uchwytami) |
+| `results` | — | `ResultService` (zapis, odczyt i opis uchwytów według trybu: schemat, zakresy dat, `ids`, odczyt komórki dla kotwic) | `ResultStore` (tabele DuckDB pod uchwytami) |
 | `query` | — | `QueryService` (parsowanie → reguły → typy wyniku → pełne `ORDER BY` → wykonanie i zapis przez `ResultService`) | `SqlParser` (parser DuckDB na własnym połączeniu bez danych) |
 
 Moduły bez controllera są wewnętrzne: korzystają z nich serwisy innych modułów.
@@ -89,6 +89,8 @@ src/data_concierge/
 │   ├── tools.py           # tools = controllers for the model
 │   ├── registry.py        # ProcedureToolFactory, ToolRegistry
 │   ├── prompts.py
+│   ├── anchors.py         # Anchors: check and fill {r3.net_sales} in texts for the user
+│   ├── formatting.py      # ValueFormatter: values as the user reads them
 │   ├── service.py         # AgentService
 │   └── assembler.py       # ResponseAssembler: AgentAnswer -> Response
 ├── api/

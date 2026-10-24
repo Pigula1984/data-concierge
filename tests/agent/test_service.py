@@ -21,7 +21,7 @@ from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.service import AgentService
 from data_concierge.catalog.models import Catalog, DataRange
 from data_concierge.core.errors import ProcedureTimeoutError
-from data_concierge.core.settings import Settings
+from data_concierge.core.settings import ModelDataAccess, ModelExposure, Settings
 
 pytestmark = pytest.mark.anyio
 
@@ -130,20 +130,144 @@ async def test_clarification_status_without_a_question_is_sent_back(
 ) -> None:
     question = {
         "question": "Którego klienta Mohamed Pal wybrać?",
-        "candidates": [
-            {"id": 12698, "description": "AW00012698, Germany"},
-            {"id": 20550, "description": "AW00020550, Germany"},
-        ],
+        "candidates_from": {"handle": "r1", "id_column": "CustomerID"},
     }
     model = scripted(
-        present("needs_clarification"), present("needs_clarification", clarification=question)
+        ToolCallPart("customer_list", {"city": "Berlin"}),
+        present("needs_clarification"),
+        present("needs_clarification", clarification=question),
     )
 
     turn = await service(model).run("Sprzedaż klienta Mohamed Pal", [], deps)
 
     assert len(retry_prompts(turn.messages)) == 1
     assert turn.answer.clarification is not None
-    assert [c.id for c in turn.answer.clarification.candidates] == [12698, 20550]
+    assert turn.answer.clarification.candidates_from is not None
+    assert turn.answer.clarification.candidates_from.handle == "r1"
+
+
+@pytest.mark.parametrize(
+    ("candidates_from", "problem"),
+    [
+        pytest.param(
+            {"handle": "r9", "id_column": "CustomerID"},
+            "candidates_from: unknown handle r9; available handles: r1, r2",
+            id="handle",
+        ),
+        pytest.param(
+            {"handle": "r1", "id_column": "ProductID"},
+            "candidates_from: r1 has no column ProductID; columns: CustomerID, AccountNumber",
+            id="column",
+        ),
+        pytest.param(
+            {"handle": "r2", "id_column": "CustomerID"},
+            "candidates_from: r2 has 51 rows; at most 50 can be candidates",
+            id="rows",
+        ),
+        pytest.param(
+            {"handle": "r2", "id_column": "first_order"},
+            "candidates_from: id_column must be an int or a string column",
+            id="type",
+        ),
+        pytest.param(
+            {"handle": "r1", "id_column": "AccountNumber"},
+            "candidates_from: AccountNumber is not shown to you; use a technical key",
+            id="sensitive",
+        ),
+    ],
+)
+async def test_candidates_from_a_wrong_handle_are_sent_back(
+    service: Callable[[FunctionModel], AgentService],
+    scripted: Callable[..., FunctionModel],
+    deps: AgentDeps,
+    candidates_from: dict[str, str],
+    problem: str,
+) -> None:
+    question = {"question": "Którego klienta wybrać?", "candidates_from": candidates_from}
+    model = scripted(
+        ToolCallPart("customer_list", {"city": "Berlin"}),
+        ToolCallPart(
+            "query",
+            {
+                "sql": "SELECT \"CustomerID\", DATE '2024-01-01' AS first_order "
+                "FROM r1, range(25) UNION ALL SELECT 1, DATE '2024-01-01' ORDER BY 1"
+            },
+        ),
+        present("needs_clarification", clarification=question),
+        present("no_data"),
+    )
+
+    turn = await service(model).run("Sprzedaż klienta Mohamed Pal", [], deps)
+
+    (retry,) = retry_prompts(turn.messages)
+    assert problem in str(retry.content)
+
+
+TOTAL_SQL = 'SELECT CAST(sum("SubTotal") AS DECIMAL(38,2)) AS net_sales FROM r1'
+
+
+async def test_wrong_anchors_in_every_text_are_sent_back_in_one_correction(
+    service: Callable[[FunctionModel], AgentService],
+    scripted: Callable[..., FunctionModel],
+    deps: AgentDeps,
+) -> None:
+    question = {"question": "Który z {r7#rows} okresów?"}
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": TOTAL_SQL}),
+        present(
+            message="Suma: {r1.SubTotal}, zamówień: {r1#rows}.",
+            tables=[{"handle": "r2", "title": "Sprzedaż {r9.total}"}],
+            assumptions=["okres {r1[4].OrderDate}"],
+            clarification=question,
+        ),
+        present(
+            message="Suma: {r2.net_sales}, zamówień: {r1#rows}.",
+            tables=[{"handle": "r2", "title": "Sprzedaż netto"}],
+        ),
+    )
+
+    turn = await service(model).run("Sprzedaż w 2024", [], deps)
+
+    (retry,) = retry_prompts(turn.messages)
+    for problem in (
+        "{r1.SubTotal}: r1 has 3 rows",
+        "{r9.total}: unknown handle r9",
+        "{r1[4].OrderDate}: r1 has 3 rows",
+        "{r7#rows}: unknown handle r7",
+    ):
+        assert problem in str(retry.content)
+    assert turn.answer.message == "Suma: {r2.net_sales}, zamówień: {r1#rows}."
+    # The history keeps the template, never the value.
+    assert "{r2.net_sales}" in str(turn.messages[-2])
+    assert "159,75" not in str(turn.messages)
+
+
+async def test_error_answer_is_not_checked_for_anchors(
+    service: Callable[[FunctionModel], AgentService],
+    scripted: Callable[..., FunctionModel],
+    deps: AgentDeps,
+) -> None:
+    model = scripted(present("error", message="Nie udało się: {r9.total}."))
+
+    turn = await service(model).run("Sprzedaż w 2024", [], deps)
+
+    assert turn.answer.status == "error"
+    assert not retry_prompts(turn.messages)
+
+
+async def test_anchors_still_wrong_after_the_retries_end_the_turn_with_an_error(
+    service: Callable[[FunctionModel], AgentService],
+    scripted: Callable[..., FunctionModel],
+    deps: AgentDeps,
+) -> None:
+    wrong = present(message="Suma: {r9.total}.")
+    model = scripted(wrong, wrong, wrong, wrong)
+
+    turn = await service(model).run("Sprzedaż w 2024", PRIOR_TURN, deps)
+
+    assert turn.answer.status == "error"
+    assert turn.messages == tuple(PRIOR_TURN)
 
 
 async def test_text_instead_of_present_result_ends_in_error_after_the_retries(
@@ -255,12 +379,49 @@ async def test_instructions_carry_the_sql_guidance_and_no_date(
     assert "Data from 2022-05-30 to 2025-06-29." in instructions
     assert "sales_order_data_range" not in instructions
     assert date.today().isoformat() not in instructions
-    assert "at most 50)" in instructions
 
 
-async def test_instructions_follow_the_full_preview_setting(
+@pytest.mark.parametrize("mode", ["none", "minimal"])
+async def test_instructions_of_both_modes_teach_anchors_candidates_and_amount_scale(
+    catalog: Catalog, data_ranges: dict[str, DataRange], mode: ModelDataAccess
+) -> None:
+    text = AgentInstructions(catalog, data_ranges, ModelExposure.for_mode(mode)).text()
+
+    for hint in ("{r3.net_sales}", "{r2[1].month}", "{r2#rows}", "candidates_from"):
+        assert hint in text
+    assert "cast amounts, averages and ratios to DECIMAL(38,2)" in text
+    assert "{r4[1].CustomerName}" in text
+    assert "CAST((SELECT sum(net_sales) FROM r2) AS DECIMAL(38,2)) AS annual_total" in text
+    assert "at most 50 rows" in text
+    assert "preview" not in text
+
+
+async def test_instructions_of_mode_none_promise_no_values(
     catalog: Catalog, data_ranges: dict[str, DataRange]
 ) -> None:
-    text = AgentInstructions(catalog, data_ranges, full_preview_max_rows=30).text()
+    text = AgentInstructions(catalog, data_ranges, ModelExposure.for_mode("none")).text()
 
-    assert "at most 30)" in text
+    assert "You never see names, amounts or quantities" in text
+    assert "PIVOT only over a dimension whose values the procedure description lists" in text
+    assert "dimension values" not in text
+    assert "statistics" not in text
+
+
+async def test_instructions_of_mode_minimal_name_the_dimension_values(
+    catalog: Catalog, data_ranges: dict[str, DataRange]
+) -> None:
+    text = AgentInstructions(catalog, data_ranges, ModelExposure.for_mode("minimal")).text()
+
+    assert "the values of dimension columns with at most 20 distinct values" in text
+    assert "or from the dimension values of the handle" in text
+    assert "You never see names, amounts or quantities" not in text
+
+
+async def test_instructions_follow_the_model_row_limit(
+    catalog: Catalog, data_ranges: dict[str, DataRange]
+) -> None:
+    text = AgentInstructions(
+        catalog, data_ranges, ModelExposure.for_mode("none"), model_max_rows=30
+    ).text()
+
+    assert "at most 30 rows" in text

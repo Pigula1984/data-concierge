@@ -86,7 +86,7 @@ Dziś model sam przepisuje kandydatów (`Candidate.id`, `description`) z wierszy
  "candidates_from": {"handle": "r2", "id_column": "CustomerID"}}
 ```
 
-Backend buduje listę `candidates` w odpowiedzi: `id` z kolumny `id_column`, a `description` z wartości pozostałych kolumn uchwytu złączonych przecinkami. Kształt opisu model ustala zapytaniem `query`, np. `SELECT "CustomerID", "AccountNumber", "Territory", count(*) AS order_count …`. Kontrakt odpowiedzi (001, sekcja 9) się nie zmienia.
+Backend buduje listę `candidates` w odpowiedzi: `id` z kolumny `id_column`, a `description` z wartości pozostałych kolumn uchwytu złączonych przecinkami. Kolumna `id_column` musi być liczbą albo tekstem i nie może być wrażliwa, bo wybór użytkownika wraca do modelu jako `id`. Kształt opisu model ustala zapytaniem `query`, np. `SELECT "CustomerID", "AccountNumber", "Territory", count(*) AS order_count …`. Kontrakt odpowiedzi (001, sekcja 9) się nie zmienia.
 
 Ten sam mechanizm działa w trybie ograniczonym. To jedna ścieżka zamiast dwóch, a model nie przepisuje danych (D8).
 
@@ -154,6 +154,16 @@ Wartość kolumny wrażliwej nie trafia do modelu w żadnym trybie: ani w statys
 
 To chroni przed przypadkowym wysłaniem danych, a nie przed modelem, który celowo przekształci wartość wrażliwą (np. `length("CustomerName")`). Taki scenariusz należy do ochrony przed prompt injection, która jest poza zakresem.
 
+**Znane ryzyko: alias o nazwie kolumny niewrażliwej.** Reguła patrzy na nazwę i typ kolumny wyniku, a nie na to, skąd pochodzą jej wartości. Kolumna z wartościami wrażliwymi pod nazwą kolumny niewrażliwej tego samego typu dziedziczy więc `sensitive: false`. Przykłady:
+
+```sql
+SELECT "Territory" FROM r1 UNION ALL SELECT "CustomerName" FROM r1
+SELECT CASE WHEN "City" = 'Berlin' THEN "CustomerName" ELSE "City" END AS "City" FROM r1
+SELECT coalesce("CustomerName", "Territory") AS "Territory" FROM r1
+```
+
+W trybie `minimal` wartości takiej kolumny trafiłyby do modelu jako wartości wymiaru. Ta sama klasa ryzyka dotyczy pola `ids` w obu trybach: miara podana pod nazwą kolumny `id` (np. `CAST(sum("SubTotal") AS INT) AS "CustomerID"`) dziedziczy jej rolę, więc jej wartości trafiłyby do modelu jak klucze. Takie zapytanie model musi napisać sam, a typowe zestawienia (grupowanie po kolumnie źródłowej, aliasy z nowymi nazwami) dają poprawne oznaczenie. Przyjmujemy to ryzyko na etapie POC i rozwiążemy je po akceptacji podejścia (sekcja 12).
+
 Domyślnie kolumna jest widoczna, a właściciel oznacza wrażliwe (decyzja D6). Zasada oznaczania: wrażliwe są nazwy i opisy, które wskazują konkretnego klienta, produkt lub osobę, oraz identyfikatory biznesowe, których model nie potrzebuje do łączenia wyników. Wymiary potrzebne do filtrów i zestawień (kategoria, terytorium, miasto, typ klienta) zostają widoczne.
 
 Wstępne oznaczenie katalogu `catalog/agent-procedures.yaml` (wejdzie do pliku razem z obsługą pola w kodzie, bo dziś nieznany klucz jest błędem katalogu):
@@ -189,7 +199,7 @@ Model wstawia wartość z danych do tekstu dla użytkownika przez kotwicę, a ba
 | `{r2#rows}` | liczba wierszy uchwytu (osobna składnia, bo kolumna wyniku może się nazywać `row_count`) |
 
 - **Gdzie:** we wszystkich tekstach dla użytkownika: `message`, `assumptions`, tytuły tabel i `clarification.question`.
-- **Sprawdzenie:** istniejący walidator wyniku agenta (`output_validator` w `AgentService`) sprawdza, czy uchwyt istnieje w sesji, kolumna jest w schemacie, a wiersz w zakresie. Kotwica `{rN.kolumna}` bez numeru wiersza na uchwycie z wieloma wierszami jest błędem. Błąd wraca do modelu jako `ModelRetry` z opisem. Backend nie skanuje tekstu w poszukiwaniu liczb spoza kotwic (sekcja 12).
+- **Sprawdzenie:** istniejący walidator wyniku agenta (`output_validator` w `AgentService`) sprawdza, czy uchwyt istnieje w sesji, kolumna jest w schemacie, a wiersz w zakresie. Kotwica `{rN.kolumna}` bez numeru wiersza na uchwycie z wieloma wierszami jest błędem. Tekst w nawiasach klamrowych, który zaczyna się od `r` i cyfry (także po spacji lub wielką literą), jest próbą kotwicy: gdy nie pasuje do składni (np. `{r1#count}`, `{ r1.x }`), też jest błędem, żeby do użytkownika nie trafił niewypełniony nawias. Inny tekst w nawiasach zostaje bez zmian. Błąd wraca do modelu jako `ModelRetry` z opisem. Backend nie skanuje tekstu w poszukiwaniu liczb spoza kotwic (sekcja 12).
 - **Wstawienie:** `ResponseAssembler` podmienia kotwice po walidacji. Uchwyty użyte w kotwicach dołączają do `provenance`, tak jak uchwyty tabel.
 - **Formatowanie** (decyzja D3): liczby z polskimi separatorami (przecinek dziesiętny, spacja niełamliwa co trzy cyfry dopiero od pięciu cyfr części całkowitej, kolumny `id` bez separatorów), liczba miejsc po przecinku według skali typu kolumny, którą model ustala przez `CAST(… AS DECIMAL(38,2))`. Daty w ISO (`2024-06-01`), `NULL` jako „brak danych”.
 - **Wartość kolumny wrażliwej** może trafić do tekstu przez kotwicę, np. `Najlepszy klient: {r4[1].CustomerName}`. Użytkownik ma prawo ją zobaczyć, a model jej nie widzi.
@@ -244,13 +254,13 @@ Przykłady z sekcji 10 dokumentu 001 dostają warianty dla trybu zamkniętego.
 |-------|--------|
 | `core` | `Settings.model_data_access` (`none` / `minimal`). Błędy SQL Server dla modelu bez tekstu sterownika. |
 | `catalog` | `ColumnSpec.sensitive`. `values` dla wymiarów, po których robimy `PIVOT` (np. `Category`). |
-| `results` | Podsumowanie według polityki trybu (sekcje 4.1 i 5.1) w miejsce stałego podglądu i statystyk. Wrażliwość kolumn wyników `query` (sekcja 5.3). Odczyt komórki dla kotwic. Kandydaci do pytania doprecyzowującego z uchwytu. |
+| `results` | Podsumowanie według polityki trybu (sekcje 4.1 i 5.1) w miejsce stałego podglądu i statystyk. Wrażliwość kolumn wyników `query` (sekcja 5.3). Odczyt komórki dla kotwic. |
 | `query` | Komunikaty błędów DuckDB bez wartości (sekcja 6.2). |
-| `agent` | Instrukcje i opisy narzędzi zależne od trybu. Walidacja kotwic w walidatorze wyniku. `candidates_from` w `Clarification`. Faza komentarza w trybie `minimal`. |
-| `api` | `ResponseAssembler`: podstawienie kotwic, uchwyty kotwic w `provenance`, kandydaci z uchwytu. Kontrakt odpowiedzi bez zmian. |
+| `agent` | Instrukcje i opisy narzędzi zależne od trybu. Kotwice (`agent/anchors.py`) i formatowanie wartości (`agent/formatting.py`), sprawdzane w walidatorze wyniku. `candidates_from` w `ClarificationRequest`, czyli pytaniu doprecyzowującym od modelu. `ResponseAssembler`: podstawienie kotwic, uchwyty kotwic w `provenance`, kandydaci z uchwytu. Faza komentarza w trybie `minimal`. |
+| `api` | Kontrakt odpowiedzi bez zmian. |
 | `evals` | Uruchomienie w obu trybach (sekcja 9). |
 
-Polityka trybu to jedna klasa wstrzykiwana do serwisu wyników i składania odpowiedzi. Rozstrzyga, które pola podsumowania i które kolumny idą do modelu. Plan przypisze ją do modułu zgodnie z [`architektura-warstwowa.md`](../standards/architektura-warstwowa.md).
+Polityka trybu to obiekt wartości `ModelExposure` w `core/settings.py`, zbudowany przy starcie z `model_data_access`. Kompozycja wstrzykuje go do serwisu wyników (które pola podsumowania widzi model), instrukcji i rejestru narzędzi (teksty według trybu). Ustawienie `model_max_rows` (domyślnie 50) zastąpiło ustawienia podglądu: rządzi polem `ids` i liczbą kandydatów.
 
 ## 9. Ewaluacja
 
@@ -273,7 +283,9 @@ Przypadek może mieć oczekiwania zależne od trybu. Plan ustali format w `cases
 ## 10. Ryzyka szczątkowe
 
 - **Wnioskowanie z liczby wierszy.** Model, który widzi `row_count`, może się dowiadywać o wartościach zapytaniami typu `WHERE "CustomerName" LIKE 'A%'`. Wymaga to celowego działania, a nie przypadku. Wiąże się z ochroną przed prompt injection.
+- **Kolejność w `ids`.** Wartości kolumn `id` idą w kolejności wierszy uchwytu. Po zapytaniu z `ORDER BY` po mierze (top N) model widzi więc ranking klientów lub produktów, choć bez kwot. Wynika to z D1.
 - **Kolumny wyliczone** z wartości wrażliwych mogą przejść jako liczbowe (sekcja 5.3).
+- **Alias o nazwie kolumny niewrażliwej** (`UNION ALL`, `CASE`, `coalesce`) przenosi wartości wrażliwe do kolumny oznaczonej jako niewrażliwa (sekcja 5.3). Przyjęte na etapie POC.
 - **Prompt użytkownika** może zawierać dane (nazwisko, kwotę) i zawsze trafia do modelu.
 - **`data_range`** to dane z bazy wystawione celowo przez katalog.
 - **Jakość w trybie zamkniętym** będzie niższa. Ile, pokaże zestaw ewaluacyjny.
@@ -297,4 +309,5 @@ Decyzje właściciela projektu z 2026-10-24:
 
 - **Kontrola liczb w komentarzu** (001, sekcja 7.5): skanowanie tekstu i porównanie z wynikami. Przy kotwicach zestaw ewaluacyjny mierzy liczby spoza kotwic. Kontrolę wprowadzimy, jeśli pomiar pokaże problem.
 - **Narzędzie wyszukiwania wartości** (np. `find_values(handle, column, text)`) do filtrów po wymiarach z wieloma wartościami. Dziś tę rolę pełnią procedury wyszukiwania z parametrem.
+- **Wrażliwość kolumn `query` odporna na aliasy** (sekcja 5.3), po akceptacji podejścia z POC. Możliwe kierunki: każda kolumna tekstowa wyniku czytającego kolumnę wrażliwą jest wrażliwa (prościej, ale model straci wartości wymiarów w takich zestawieniach), albo śledzenie pochodzenia kolumn z drzewa zapytania DuckDB (`json_serialize_sql`), co odchodzi od zasady, że backend nie analizuje treści zapytania (001, sekcja 7.3).
 - **Wyłączenie kolumn wolnotekstowych z kontekstu** jako ochrona przed pośrednią iniekcją (001, sekcja 12): `sensitive` daje ten sam efekt technicznie, ale cel i oznaczenie ustalimy razem z ochroną przed iniekcją.

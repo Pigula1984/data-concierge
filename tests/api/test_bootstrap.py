@@ -74,3 +74,30 @@ def test_each_session_has_its_own_result_store(
     assert first.id != second.id
     assert first.results.handles() == ("r1",)
     assert second.results.handles() == ()
+
+
+@pytest.mark.parametrize(
+    ("mode", "dimension_stats"),
+    [
+        pytest.param("none", {"OrderDate"}, id="none"),
+        pytest.param("minimal", {"OrderDate", "CustomerType", "Territory"}, id="minimal"),
+    ],
+)
+def test_session_summaries_follow_the_configured_mode(
+    agent_settings: Settings,
+    repository: ProcedureRepository,
+    catalog: Catalog,
+    mode: str,
+    dimension_stats: set[str],
+) -> None:
+    settings = agent_settings.model_copy(update={"model_data_access": mode})
+    session = DuckDBSessionFactory(repository, settings).create()
+
+    summary = session.procedures.call(
+        catalog.entry("api.SalesOrder_List"),
+        {"date_from": "2024-01-01", "date_to": "2025-01-01"},
+        RequestContext(user_id=7, role="user"),
+    )
+
+    # CustomerName is a sensitive dimension, so neither mode shows it.
+    assert set(summary.stats) == dimension_stats

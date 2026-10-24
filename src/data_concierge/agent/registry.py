@@ -6,8 +6,17 @@ from typing import cast
 from pydantic_ai import RunContext, Tool
 
 from data_concierge.agent.deps import AgentDeps
-from data_concierge.agent.tools import describe_result, query, retry_on_domain_error
+from data_concierge.agent.tools import (
+    DESCRIBE_RESULT_DESCRIPTION,
+    QUERY_DESCRIPTION,
+    SUMMARY_MINIMAL,
+    SUMMARY_NONE,
+    describe_result,
+    query,
+    retry_on_domain_error,
+)
 from data_concierge.catalog.models import Catalog, CatalogEntry, ColumnSpec, DataRange
+from data_concierge.core.settings import ModelExposure
 from data_concierge.core.types import ColumnRole
 from data_concierge.procedures.models import ProcedureArguments
 from data_concierge.results.models import ResultSummary
@@ -36,11 +45,13 @@ class ProcedureToolFactory:
         )
 
     def _description(self, entry: CatalogEntry) -> str:
-        """Summary, grain, when to use and not to use, measures and the data range (section 6.1).
+        """Summary, grain, when to use and not to use, measures, dimension values and the data
+        range (section 6.1).
 
         Parameter hints are in the schema's field descriptions, so they are not repeated here.
         Measures are listed because the model chooses one before it sees the result, e.g. which
-        column "sprzedaż" means.
+        column "sprzedaż" means. Dimension values from the catalog are the only values the
+        model knows in mode none, e.g. for PIVOT (architecture 002, section 4.4).
         """
         sentences = [entry.summary]
         if entry.grain:
@@ -54,6 +65,9 @@ class ProcedureToolFactory:
         ]
         if measures:
             sentences.append(f"Miary: {', '.join(measures)}.")
+        values = [f"{c.name}: {', '.join(c.values)}" for c in entry.columns if c.values]
+        if values:
+            sentences.append(f"Wartości wymiarów: {'; '.join(values)}.")
         data_range = self._data_ranges.get(entry.tool)
         if data_range is not None:
             sentences.append(f"Dane: od {data_range.first} do {data_range.last}.")
@@ -70,14 +84,22 @@ class ProcedureToolFactory:
 
 class ToolRegistry:
     """The agent's tools in a fixed order: exposed procedures in catalog order, then `query`
-    and `describe_result`. The order and the definitions never change within a process, so
-    the start of every conversation stays byte-identical (plan KTD11)."""
+    and `describe_result` described for the process's mode. The order and the definitions
+    never change within a process, so the start of every conversation stays byte-identical
+    (plan KTD11)."""
 
-    def __init__(self, catalog: Catalog, factory: ProcedureToolFactory, strict: bool) -> None:
+    def __init__(
+        self,
+        catalog: Catalog,
+        factory: ProcedureToolFactory,
+        strict: bool,
+        exposure: ModelExposure,
+    ) -> None:
+        summary = SUMMARY_MINIMAL if exposure.dimension_values else SUMMARY_NONE
         self._tools: tuple[Tool[AgentDeps], ...] = (
             *(factory.create(entry) for entry in catalog.exposed_entries),
-            Tool(query, strict=strict),
-            Tool(describe_result),
+            Tool(query, strict=strict, description=QUERY_DESCRIPTION.format(summary=summary)),
+            Tool(describe_result, description=DESCRIBE_RESULT_DESCRIPTION.format(summary=summary)),
         )
 
     def tools(self) -> tuple[Tool[AgentDeps], ...]:
