@@ -10,6 +10,7 @@ import duckdb
 import pyarrow as pa
 
 from data_concierge.core.errors import (
+    QueryError,
     QueryExecutionError,
     QueryTimeoutError,
     QueryValidationError,
@@ -35,6 +36,23 @@ MAX_ERROR_LINES = 4
 # A bug or a broken state of the engine, not of the query: DuckDB invalidates the database,
 # so the session ends instead of the model being asked to fix its SQL (section 11.2).
 ENGINE_FAILURES = (duckdb.FatalException, duckdb.InternalException)
+# Errors that quote only the model's SQL and the schema, so their text helps the model and
+# reaches it; any other error may quote a value from the data (architecture 002, section 6.2).
+VERBATIM_ERRORS = (duckdb.ParserException, duckdb.BinderException, duckdb.CatalogException)
+# Fixed engine texts of other errors that quote no value, so they also reach the model.
+VERBATIM_MESSAGES = ("Invalid Input Error: More than one row returned by a subquery",)
+_ERROR_HINTS: dict[type[duckdb.Error], str] = {
+    duckdb.ConversionException: (
+        "a value could not be converted; use TRY_CAST or filter the column first"
+    ),
+    duckdb.OutOfRangeException: (
+        "a value is out of the range of its type; use a wider type or filter the column first"
+    ),
+    duckdb.InvalidInputException: (
+        "a function got an input it cannot handle; check its arguments or filter the column first"
+    ),
+}
+_DEFAULT_ERROR_HINT = "the query failed while running; change the query"
 
 
 class ResultStore(Protocol):
@@ -156,7 +174,7 @@ class DuckDBResultStore:
             except ENGINE_FAILURES as exc:
                 raise self._engine_failure(exc) from exc
             except duckdb.Error as exc:
-                raise QueryValidationError(self._brief(str(exc))) from exc
+                raise self._query_error(QueryValidationError, exc) from exc
             return tuple(statement.type.name for statement in statements)
 
     def read_tables(self, sql: str) -> frozenset[str]:
@@ -218,7 +236,7 @@ class DuckDBResultStore:
         except ENGINE_FAILURES as exc:
             raise self._engine_failure(exc) from exc
         except duckdb.Error as exc:
-            raise QueryExecutionError(self._brief(str(exc))) from exc
+            raise self._query_error(QueryExecutionError, exc) from exc
         finally:
             timer.cancel()
 
@@ -281,6 +299,19 @@ class DuckDBResultStore:
     @staticmethod
     def _engine_failure(exc: duckdb.Error) -> ResultStoreError:
         return ResultStoreError(f"the session's DuckDB failed internally: {exc}")
+
+    @classmethod
+    def _query_error[E: QueryError](cls, error_type: type[E], exc: duckdb.Error) -> E:
+        """The error for the model: a verbatim error shortened, any other as its class and a
+        hint, with the full text in `detail`."""
+        text = str(exc)
+        if isinstance(exc, VERBATIM_ERRORS) or text.startswith(VERBATIM_MESSAGES):
+            return error_type(cls._brief(text))
+        hint = next(
+            (hint for kind, hint in _ERROR_HINTS.items() if isinstance(exc, kind)),
+            _DEFAULT_ERROR_HINT,
+        )
+        return error_type(f"{type(exc).__name__}: {hint}", detail=text)
 
     @staticmethod
     def _brief(message: str) -> str:

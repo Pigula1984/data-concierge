@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 import yaml
 
+from data_concierge.catalog.models import Catalog
 from data_concierge.catalog.repository import YamlCatalogRepository
 from data_concierge.core.errors import CatalogError
 
@@ -14,12 +15,12 @@ FIXTURE = Path(__file__).parent / "fixtures" / "minimal-catalog.yaml"
 type Entries = list[dict[str, Any]]
 
 
-def _load_variant(tmp_path: Path, change: Callable[[Entries], None]) -> None:
+def _load_variant(tmp_path: Path, change: Callable[[Entries], None]) -> Catalog:
     entries: Entries = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
     change(entries)
     path = tmp_path / "catalog.yaml"
     path.write_text(yaml.safe_dump(entries, allow_unicode=True), encoding="utf-8")
-    YamlCatalogRepository(path).load()
+    return YamlCatalogRepository(path).load()
 
 
 def test_minimal_catalog_loads() -> None:
@@ -31,6 +32,61 @@ def test_minimal_catalog_loads() -> None:
         "OrderDate",
         "Amount",
     )
+
+
+def test_sensitive_column_reaches_the_table_schema_and_defaults_to_false(
+    tmp_path: Path,
+) -> None:
+    def change(entries: Entries) -> None:
+        entries[0]["columns"][0]["sensitive"] = True
+
+    schema = _load_variant(tmp_path, change).entry("api.Order_List").table_schema
+
+    assert [(column.name, column.sensitive) for column in schema.columns] == [
+        ("OrderID", True),
+        ("OrderDate", False),
+        ("Amount", False),
+    ]
+
+
+# Architecture 002, section 5.3: names of customers, products and people, and business ids
+# the model does not need for joining results.
+SENSITIVE_COLUMNS = {
+    ("customer_search", "AccountNumber"),
+    ("customer_search", "CustomerName"),
+    ("customer_list", "AccountNumber"),
+    ("customer_list", "CustomerName"),
+    ("sales_order_list", "CustomerName"),
+    ("sales_order_line_list", "CustomerName"),
+    ("sales_order_line_list", "ProductName"),
+    ("product_search", "ProductName"),
+    ("product_search", "ProductNumber"),
+    ("get_bill_of_materials", "ComponentDesc"),
+    ("get_where_used_product", "ComponentDesc"),
+    *(
+        (tool, column)
+        for tool in ("get_employee_managers", "get_manager_employees")
+        for column in ("FirstName", "LastName", "ManagerFirstName", "ManagerLastName")
+    ),
+}
+
+
+def test_repository_catalog_marks_the_sensitive_columns_of_the_design(catalog: Catalog) -> None:
+    marked = {
+        (entry.tool, column.name)
+        for entry in catalog.entries
+        for column in entry.table_schema.columns
+        if column.sensitive
+    }
+
+    assert marked == SENSITIVE_COLUMNS
+
+
+@pytest.mark.parametrize("procedure", ["api.SalesOrderLine_List", "api.Product_Search"])
+def test_repository_catalog_lists_the_product_categories(catalog: Catalog, procedure: str) -> None:
+    (category,) = [c for c in catalog.entry(procedure).columns if c.name == "Category"]
+
+    assert category.values == ("Accessories", "Bikes", "Clothing", "Components")
 
 
 def test_param_both_injected_and_required_is_rejected(tmp_path: Path) -> None:

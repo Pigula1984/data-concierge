@@ -34,7 +34,12 @@ ORDERS_SCHEMA = TableSchema(
 CUSTOMERS_SCHEMA = TableSchema(
     columns=(
         Column(name="CustomerID", type=ColumnType.parse("int"), role=ColumnRole.ID),
-        Column(name="CustomerName", type=ColumnType.parse("string"), role=ColumnRole.DIMENSION),
+        Column(
+            name="CustomerName",
+            type=ColumnType.parse("string"),
+            role=ColumnRole.DIMENSION,
+            sensitive=True,
+        ),
         Column(name="City", type=ColumnType.parse("string"), role=ColumnRole.DIMENSION),
     )
 )

@@ -1,5 +1,6 @@
 """The fixed tools as the model sees them: thin controllers over the session's services."""
 
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 
@@ -12,7 +13,11 @@ from pydantic_ai.tools import ToolDefinition
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.tools import describe_result, query, retry_on_domain_error
 from data_concierge.catalog.models import Catalog
-from data_concierge.core.errors import ParameterValidationError, ProcedureTimeoutError
+from data_concierge.core.errors import (
+    ParameterValidationError,
+    ProcedureError,
+    ProcedureTimeoutError,
+)
 from data_concierge.query.models import QuerySummary
 from data_concierge.query.policy import QueryPolicy
 from data_concierge.query.service import QueryService
@@ -87,6 +92,22 @@ async def test_query_with_an_unknown_column_returns_the_duckdb_binder_message(
 
     assert isinstance(part, RetryPromptPart)
     assert '"Subtotal2" not found' in str(part.content)
+
+
+@pytest.mark.usefixtures("orders")
+async def test_query_error_quoting_a_data_value_is_logged_but_not_shown_to_the_model(
+    deps: AgentDeps, scripted: Callable[..., FunctionModel], caplog: pytest.LogCaptureFixture
+) -> None:
+    sql = 'SELECT CAST("CustomerName" AS INTEGER) AS customer FROM r1'
+
+    with caplog.at_level(logging.WARNING, logger="data_concierge.agent.tools"):
+        (part,) = await tool_results(scripted(ToolCallPart("query", {"sql": sql})), deps)
+
+    assert isinstance(part, RetryPromptPart)
+    assert "ConversionException" in str(part.content)
+    assert "Mohamed Pal" not in str(part.content)
+    assert "Mohamed Pal" in caplog.text
+    assert deps.context.correlation_id in caplog.text
 
 
 @pytest.mark.usefixtures("orders")
@@ -168,6 +189,29 @@ async def test_procedure_failure_is_reported_without_using_the_retry_budget(
     assert [type(part) for part in parts] == [ToolReturnPart, ToolReturnPart]
     assert all(isinstance(p, ToolReturnPart) and p.outcome == "failed" for p in parts)
     assert "30 s time limit" in str(parts[0].content)
+
+
+@retry_on_domain_error
+def unconvertible_procedure(ctx: RunContext[AgentDeps]) -> str:
+    raise ProcedureError(
+        "api.Test: column CustomerID does not fit the catalog type int",
+        detail="Could not convert 'SENTINEL-NAME-7Q' with type str",
+    )
+
+
+async def test_procedure_failure_detail_is_logged_but_not_shown_to_the_model(
+    deps: AgentDeps, scripted: Callable[..., FunctionModel], caplog: pytest.LogCaptureFixture
+) -> None:
+    model = scripted(ToolCallPart("unconvertible_procedure", {}))
+
+    with caplog.at_level(logging.WARNING, logger="data_concierge.agent.tools"):
+        (part,) = await tool_results(model, deps, [Tool(unconvertible_procedure)])
+
+    assert isinstance(part, ToolReturnPart)
+    assert part.outcome == "failed"
+    assert "SENTINEL-NAME-7Q" not in str(part.content)
+    assert "SENTINEL-NAME-7Q" in caplog.text
+    assert deps.context.correlation_id in caplog.text
 
 
 @retry_on_domain_error

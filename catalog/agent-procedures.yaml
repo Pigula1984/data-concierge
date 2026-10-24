@@ -2,6 +2,7 @@
 # Columns of api.* procedures are the contract the db/ scripts implement (plan U8);
 # columns of dbo.* procedures follow their current result sets in AdventureWorks2025.
 # Startup validation compares every entry with the database metadata (plan U10).
+# `sensitive: true` keeps a column's values from the model in every mode (architecture 002, 5.3).
 
 - procedure: api.Customer_Search
   tool: customer_search
@@ -25,8 +26,8 @@
       inject: request_context.user_id
   columns:
     - {name: CustomerID,    type: int,    role: id}
-    - {name: AccountNumber, type: string, role: id, hint: Numer konta klienta}
-    - {name: CustomerName,  type: string, role: dimension}
+    - {name: AccountNumber, type: string, role: id, hint: Numer konta klienta, sensitive: true}
+    - {name: CustomerName,  type: string, role: dimension, sensitive: true}
     - {name: CustomerType,  type: string, role: dimension, values: [individual, store]}
     - {name: Territory,     type: string, role: dimension}
     - {name: CountryRegion, type: string, role: dimension}
@@ -68,8 +69,8 @@
       inject: request_context.user_id
   columns:
     - {name: CustomerID,    type: int,    role: id}
-    - {name: AccountNumber, type: string, role: id}
-    - {name: CustomerName,  type: string, role: dimension}
+    - {name: AccountNumber, type: string, role: id, sensitive: true}
+    - {name: CustomerName,  type: string, role: dimension, sensitive: true}
     - {name: CustomerType,  type: string, role: dimension, values: [individual, store]}
     - {name: AddressType,   type: string, role: dimension, hint: "Rodzaj adresu, np. Home, Main Office, Shipping"}
     - {name: City,          type: string, role: dimension}
@@ -116,7 +117,7 @@
     - {name: SalesOrderID, type: int,           role: id}
     - {name: OrderDate,    type: date,          role: time,      hint: Data zamówienia}
     - {name: CustomerID,   type: int,           role: id}
-    - {name: CustomerName, type: string,        role: dimension}
+    - {name: CustomerName, type: string,        role: dimension, sensitive: true}
     - {name: CustomerType, type: string,        role: dimension, values: [individual, store]}
     - {name: Territory,    type: string,        role: dimension}
     - {name: SubTotal,     type: "decimal(19,4)", role: measure,   hint: "Sprzedaż netto, bez podatku i frachtu", default_for: [sprzedaż]}
@@ -168,12 +169,12 @@
     - {name: SalesOrderDetailID, type: int,           role: id}
     - {name: OrderDate,          type: date,          role: time,      hint: Data zamówienia}
     - {name: CustomerID,         type: int,           role: id}
-    - {name: CustomerName,       type: string,        role: dimension}
+    - {name: CustomerName,       type: string,        role: dimension, sensitive: true}
     - {name: Territory,          type: string,        role: dimension}
     - {name: ProductID,          type: int,           role: id}
-    - {name: ProductName,        type: string,        role: dimension}
+    - {name: ProductName,        type: string,        role: dimension, sensitive: true}
     - {name: Subcategory,        type: string,        role: dimension}
-    - {name: Category,           type: string,        role: dimension}
+    - {name: Category,           type: string,        role: dimension, values: [Accessories, Bikes, Clothing, Components]}
     - {name: OrderQty,           type: int,           role: measure,   hint: Liczba sztuk}
     - {name: UnitPrice,          type: "decimal(19,4)", role: measure,   hint: Cena jednostkowa}
     - {name: LineTotal,          type: "decimal(38,6)", role: measure,   hint: Wartość netto pozycji, default_for: [sprzedaż]}
@@ -206,12 +207,12 @@
       inject: request_context.user_id
   columns:
     - {name: ProductID,     type: int,           role: id}
-    - {name: ProductNumber, type: string,        role: id}
-    - {name: ProductName,   type: string,        role: dimension}
+    - {name: ProductNumber, type: string,        role: id, sensitive: true}
+    - {name: ProductName,   type: string,        role: dimension, sensitive: true}
     - {name: Color,         type: string,        role: dimension}
     - {name: Size,          type: string,        role: dimension}
     - {name: Subcategory,   type: string,        role: dimension}
-    - {name: Category,      type: string,        role: dimension}
+    - {name: Category,      type: string,        role: dimension, values: [Accessories, Bikes, Clothing, Components]}
     - {name: ListPrice,     type: "decimal(19,4)", role: measure, hint: Cena katalogowa}
   examples:
     - prompt: "pokaż strukturę materiałową produktu HL Mountain Frame"
@@ -250,7 +251,7 @@
   columns:
     - {name: ProductAssemblyID, type: int,           role: id}
     - {name: ComponentID,       type: int,           role: id}
-    - {name: ComponentDesc,     type: string,        role: dimension, hint: Nazwa komponentu}
+    - {name: ComponentDesc,     type: string,        role: dimension, hint: Nazwa komponentu, sensitive: true}
     - {name: TotalQuantity,     type: "decimal(38,2)", role: measure,   hint: Ilość komponentu w zespole}
     - {name: StandardCost,      type: "decimal(19,4)", role: measure}
     - {name: ListPrice,         type: "decimal(19,4)", role: measure}
@@ -280,7 +281,7 @@
   columns:
     - {name: ProductAssemblyID, type: int,           role: id}
     - {name: ComponentID,       type: int,           role: id}
-    - {name: ComponentDesc,     type: string,        role: dimension}
+    - {name: ComponentDesc,     type: string,        role: dimension, sensitive: true}
     - {name: TotalQuantity,     type: "decimal(38,2)", role: measure}
     - {name: StandardCost,      type: "decimal(19,4)", role: measure}
     - {name: ListPrice,         type: "decimal(19,4)", role: measure}
@@ -305,11 +306,11 @@
   columns:
     - {name: RecursionLevel,   type: int,    role: dimension}
     - {name: BusinessEntityID, type: int,    role: id}
-    - {name: FirstName,        type: string, role: dimension}
-    - {name: LastName,         type: string, role: dimension}
+    - {name: FirstName,        type: string, role: dimension, sensitive: true}
+    - {name: LastName,         type: string, role: dimension, sensitive: true}
     - {name: OrganizationNode, type: string, role: dimension}
-    - {name: ManagerFirstName, type: string, role: dimension}
-    - {name: ManagerLastName,  type: string, role: dimension}
+    - {name: ManagerFirstName, type: string, role: dimension, sensitive: true}
+    - {name: ManagerLastName,  type: string, role: dimension, sensitive: true}
 
 - procedure: dbo.uspGetManagerEmployees
   tool: get_manager_employees
@@ -329,8 +330,8 @@
   columns:
     - {name: RecursionLevel,   type: int,    role: dimension}
     - {name: OrganizationNode, type: string, role: dimension}
-    - {name: ManagerFirstName, type: string, role: dimension}
-    - {name: ManagerLastName,  type: string, role: dimension}
+    - {name: ManagerFirstName, type: string, role: dimension, sensitive: true}
+    - {name: ManagerLastName,  type: string, role: dimension, sensitive: true}
     - {name: BusinessEntityID, type: int,    role: id}
-    - {name: FirstName,        type: string, role: dimension}
-    - {name: LastName,         type: string, role: dimension}
+    - {name: FirstName,        type: string, role: dimension, sensitive: true}
+    - {name: LastName,         type: string, role: dimension, sensitive: true}

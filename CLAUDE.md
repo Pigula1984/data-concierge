@@ -1,6 +1,6 @@
 # Data Concierge
 
-Backend asystenta AI: przyjmuje prompt użytkownika, wybiera procedurę składowaną z katalogu, wywołuje ją, deterministycznie liczy zestawienia (DuckDB) i zwraca JSON. Projekt systemu: [`docs/architecture/001-architektura-data-concierge.md`](docs/architecture/001-architektura-data-concierge.md). To źródło prawdy o architekturze; zmiany projektu zaczynamy od aktualizacji tego dokumentu.
+Backend asystenta AI: przyjmuje prompt użytkownika, wybiera procedurę składowaną z katalogu, wywołuje ją, deterministycznie liczy zestawienia (DuckDB) i zwraca JSON. Projekt systemu: [`docs/architecture/001-architektura-data-concierge.md`](docs/architecture/001-architektura-data-concierge.md). To źródło prawdy o architekturze; zmiany projektu zaczynamy od aktualizacji tego dokumentu. Dostęp modelu do danych (przełącznik `model_data_access`, kotwice, kolumny wrażliwe) opisuje [`docs/architecture/002-dostep-modelu-do-danych.md`](docs/architecture/002-dostep-modelu-do-danych.md).
 
 ## Język
 

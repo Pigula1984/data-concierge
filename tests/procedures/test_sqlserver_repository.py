@@ -89,9 +89,9 @@ def test_missing_procedure_raises_error_without_password(
     with pytest.raises(ProcedureError) as raised:
         repository.execute(entry, {"Name": "x", "UserId": 1})
 
-    assert str(raised.value) == (
-        "SQL Server error 42000: Could not find stored procedure 'api.DoesNotExist'."
-    )
+    assert str(raised.value) == "SQL Server error 2812 (SQLSTATE 42000)"
+    assert raised.value.detail is not None
+    assert "Could not find stored procedure 'api.DoesNotExist'" in raised.value.detail
 
 
 @pytest.mark.integration
@@ -123,8 +123,11 @@ def test_login_failure_names_neither_account_nor_password(settings: Settings) ->
 def test_agent_account_cannot_read_tables_or_run_write_procedures(
     agent_client: SqlServerClient, statement: str
 ) -> None:
-    with pytest.raises(ProcedureError, match="permission was denied"):
+    with pytest.raises(ProcedureError, match=r"^SQL Server error 229 ") as raised:
         agent_client.fetch(statement)
+
+    assert raised.value.detail is not None
+    assert "permission was denied" in raised.value.detail
 
 
 @pytest.mark.integration
@@ -245,3 +248,20 @@ def test_value_outside_the_catalog_type_is_an_error(catalog: Catalog) -> None:
 
     with pytest.raises(ProcedureError, match="column SubTotal does not fit the catalog type"):
         repository.execute(catalog.entry("api.SalesOrder_List"), {})
+
+
+def test_value_that_does_not_fit_the_catalog_type_stays_out_of_the_message(
+    catalog: Catalog,
+) -> None:
+    order = (1, date(2024, 1, 5), "SENTINEL-NAME-7Q", "Store A", "store", "Southeast")
+    rows = (*order, Decimal("1.0000"), Decimal("1.0000"))
+    repository = SqlServerProcedureRepository(FakeExecutor(ORDER_COLUMNS, rows))
+
+    with pytest.raises(ProcedureError) as raised:
+        repository.execute(catalog.entry("api.SalesOrder_List"), {})
+
+    assert str(raised.value) == (
+        "api.SalesOrder_List: column CustomerID does not fit the catalog type int"
+    )
+    assert raised.value.detail is not None
+    assert "SENTINEL-NAME-7Q" in raised.value.detail

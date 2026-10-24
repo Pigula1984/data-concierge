@@ -61,6 +61,7 @@ class ColumnSpec(_CatalogModel):
     hint: str | None = None
     values: tuple[str, ...] | None = None
     default_for: tuple[str, ...] = ()
+    sensitive: bool = False
 
     @model_validator(mode="after")
     def _check_default_for(self) -> Self:
@@ -121,7 +122,12 @@ class CatalogEntry(_CatalogModel):
     def table_schema(self) -> TableSchema:
         return TableSchema(
             columns=tuple(
-                Column(name=column.name, type=column.type, role=column.role)
+                Column(
+                    name=column.name,
+                    type=column.type,
+                    role=column.role,
+                    sensitive=column.sensitive,
+                )
                 for column in self.columns
             )
         )

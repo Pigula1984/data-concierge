@@ -54,6 +54,7 @@ class SqlServerProcedureRepository:
             except (pa.ArrowInvalid, pa.ArrowTypeError, OverflowError) as exc:
                 raise ProcedureError(
                     f"{procedure}: column {column.name} does not fit the catalog type "
-                    f"{column.type}: {exc}"
+                    f"{column.type}",
+                    detail=str(exc),
                 ) from exc
         return pa.Table.from_arrays(arrays, schema=pa.schema(schema.arrow_fields))

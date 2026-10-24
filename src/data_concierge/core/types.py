@@ -220,6 +220,8 @@ class Column(BaseModel, frozen=True):
     name: str
     type: ColumnType
     role: ColumnRole
+    # Its values never reach the model, in any mode (architecture 002, section 5.3).
+    sensitive: bool = False
 
 
 class TableSchema(BaseModel, frozen=True):

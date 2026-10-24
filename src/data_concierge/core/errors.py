@@ -2,7 +2,15 @@
 
 
 class DataConciergeError(Exception):
-    """Base class for all domain errors raised by Data Concierge."""
+    """Base class for all domain errors raised by Data Concierge.
+
+    The message may reach the model, so it never quotes values from the data; `detail` keeps
+    the full text of the underlying failure for the log (architecture 002, section 6.2).
+    """
+
+    def __init__(self, *args: object, detail: str | None = None) -> None:
+        super().__init__(*args)
+        self.detail = detail
 
 
 class ConfigurationError(DataConciergeError):
