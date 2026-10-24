@@ -82,7 +82,7 @@ Kolumna `id`, która coś mówi o kliencie lub produkcie (numer konta, numer pro
 Dziś model sam przepisuje kandydatów (`Candidate.id`, `description`) z wierszy, które widział. W trybie zamkniętym ich nie widzi, więc zamiast listy wskazuje uchwyt:
 
 ```json
-{"question": "Znaleziono {r2.row_count} klientów o tej nazwie. Którego wybierasz?",
+{"question": "Znaleziono {r2#rows} klientów o tej nazwie. Którego wybierasz?",
  "candidates_from": {"handle": "r2", "id_column": "CustomerID"}}
 ```
 
@@ -186,12 +186,12 @@ Model wstawia wartość z danych do tekstu dla użytkownika przez kotwicę, a ba
 |---------|-----------|
 | `{r3.net_sales}` | wartość kolumny w uchwycie, który ma dokładnie jeden wiersz |
 | `{r2[6].net_sales}` | wartość kolumny w wierszu 6 (numeracja od 1, w kolejności z `ORDER BY` modelu) |
-| `{r2.row_count}` | liczba wierszy uchwytu |
+| `{r2#rows}` | liczba wierszy uchwytu (osobna składnia, bo kolumna wyniku może się nazywać `row_count`) |
 
 - **Gdzie:** we wszystkich tekstach dla użytkownika: `message`, `assumptions`, tytuły tabel i `clarification.question`.
 - **Sprawdzenie:** istniejący walidator wyniku agenta (`output_validator` w `AgentService`) sprawdza, czy uchwyt istnieje w sesji, kolumna jest w schemacie, a wiersz w zakresie. Kotwica `{rN.kolumna}` bez numeru wiersza na uchwycie z wieloma wierszami jest błędem. Błąd wraca do modelu jako `ModelRetry` z opisem. Backend nie skanuje tekstu w poszukiwaniu liczb spoza kotwic (sekcja 12).
 - **Wstawienie:** `ResponseAssembler` podmienia kotwice po walidacji. Uchwyty użyte w kotwicach dołączają do `provenance`, tak jak uchwyty tabel.
-- **Formatowanie** (decyzja D3): liczby z polskimi separatorami (spacja niełamliwa co trzy cyfry, przecinek dziesiętny), liczba miejsc po przecinku według skali typu kolumny, którą model ustala przez `CAST(… AS DECIMAL(38,2))`. Daty w ISO (`2024-06-01`), `NULL` jako „brak danych”.
+- **Formatowanie** (decyzja D3): liczby z polskimi separatorami (przecinek dziesiętny, spacja niełamliwa co trzy cyfry dopiero od pięciu cyfr części całkowitej, kolumny `id` bez separatorów), liczba miejsc po przecinku według skali typu kolumny, którą model ustala przez `CAST(… AS DECIMAL(38,2))`. Daty w ISO (`2024-06-01`), `NULL` jako „brak danych”.
 - **Wartość kolumny wrażliwej** może trafić do tekstu przez kotwicę, np. `Najlepszy klient: {r4[1].CustomerName}`. Użytkownik ma prawo ją zobaczyć, a model jej nie widzi.
 
 Kotwice działają w obu trybach. W trybie ograniczonym model widzi liczby w fazie komentarza, ale instrukcja każe mu je wstawiać kotwicami. To usuwa ryzyko złego przepisania lub zaokrąglenia (001, sekcja 7.5).
@@ -286,7 +286,7 @@ Decyzje właściciela projektu z 2026-10-24:
 |---|---------|-----------------|
 | D1 | Czy w trybie zamkniętym model widzi wartości kolumn `id` (bez `sensitive`) w wynikach do 50 wierszy? | **Tak.** Z kluczy technicznych model nie wyczyta wiedzy o danych, a bez nich nie działa łańcuch procedur. Kotwice w parametrach (`{r1.CustomerID}`) zostają możliwym rozszerzeniem (sekcja 4.2). |
 | D2 | Tryb ograniczony: lista dozwolonych z sekcji 5.1 i dwie fazy tury z sekcji 5.2 | **Tak**, w tym kształcie. |
-| D3 | Formatowanie wartości z kotwic | Polskie separatory, skala z typu kolumny (model steruje `CAST`), daty ISO, `NULL` jako „brak danych”. Przyjęte na potrzeby tego rozwiązania. |
+| D3 | Formatowanie wartości z kotwic | Polskie separatory od pięciu cyfr (2024, 14 244), kolumny `id` bez separatorów, skala z typu kolumny (model steruje `CAST`), daty ISO, `NULL` jako „brak danych”. Przyjęte na potrzeby tego rozwiązania, separatory doprecyzowane przy przeglądzie planu. |
 | D4 | Co model widzi w trybie zamkniętym poza strukturą | Zakresy dat (min i max kolumn `time`, `data_range`) i `row_count`. Nie widzi nazw klientów, produktów i osób ani wartości i ilości sprzedaży (sekcja 4.1). |
 | D5 | Czy zachowanie z v1 zostaje trzecim trybem (`full`)? | **Nie.** Punktem odniesienia jest zapisany przebieg ewaluacji v1. |
 | D6 | Domyślna wrażliwość kolumny | Widoczna, a właściciel oznacza wrażliwe `sensitive: true`. Wstępne oznaczenie katalogu w sekcji 5.3. |
