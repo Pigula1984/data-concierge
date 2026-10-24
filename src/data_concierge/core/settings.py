@@ -3,10 +3,12 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, NonNegativeInt, PositiveInt, SecretStr
+from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 type Effort = Literal["low", "medium", "high", "xhigh", "max"]
+# What data the model provider receives (architecture 002, section 3).
+type ModelDataAccess = Literal["none", "minimal"]
 
 
 class Settings(BaseSettings):
@@ -29,6 +31,7 @@ class Settings(BaseSettings):
     model: str = "anthropic:claude-haiku-5-5"
     effort: Effort = "medium"
     strict_tools: bool = True
+    model_data_access: ModelDataAccess = "none"
     # Standard provider variable name; passed explicitly to the provider by the composition root.
     anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
 
@@ -46,3 +49,19 @@ class Settings(BaseSettings):
     max_response_rows: PositiveInt = 10_000
     # A query result above this is dropped and the model asked to aggregate (section 7.4).
     max_query_rows: PositiveInt = 100_000
+
+
+class ModelExposure(BaseModel, frozen=True):
+    """What the model sees of the data in the process's mode (architecture 002, sections 4-5).
+
+    `dimension_values`: dimension values (up to 20, never of sensitive columns) in result
+    summaries. `comment_phase`: a second model pass writes the comment after seeing the tables.
+    """
+
+    dimension_values: bool
+    comment_phase: bool
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> ModelExposure:
+        minimal = settings.model_data_access == "minimal"
+        return cls(dimension_values=minimal, comment_phase=minimal)

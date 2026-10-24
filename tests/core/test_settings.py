@@ -4,7 +4,7 @@ import pydantic
 import pytest
 from pydantic import SecretStr
 
-from data_concierge.core.settings import Settings
+from data_concierge.core.settings import ModelExposure, Settings
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +53,7 @@ def test_settings_defaults_follow_architecture_limits(monkeypatch: pytest.Monkey
     assert settings.full_preview_max_rows == 50
     assert settings.max_response_rows == 10_000
     assert settings.max_query_rows == 100_000
+    assert settings.model_data_access == "none"
 
 
 @pytest.mark.parametrize(
@@ -81,6 +82,34 @@ def test_settings_read_anthropic_key_from_env_file(tmp_path: Path) -> None:
     assert settings.anthropic_api_key.get_secret_value() == "sk-test"
 
 
+def test_model_data_access_accepts_minimal_and_rejects_other_modes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("DC_MODEL_DATA_ACCESS", "minimal")
+
+    assert Settings(_env_file=None).model_data_access == "minimal"
+
+    monkeypatch.setenv("DC_MODEL_DATA_ACCESS", "full")
+    with pytest.raises(pydantic.ValidationError, match="model_data_access"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("mode", "shown"),
+    [pytest.param("none", False, id="none"), pytest.param("minimal", True, id="minimal")],
+)
+def test_model_exposure_follows_the_mode(
+    monkeypatch: pytest.MonkeyPatch, mode: str, shown: bool
+) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("DC_MODEL_DATA_ACCESS", mode)
+
+    exposure = ModelExposure.from_settings(Settings(_env_file=None))
+
+    assert (exposure.dimension_values, exposure.comment_phase) == (shown, shown)
+
+
 ENV_EXAMPLE = Path(__file__).parents[2] / ".env.example"
 
 
@@ -89,6 +118,7 @@ def test_env_example_loads_into_settings() -> None:
 
     assert settings.sql_server == "localhost"
     assert settings.anthropic_api_key is None
+    assert settings.model_data_access == "none"
 
 
 def test_empty_password_in_env_file_counts_as_missing() -> None:

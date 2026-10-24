@@ -248,6 +248,68 @@ def test_result_roles_come_from_source_columns_or_from_the_type(queries: QuerySe
 
 
 @pytest.mark.usefixtures("sales")
+@pytest.mark.parametrize(
+    ("sql", "sensitive"),
+    [
+        pytest.param('SELECT "CustomerName" FROM r2', True, id="copied sensitive column"),
+        pytest.param('SELECT "customername" FROM r2', True, id="copied ignoring case"),
+        pytest.param('SELECT "City" FROM r2', False, id="copied visible column"),
+        pytest.param(
+            'SELECT upper("CustomerName") AS name FROM r2', True, id="text over a sensitive source"
+        ),
+        pytest.param(
+            'SELECT upper("City") AS city_name FROM r2', True, id="any text over a sensitive source"
+        ),
+        pytest.param(
+            'SELECT sum(o."SubTotal") AS net_sales FROM r1 o JOIN r2 c USING ("CustomerID")',
+            False,
+            id="number over a sensitive source",
+        ),
+        pytest.param(
+            'SELECT upper("Territory") AS territory FROM r1', False, id="text over visible sources"
+        ),
+    ],
+)
+def test_result_columns_inherit_sensitivity_or_derive_it_from_the_sources(
+    queries: QueryService, results: ResultService, sql: str, sensitive: bool
+) -> None:
+    summary = queries.run(sql)
+
+    (column,) = results.describe(summary.handle).table_schema.columns
+    assert column.sensitive is sensitive
+
+
+def test_copied_column_is_sensitive_when_any_source_marks_it(
+    results: ResultService,
+    queries: QueryService,
+    customers_table: Callable[..., ResultTable],
+) -> None:
+    sensitive = results.save(customers_table())
+    table = customers_table()
+    visible = results.save(
+        ResultTable(
+            data=table.data,
+            schema=table.schema.model_copy(
+                update={
+                    "columns": tuple(
+                        column.model_copy(update={"sensitive": False})
+                        for column in table.schema.columns
+                    )
+                }
+            ),
+            lineage=table.lineage,
+        )
+    )
+
+    summary = queries.run(
+        f'SELECT a."CustomerName" FROM {visible} a JOIN {sensitive} b USING ("CustomerID")'
+    )
+
+    (column,) = results.describe(summary.handle).table_schema.columns
+    assert column.sensitive is True
+
+
+@pytest.mark.usefixtures("sales")
 def test_unknown_column_returns_the_duckdb_binder_message(queries: QueryService) -> None:
     with pytest.raises(QueryExecutionError, match='"Discount" not found') as error:
         queries.run('SELECT sum("Discount") AS discount FROM r1')

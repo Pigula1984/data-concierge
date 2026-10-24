@@ -56,22 +56,45 @@ class QueryService:
         types: Sequence[ColumnType],
         sources: Sequence[Handle],
     ) -> tuple[Column, ...]:
-        """A column copied from a source keeps that column's role; others get one from the type."""
-        inherited = {
-            (column.name.casefold(), column.type): column.role
-            for handle in reversed(sources)
+        """A column copied from a source keeps that column's role and sensitivity; others get a
+        role from the type and are sensitive when they hold text and a source has a sensitive
+        column (architecture 002, section 5.3).
+
+        A copied column is sensitive when any source has a sensitive column of its name and type,
+        because the backend does not analyse which source the query copied it from.
+        """
+        source_columns = [
+            column
+            for handle in sources
             for column in self._results.describe(handle).table_schema.columns
-        }
+        ]
+        copied: dict[tuple[str, ColumnType], Column] = {}
+        for column in source_columns:
+            key = (column.name.casefold(), column.type)
+            first = copied.setdefault(key, column)
+            if column.sensitive and not first.sensitive:
+                copied[key] = first.model_copy(update={"sensitive": True})
+        reads_sensitive = any(column.sensitive for column in source_columns)
         return tuple(
-            Column(
-                name=name,
-                type=column_type,
-                role=inherited.get(
-                    (name.casefold(), column_type),
-                    _ROLES_BY_KIND.get(column_type.kind, ColumnRole.DIMENSION),
-                ),
-            )
+            self._result_column(name, column_type, copied, reads_sensitive)
             for (name, _), column_type in zip(columns, types, strict=True)
+        )
+
+    @staticmethod
+    def _result_column(
+        name: str,
+        column_type: ColumnType,
+        copied: dict[tuple[str, ColumnType], Column],
+        reads_sensitive: bool,
+    ) -> Column:
+        source = copied.get((name.casefold(), column_type))
+        if source is not None:
+            return Column(name=name, type=column_type, role=source.role, sensitive=source.sensitive)
+        return Column(
+            name=name,
+            type=column_type,
+            role=_ROLES_BY_KIND.get(column_type.kind, ColumnRole.DIMENSION),
+            sensitive=reads_sensitive and column_type.kind is ColumnKind.STRING,
         )
 
     @staticmethod
