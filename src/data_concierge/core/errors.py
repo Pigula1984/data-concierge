@@ -21,6 +21,11 @@ class CatalogError(DataConciergeError):
     """The agent catalog contains an invalid or unsupported definition."""
 
 
+class AnchorError(DataConciergeError):
+    """An anchor in a text for the user names no value of the session (architecture 002,
+    section 6.1); the message tells the model why."""
+
+
 class ParameterValidationError(DataConciergeError):
     """Procedure arguments supplied by the model are invalid."""
 

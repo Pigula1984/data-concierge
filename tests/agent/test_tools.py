@@ -67,7 +67,7 @@ async def test_query_returns_the_new_handle_with_its_sources_and_sql(
     assert isinstance(part, ToolReturnPart)
     assert isinstance(part.content, QuerySummary)
     assert (part.content.handle, part.content.sources, part.content.sql) == ("r2", ("r1",), sql)
-    assert part.content.preview == (("159.7500",),)
+    assert (part.content.row_count, part.content.stats, part.content.ids) == (1, {}, {})
 
 
 @pytest.mark.usefixtures("orders")
@@ -142,11 +142,11 @@ async def test_query_schema_has_one_required_sql_string(
     assert schema["required"] == ["sql"]
     assert schema["properties"]["sql"]["type"] == "string"
     assert schema["additionalProperties"] is False
-    assert "DECIMAL(38,6)" in (definition.description or "")
+    assert "single SELECT" in schema["properties"]["sql"]["description"]
 
 
 @pytest.mark.usefixtures("orders")
-async def test_describe_result_returns_schema_and_statistics(
+async def test_describe_result_returns_the_summary_without_values(
     deps: AgentDeps, scripted: Callable[..., FunctionModel]
 ) -> None:
     (part,) = await tool_results(scripted(ToolCallPart("describe_result", {"handle": "r1"})), deps)
@@ -159,7 +159,9 @@ async def test_describe_result_returns_schema_and_statistics(
         "OrderDate",
         "CustomerID",
     ]
-    assert part.content.stats["SubTotal"].max == "100.5000"
+    assert part.content.stats["OrderDate"].max == "2024-03-02"
+    assert "SubTotal" not in part.content.stats
+    assert part.content.ids["CustomerID"] == (12698, 20550, 11000)
 
 
 @pytest.mark.usefixtures("orders")

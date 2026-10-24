@@ -92,7 +92,7 @@ Niemutowalne modele Pydantic (`frozen=True`) do przekazywania danych między war
 
 - `RequestContext` (user_id, rola, id korelacji),
 - `CatalogEntry`, `ProcedureParams`, `ProcedureLineage`, `QueryLineage`,
-- `ResultSummary` i `QuerySummary` (to, co widzi model: uchwyt, schemat, statystyki, podgląd, a dla zapytania także źródła i SQL wykonany),
+- `ResultSummary` i `QuerySummary` (to, co widzi model: uchwyt, schemat, zakresy dat, `ids` i w trybie `minimal` wartości wymiarów, nigdy wiersze, a dla zapytania także źródła i SQL wykonany),
 - `AgentAnswer` (wynik modelu, `output_type` agenta: status, komentarz, uchwyty z tytułami, założenia, pytanie doprecyzowujące),
 - `Response` (kontrakt z sekcji 9 architektury, składany przez `ResponseAssembler` z `AgentAnswer`, danych uchwytów i proweniencji).
 

@@ -249,6 +249,10 @@ class TableSchema(BaseModel, frozen=True):
     def names(self) -> tuple[str, ...]:
         return tuple(column.name for column in self.columns)
 
+    def column(self, name: str) -> Column | None:
+        """The column of that name ignoring case, as DuckDB resolves it."""
+        return next((c for c in self.columns if c.name.casefold() == name.casefold()), None)
+
     @property
     def arrow_fields(self) -> list[tuple[str, pa.DataType]]:
         """Names and Arrow types an Arrow table must have to hold data of this schema."""

@@ -44,8 +44,9 @@ class Settings(BaseSettings):
 
     max_agent_steps: PositiveInt = 10
     procedure_timeout_seconds: PositiveInt = 30
-    preview_rows: PositiveInt = 10
-    full_preview_max_rows: PositiveInt = 50
+    # Results up to this many rows give the model their ids and clarification candidates
+    # (architecture 002, sections 4.2 and 4.3).
+    model_max_rows: PositiveInt = 50
     max_response_rows: PositiveInt = 10_000
     # A query result above this is dropped and the model asked to aggregate (section 7.4).
     max_query_rows: PositiveInt = 100_000
@@ -62,6 +63,14 @@ class ModelExposure(BaseModel, frozen=True):
     comment_phase: bool
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> ModelExposure:
-        minimal = settings.model_data_access == "minimal"
+    def for_mode(cls, mode: ModelDataAccess) -> ModelExposure:
+        minimal = mode == "minimal"
         return cls(dimension_values=minimal, comment_phase=minimal)
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> ModelExposure:
+        return cls.for_mode(settings.model_data_access)
+
+
+# The default mode of the service (D7), for components built without settings, e.g. in tests.
+DEFAULT_EXPOSURE = ModelExposure.for_mode("none")

@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pyarrow as pa
 
+from data_concierge.core.settings import DEFAULT_EXPOSURE, ModelExposure
 from data_concierge.core.sql import quote_identifier
 from data_concierge.core.types import Column, ColumnRole, TableSchema
 from data_concierge.results.models import (
@@ -22,24 +23,26 @@ from data_concierge.results.models import (
 )
 from data_concierge.results.repository import ResultStore
 
-PREVIEW_ROWS = 10
-FULL_PREVIEW_MAX_ROWS = 50
+MODEL_MAX_ROWS = 50
 MAX_LISTED_VALUES = 20
 
 
 class ResultService:
-    """Facade over the session's result store used by procedures, queries and the agent."""
+    """Facade over the session's result store used by procedures, queries and the agent.
+
+    Summaries show the model what the process's mode allows (architecture 002, sections 4-5).
+    """
 
     def __init__(
         self,
         store: ResultStore,
-        preview_rows: int = PREVIEW_ROWS,
-        full_preview_max_rows: int = FULL_PREVIEW_MAX_ROWS,
+        exposure: ModelExposure = DEFAULT_EXPOSURE,
+        model_max_rows: int = MODEL_MAX_ROWS,
         max_listed_values: int = MAX_LISTED_VALUES,
     ) -> None:
         self._store = store
-        self._preview_rows = preview_rows
-        self._full_preview_max_rows = full_preview_max_rows
+        self._exposure = exposure
+        self._model_max_rows = model_max_rows
         self._max_listed_values = max_listed_values
 
     def save(self, table: ResultTable) -> Handle:
@@ -88,15 +91,22 @@ class ResultService:
 
     def summarize(self, handle: Handle) -> ResultSummary:
         stored = self._store.describe(handle)
-        limit = None if stored.row_count <= self._full_preview_max_rows else self._preview_rows
         return ResultSummary(
             handle=handle,
             row_count=stored.row_count,
             truncated=self.is_truncated(handle),
             columns=stored.column_infos,
             stats=self._stats(stored),
-            preview=self._rows(self._store.fetch(handle, limit)),
+            ids=self._ids(stored),
         )
+
+    def cell(self, handle: Handle, row: int, column: str) -> JsonScalar:
+        """The value in a row (from 1, in the handle's row order) of an existing column."""
+        (value,) = self._single_row(
+            f"SELECT {quote_identifier(column)} FROM {quote_identifier(handle)} "
+            f"LIMIT 1 OFFSET {row - 1}"
+        )
+        return value
 
     def export(self, handle: Handle, max_rows: int) -> ExportedTable:
         stored = self._store.describe(handle)
@@ -121,16 +131,34 @@ class ResultService:
         raise TypeError(f"unsupported value type {type(value).__name__}")
 
     def _stats(self, stored: StoredResult) -> dict[str, ColumnStats]:
+        """min/max of time columns; dimension values only when the mode shows them."""
         table = quote_identifier(stored.handle)
         stats: dict[str, ColumnStats] = {}
-        for column in stored.table_schema.columns:
+        for column in self._visible(stored, ColumnRole.TIME):
             name = quote_identifier(column.name)
-            if column.role in (ColumnRole.TIME, ColumnRole.MEASURE):
-                low, high = self._single_row(f"SELECT min({name}), max({name}) FROM {table}")
-                stats[column.name] = ColumnStats(min=low, max=high)
-            elif column.role is ColumnRole.DIMENSION:
+            low, high = self._single_row(f"SELECT min({name}), max({name}) FROM {table}")
+            stats[column.name] = ColumnStats(min=low, max=high)
+        if self._exposure.dimension_values:
+            for column in self._visible(stored, ColumnRole.DIMENSION):
                 stats[column.name] = self._dimension_stats(table, column)
         return stats
+
+    def _ids(self, stored: StoredResult) -> dict[str, tuple[JsonScalar, ...]]:
+        """Values of the id columns, which carry keys from one procedure to the next (D1)."""
+        columns = self._visible(stored, ColumnRole.ID)
+        if not columns or stored.row_count > self._model_max_rows:
+            return {}
+        select = ", ".join(quote_identifier(column.name) for column in columns)
+        table = self._store.query(f"SELECT {select} FROM {quote_identifier(stored.handle)}")
+        return {
+            column.name: tuple(self.to_json_scalar(v) for v in values.to_pylist())
+            for column, values in zip(columns, table.columns, strict=True)
+        }
+
+    @staticmethod
+    def _visible(stored: StoredResult, role: ColumnRole) -> list[Column]:
+        """Columns of the role that the model may see values of, in schema order."""
+        return [c for c in stored.table_schema.columns if c.role is role and not c.sensitive]
 
     def _dimension_stats(self, table: str, column: Column) -> ColumnStats:
         name = quote_identifier(column.name)

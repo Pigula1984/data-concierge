@@ -25,7 +25,7 @@ from data_concierge.catalog.repository import (
     YamlCatalogRepository,
 )
 from data_concierge.catalog.service import CatalogService
-from data_concierge.core.settings import Settings
+from data_concierge.core.settings import ModelExposure, Settings
 from data_concierge.core.sqlserver import SqlServerClient
 from data_concierge.procedures.repository import ProcedureRepository, SqlServerProcedureRepository
 from data_concierge.procedures.service import ProcedureService
@@ -46,8 +46,8 @@ class DuckDBSessionFactory:
         settings = self._settings
         results = ResultService(
             DuckDBResultStore(max_query_rows=settings.max_query_rows),
-            preview_rows=settings.preview_rows,
-            full_preview_max_rows=settings.full_preview_max_rows,
+            ModelExposure.from_settings(settings),
+            settings.model_max_rows,
         )
         return Session(
             id=str(uuid4()),
@@ -99,10 +99,12 @@ class CompositionRoot:
         catalog = catalog_service.catalog
         data_ranges = catalog_service.load_data_ranges()
         strict = settings.strict_tools
+        exposure = ModelExposure.from_settings(settings)
+        tool_factory = ProcedureToolFactory(data_ranges, strict)
         agent = AgentService(
             model,
-            ToolRegistry(catalog, ProcedureToolFactory(data_ranges, strict), strict).tools(),
-            AgentInstructions(catalog, data_ranges, settings.full_preview_max_rows).text(),
+            ToolRegistry(catalog, tool_factory, strict, exposure).tools(),
+            AgentInstructions(catalog, data_ranges, exposure, settings.model_max_rows).text(),
             settings,
         )
         sessions = InMemorySessionRepository()
