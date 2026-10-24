@@ -95,8 +95,11 @@ def test_locked_connection_rejects_file_network_and_config_access(
     existing.write_text("a\n1\n", encoding="utf-8")
     sql = statement.format(existing=existing, new_file=tmp_path / "leak.csv")
 
-    with pytest.raises(QueryExecutionError, match=expected):
+    with pytest.raises(QueryExecutionError) as raised:
         DuckDBResultStore().query(sql)
+
+    assert raised.value.detail is not None
+    assert expected in raised.value.detail
 
     assert not (tmp_path / "leak.csv").exists()
 
@@ -126,6 +129,67 @@ def test_result_table_rejects_arrow_types_that_differ_from_the_schema() -> None:
 
     with pytest.raises(ValueError, match="do not match the schema"):
         ResultTable(data=pa.table({"Value": [1.5]}), schema=schema, lineage=lineage)
+
+
+SENTINEL = "SENTINEL-NAME-7Q"
+
+
+def _name_table() -> ResultTable:
+    schema = TableSchema(
+        columns=(Column(name="Name", type=ColumnType.parse("string"), role=ColumnRole.DIMENSION),)
+    )
+    data = pa.table({"Name": pa.array([SENTINEL], type=pa.string())})
+    lineage = ProcedureLineage(procedure="api.Test", params={}, truncated=False)
+    return ResultTable(data=data, schema=schema, lineage=lineage)
+
+
+@pytest.mark.parametrize(
+    ("sql", "message"),
+    [
+        pytest.param(
+            'SELECT CAST("Name" AS INTEGER) AS n FROM r1',
+            "ConversionException: a value could not be converted; "
+            "use TRY_CAST or filter the column first",
+            id="conversion",
+        ),
+        pytest.param(
+            """SELECT strptime("Name", '%Y') AS year FROM r1""",
+            "InvalidInputException: a function got an input it cannot handle; "
+            "check its arguments or filter the column first",
+            id="invalid input",
+        ),
+    ],
+)
+def test_errors_that_may_quote_data_reach_the_model_as_class_and_hint(
+    sql: str, message: str
+) -> None:
+    store = DuckDBResultStore()
+    store.put(_name_table())
+
+    with pytest.raises(QueryExecutionError) as raised:
+        store.query(sql)
+
+    assert str(raised.value) == message
+    assert raised.value.detail is not None
+    assert SENTINEL in raised.value.detail
+
+
+def test_scalar_subquery_with_several_rows_reaches_the_model_unchanged() -> None:
+    store = DuckDBResultStore()
+    store.put(_name_table())
+
+    with pytest.raises(QueryExecutionError, match="More than one row returned by a subquery"):
+        store.query('SELECT (SELECT "Name" FROM r1 UNION ALL SELECT "Name" FROM r1) AS name')
+
+
+def test_binder_error_reaches_the_model_unchanged_without_detail() -> None:
+    store = DuckDBResultStore()
+    store.put(_name_table())
+
+    with pytest.raises(QueryExecutionError, match='"Nme" not found') as raised:
+        store.query('SELECT "Nme" FROM r1')
+
+    assert raised.value.detail is None
 
 
 class BrokenCursor:

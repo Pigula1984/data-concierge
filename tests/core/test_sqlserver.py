@@ -49,15 +49,31 @@ def _error(sqlstate: str, text: str) -> ProcedureError:
     )
 
 
-def test_driver_prefixes_and_codes_are_removed_from_sql_errors() -> None:
-    error = _error(
-        "42000",
+def test_sql_errors_reach_the_model_as_number_and_sqlstate_of_the_first_record() -> None:
+    text = (
         "[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Could not find stored "
         "procedure 'api.X'. (2812) (SQLExecDirectW); [42000] [Microsoft][ODBC Driver 18 for "
-        "SQL Server][SQL Server]Statement(s) could not be prepared. (8180)",
+        "SQL Server][SQL Server]Statement(s) could not be prepared. (8180)"
     )
 
-    assert str(error) == "SQL Server error 42000: Could not find stored procedure 'api.X'."
+    error = _error("42000", text)
+
+    assert str(error) == "SQL Server error 2812 (SQLSTATE 42000)"
+    assert error.detail == text
+
+
+def test_sql_error_text_with_a_data_value_stays_in_the_detail() -> None:
+    text = (
+        "[22018] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Conversion failed when "
+        "converting the nvarchar value 'SENTINEL-NAME-7Q' to data type int. (245) "
+        "(SQLExecDirectW)"
+    )
+
+    error = _error("22018", text)
+
+    assert str(error) == "SQL Server error 245 (SQLSTATE 22018)"
+    assert error.detail is not None
+    assert "SENTINEL-NAME-7Q" in error.detail
 
 
 @pytest.mark.parametrize("sqlstate", ["08001", "28000"])

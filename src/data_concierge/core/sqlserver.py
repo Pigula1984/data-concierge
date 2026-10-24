@@ -25,8 +25,7 @@ _TIMEOUT_SQLSTATE = "HYT00"
 _CONNECTION_SQLSTATE_CLASSES = ("08", "28")
 # A pyodbc message is "[SQLSTATE] [Microsoft][ODBC Driver 18 ...][SQL Server]text (native)
 # (SQLFunction)", with further diagnostic records after "; [".
-_DIAGNOSTIC_PREFIX = re.compile(r"^(?:\[[^\]]*\]\s*)+")
-_DIAGNOSTIC_SUFFIX = re.compile(r"(?:\s*\(-?\d+\))?(?:\s*\(SQL\w+\))?\s*$")
+_NATIVE_ERROR = re.compile(r"\((-?\d+)\)(?:\s*\(SQL\w+\))?\s*$")
 
 
 class SqlExecutor(Protocol):
@@ -113,7 +112,9 @@ class SqlServerClient:
         )
 
     def _domain_error(self, exc: pyodbc.Error) -> ProcedureError:
-        """The driver's text without driver prefixes, codes or login data (section 5.5)."""
+        """The error number and SQLSTATE without the driver's text, which may quote values from
+        the data (architecture 002, section 6.2) and names the login on connection failures
+        (section 5.5); the text of other errors stays in `detail`."""
         sqlstate = str(exc.args[0]) if exc.args else ""
         if sqlstate == _TIMEOUT_SQLSTATE:
             return ProcedureTimeoutError(
@@ -125,13 +126,9 @@ class SqlServerClient:
                 "agent account in the configuration"
             )
         message = str(exc.args[1]) if len(exc.args) > 1 else str(exc)
-        return ProcedureError(f"SQL Server error {sqlstate}: {self._driver_text(message)}")
-
-    @staticmethod
-    def _driver_text(message: str) -> str:
-        """The first diagnostic record without its bracketed prefixes and trailing codes."""
-        first = message.split("; [", 1)[0]
-        return _DIAGNOSTIC_SUFFIX.sub("", _DIAGNOSTIC_PREFIX.sub("", first))
+        native = _NATIVE_ERROR.search(message.split("; [", 1)[0])
+        number = f" {native.group(1)}" if native else ""
+        return ProcedureError(f"SQL Server error{number} (SQLSTATE {sqlstate})", detail=message)
 
     @classmethod
     def _agent_connection_string(cls, settings: Settings) -> SecretStr:

@@ -6,7 +6,9 @@ sections 6.2 and 7.2).
 """
 
 import functools
+import logging
 from collections.abc import Callable
+from typing import cast
 
 from pydantic_ai import ModelRetry, RunContext, ToolFailed
 
@@ -20,6 +22,8 @@ from data_concierge.core.errors import (
 from data_concierge.query.models import QuerySummary
 from data_concierge.results.models import ResultSummary
 
+logger = logging.getLogger(__name__)
+
 # Errors the model can fix by changing its call or its SQL (plan KTD10).
 INPUT_ERRORS = (ParameterValidationError, UnknownHandleError, QueryError)
 
@@ -29,7 +33,8 @@ def retry_on_domain_error[**P, R](tool: Callable[P, R]) -> Callable[P, R]:
     """Maps domain errors to ModelRetry (fixable input) or ToolFailed (execution failure).
 
     ToolFailed returns the message without a request to correct the call and does not use the
-    retry budget; the instructions tell the model what to do after it. Other exceptions pass
+    retry budget; the instructions tell the model what to do after it. The model gets only the
+    message; the error's `detail` goes to the log with the correlation id. Other exceptions pass
     through unchanged.
     """
 
@@ -37,10 +42,16 @@ def retry_on_domain_error[**P, R](tool: Callable[P, R]) -> Callable[P, R]:
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return tool(*args, **kwargs)
-        except INPUT_ERRORS as exc:
+        except (*INPUT_ERRORS, ProcedureError) as exc:
+            if exc.detail is not None:
+                # Every tool takes the run context first.
+                context = cast(RunContext[AgentDeps], args[0]).deps.context
+                logger.warning(
+                    "tool error (correlation id %s): %s", context.correlation_id, exc.detail
+                )
+            if isinstance(exc, ProcedureError):
+                raise ToolFailed(str(exc)) from exc
             raise ModelRetry(str(exc)) from exc
-        except ProcedureError as exc:
-            raise ToolFailed(str(exc)) from exc
 
     return wrapper
 

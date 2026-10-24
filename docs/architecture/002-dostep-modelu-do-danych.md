@@ -200,7 +200,7 @@ Kotwice działają w obu trybach. W trybie ograniczonym model widzi liczby w faz
 
 Dotyczy obu trybów, bo tekst błędu z wartością nie pomaga modelowi poprawić wywołania:
 
-- **DuckDB:** błędy parsera, wiązania i katalogu (`ParserException`, `BinderException`, `CatalogException`) cytują SQL modelu i schemat, więc wracają bez zmian. Pozostałe (np. `ConversionException`, `InvalidInputException`, `OutOfRangeException`) wracają jako nazwa klasy i ogólny opis, np. „Conversion Error: a value could not be converted; use TRY_CAST or filter the column first”. Pełny tekst trafia do logu z identyfikatorem zgłoszenia.
+- **DuckDB:** błędy parsera, wiązania i katalogu (`ParserException`, `BinderException`, `CatalogException`) cytują SQL modelu i schemat, więc wracają bez zmian. Pozostałe (np. `ConversionException`, `InvalidInputException`, `OutOfRangeException`) wracają jako nazwa klasy i ogólny opis, np. „ConversionException: a value could not be converted; use TRY_CAST or filter the column first”. Pełny tekst trafia do logu z identyfikatorem zgłoszenia.
 - **SQL Server:** model dostaje numer błędu i SQLSTATE bez tekstu sterownika (`core/sqlserver.py`). Pełny tekst trafia do logu.
 - **Komunikaty backendu** (kontrole `query`, limity, walidacja parametrów) nie zawierają wartości z danych i zostają bez zmian. Plan to potwierdzi przeglądem.
 
