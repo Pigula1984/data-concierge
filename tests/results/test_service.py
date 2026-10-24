@@ -3,11 +3,13 @@ from decimal import Decimal
 
 import pyarrow as pa
 
+from data_concierge.core.settings import ModelExposure
 from data_concierge.core.types import Column, ColumnRole, ColumnType, TableSchema
 from data_concierge.results.models import (
     ColumnStats,
     ProcedureLineage,
     QueryLineage,
+    ResultSummary,
     ResultTable,
 )
 from data_concierge.results.repository import DuckDBResultStore
@@ -42,47 +44,106 @@ def _orders(count: int, territories: int = 5, truncated: bool = False) -> Result
     return ResultTable(data=data, schema=ORDERS_SCHEMA, lineage=lineage)
 
 
-def _service() -> tuple[ResultService, DuckDBResultStore]:
+NONE = ModelExposure.for_mode("none")
+MINIMAL = ModelExposure.for_mode("minimal")
+
+
+def _service(exposure: ModelExposure = NONE) -> tuple[ResultService, DuckDBResultStore]:
     store = DuckDBResultStore()
-    return ResultService(store), store
+    return ResultService(store, exposure), store
 
 
-def test_small_result_is_previewed_in_full() -> None:
+CUSTOMER_ORDERS_SCHEMA = TableSchema(
+    columns=(
+        Column(name="CustomerID", type=ColumnType.parse("int"), role=ColumnRole.ID),
+        Column(
+            name="AccountNumber",
+            type=ColumnType.parse("string"),
+            role=ColumnRole.ID,
+            sensitive=True,
+        ),
+        Column(name="OrderDate", type=ColumnType.parse("date"), role=ColumnRole.TIME),
+        Column(
+            name="CustomerName",
+            type=ColumnType.parse("string"),
+            role=ColumnRole.DIMENSION,
+            sensitive=True,
+        ),
+        Column(name="CustomerType", type=ColumnType.parse("string"), role=ColumnRole.DIMENSION),
+        Column(name="SubTotal", type=ColumnType.decimal(19, 4), role=ColumnRole.MEASURE),
+    )
+)
+
+
+def _customer_orders(count: int, types: int = 2) -> ResultTable:
+    data = pa.table(
+        {
+            "CustomerID": pa.array([11000 + 7 * i for i in range(count)], type=pa.int64()),
+            "AccountNumber": pa.array([f"AW{11000 + 7 * i:08d}" for i in range(count)]),
+            "OrderDate": pa.array(
+                [date(2024, 3, 1) - timedelta(days=i) for i in range(count)], type=pa.date32()
+            ),
+            "CustomerName": pa.array([f"Customer {i}" for i in range(count)], type=pa.string()),
+            "CustomerType": pa.array([f"type {i % types:02d}" for i in range(count)]),
+            "SubTotal": pa.array(
+                [Decimal(i) + Decimal("0.2500") for i in range(count)], type=pa.decimal128(19, 4)
+            ),
+        },
+        schema=pa.schema(CUSTOMER_ORDERS_SCHEMA.arrow_fields),
+    )
+    lineage = ProcedureLineage(procedure="api.Test", params={}, truncated=False)
+    return ResultTable(data=data, schema=CUSTOMER_ORDERS_SCHEMA, lineage=lineage)
+
+
+def test_summary_in_mode_none_has_structure_dates_and_ids_only() -> None:
+    service, _ = _service(NONE)
+
+    summary = service.summarize(service.save(_customer_orders(3)))
+
+    assert summary.row_count == 3
+    assert [column.name for column in summary.columns] == list(CUSTOMER_ORDERS_SCHEMA.names)
+    assert summary.stats == {"OrderDate": ColumnStats(min="2024-02-28", max="2024-03-01")}
+    assert summary.ids == {"CustomerID": (11000, 11007, 11014)}
+    assert "preview" not in ResultSummary.model_fields
+
+
+def test_summary_in_mode_minimal_adds_values_of_dimensions_that_are_not_sensitive() -> None:
+    service, _ = _service(MINIMAL)
+
+    stats = service.summarize(service.save(_customer_orders(3))).stats
+
+    assert stats == {
+        "OrderDate": ColumnStats(min="2024-02-28", max="2024-03-01"),
+        "CustomerType": ColumnStats(values=("type 00", "type 01")),
+    }
+
+
+def test_dimension_with_more_than_twenty_values_has_only_their_count() -> None:
+    service, _ = _service(MINIMAL)
+
+    stats = service.summarize(service.save(_customer_orders(30, types=25))).stats
+
+    assert stats["CustomerType"] == ColumnStats(distinct_count=25)
+
+
+def test_ids_are_listed_in_row_order_up_to_the_model_row_limit() -> None:
     service, _ = _service()
 
-    summary = service.summarize(service.save(_orders(14)))
+    small = service.summarize(service.save(_customer_orders(50)))
+    large = service.summarize(service.save(_customer_orders(51)))
 
-    assert summary.row_count == 14
-    assert len(summary.preview) == 14
+    assert small.ids == {"CustomerID": tuple(11000 + 7 * i for i in range(50))}
+    assert large.ids == {}
 
 
-def test_large_result_preview_is_limited_to_ten_rows() -> None:
+def test_empty_result_has_no_ids_and_no_dates() -> None:
     service, _ = _service()
 
-    summary = service.summarize(service.save(_orders(200)))
+    summary = service.summarize(service.save(_customer_orders(0)))
 
-    assert summary.row_count == 200
-    assert len(summary.preview) == 10
-    assert summary.preview[0] == ("2024-01-01", "T00", "0.5000")
-
-
-def test_time_and_measure_columns_get_min_and_max() -> None:
-    service, _ = _service()
-
-    stats = service.summarize(service.save(_orders(3))).stats
-
-    assert stats["OrderDate"] == ColumnStats(min="2024-01-01", max="2024-01-03")
-    assert stats["SubTotal"] == ColumnStats(min="0.5000", max="2.5000")
-
-
-def test_dimension_lists_values_up_to_twenty_and_counts_beyond() -> None:
-    service, _ = _service()
-
-    few = service.summarize(service.save(_orders(40, territories=5))).stats["Territory"]
-    many = service.summarize(service.save(_orders(40, territories=30))).stats["Territory"]
-
-    assert few == ColumnStats(values=("T00", "T01", "T02", "T03", "T04"))
-    assert many == ColumnStats(distinct_count=30)
+    assert summary.row_count == 0
+    assert summary.ids == {"CustomerID": ()}
+    assert summary.stats == {"OrderDate": ColumnStats(min=None, max=None)}
 
 
 def test_export_cuts_at_max_rows_and_flags_truncation() -> None:

@@ -20,6 +20,7 @@ from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.catalog.models import Catalog, DataRange
 from data_concierge.core.errors import ProcedureTimeoutError
+from data_concierge.core.settings import ModelDataAccess, ModelExposure
 from data_concierge.results.models import ResultSummary
 
 pytestmark = pytest.mark.anyio
@@ -34,7 +35,8 @@ MAX_STRICT_UNION_PARAMS = 16
 
 @pytest.fixture
 def registry(catalog: Catalog, data_ranges: dict[str, DataRange]) -> ToolRegistry:
-    return ToolRegistry(catalog, ProcedureToolFactory(data_ranges, strict=True), strict=True)
+    factory = ProcedureToolFactory(data_ranges, strict=True)
+    return ToolRegistry(catalog, factory, True, ModelExposure.for_mode("none"))
 
 
 def returned(messages: Sequence[ModelMessage]) -> list[ToolReturnPart | RetryPromptPart]:
@@ -81,8 +83,48 @@ async def test_procedure_description_has_grain_references_and_data_range(
         "sales_order_line_list; wyszukanie klienta po nazwie → najpierw customer_search. "
         "Miary: SubTotal (Sprzedaż netto, bez podatku i frachtu; domyślna dla: sprzedaż), "
         "TotalDue (Kwota z podatkiem i frachtem). "
+        "Wartości wymiarów: CustomerType: individual, store. "
         "Dane: od 2022-05-30 do 2025-06-29."
     )
+
+
+async def test_procedure_description_lists_catalog_values_only_where_declared(
+    registry: ToolRegistry, tool_definitions: ToolDefinitions
+) -> None:
+    definitions = {d.name: d.description or "" for d in await tool_definitions(registry.tools())}
+
+    assert (
+        "Category: Accessories, Bikes, Clothing, Components"
+        in (definitions["sales_order_line_list"])
+    )
+    assert "Wartości" not in definitions["get_bill_of_materials"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "summary"),
+    [
+        pytest.param("none", "schema, row count, date ranges and ids", id="none"),
+        pytest.param(
+            "minimal", "schema, row count, date ranges, ids and dimension values", id="minimal"
+        ),
+    ],
+)
+async def test_query_and_describe_result_describe_the_summary_of_the_mode(
+    catalog: Catalog,
+    data_ranges: dict[str, DataRange],
+    tool_definitions: ToolDefinitions,
+    mode: ModelDataAccess,
+    summary: str,
+) -> None:
+    registry = ToolRegistry(
+        catalog, ProcedureToolFactory(data_ranges, strict=True), True, ModelExposure.for_mode(mode)
+    )
+    definitions = {d.name: d.description or "" for d in await tool_definitions(registry.tools())}
+
+    for name in ("query", "describe_result"):
+        assert f"({summary})" in definitions[name]
+        assert "preview" not in definitions[name]
+    assert "DECIMAL(38,6)" in definitions["query"]
 
 
 async def test_line_description_names_the_default_measure(
@@ -108,25 +150,35 @@ async def test_tools_come_in_catalog_order_then_query_and_describe_result(
     assert "sales_order_data_range" not in names
 
 
+@pytest.mark.parametrize("mode", ["none", "minimal"])
 async def test_definitions_are_byte_identical_between_registries(
-    registry: ToolRegistry,
     catalog: Catalog,
     data_ranges: dict[str, DataRange],
     tool_definitions: ToolDefinitions,
+    mode: ModelDataAccess,
 ) -> None:
-    rebuilt = ToolRegistry(catalog, ProcedureToolFactory(data_ranges, strict=True), strict=True)
+    def build() -> ToolRegistry:
+        factory = ProcedureToolFactory(data_ranges, strict=True)
+        return ToolRegistry(catalog, factory, True, ModelExposure.for_mode(mode))
 
-    first = await tool_definitions(registry.tools())
-    second = await tool_definitions(rebuilt.tools())
+    first = await tool_definitions(build().tools())
+    second = await tool_definitions(build().tools())
 
     assert json.dumps([d.__dict__ for d in first], default=str) == json.dumps(
         [d.__dict__ for d in second], default=str
     )
 
 
+@pytest.mark.parametrize("mode", ["none", "minimal"])
 async def test_strict_tools_fit_the_anthropic_budget(
-    registry: ToolRegistry, tool_definitions: ToolDefinitions
+    catalog: Catalog,
+    data_ranges: dict[str, DataRange],
+    tool_definitions: ToolDefinitions,
+    mode: ModelDataAccess,
 ) -> None:
+    registry = ToolRegistry(
+        catalog, ProcedureToolFactory(data_ranges, strict=True), True, ModelExposure.for_mode(mode)
+    )
     strict = [d for d in await tool_definitions(registry.tools()) if d.strict]
     properties = [
         (name, prop, d.parameters_json_schema.get("required", []))
@@ -145,7 +197,8 @@ async def test_strict_tools_fit_the_anthropic_budget(
 async def test_strict_follows_the_setting(
     catalog: Catalog, data_ranges: dict[str, DataRange], tool_definitions: ToolDefinitions
 ) -> None:
-    registry = ToolRegistry(catalog, ProcedureToolFactory(data_ranges, strict=False), strict=False)
+    factory = ProcedureToolFactory(data_ranges, strict=False)
+    registry = ToolRegistry(catalog, factory, False, ModelExposure.for_mode("none"))
 
     assert not any(d.strict for d in await tool_definitions(registry.tools()))
 

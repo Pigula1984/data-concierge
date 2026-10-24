@@ -87,7 +87,7 @@ class ColumnInfo(BaseModel, frozen=True):
 
 
 class ColumnStats(BaseModel, frozen=True):
-    """min/max for time and measure columns; values or a count for dimension columns."""
+    """min/max for time columns; values or a count for dimension columns (mode minimal)."""
 
     min: JsonScalar = None
     max: JsonScalar = None
@@ -96,14 +96,18 @@ class ColumnStats(BaseModel, frozen=True):
 
 
 class ResultSummary(BaseModel, frozen=True):
-    """The model's view of a result: schema, statistics and a preview, never the full data."""
+    """The model's view of a result: its structure, never its rows (architecture 002, 4.1).
+
+    Sensitive columns have no stats and no ids in any mode.
+    """
 
     handle: Handle
     row_count: int
     truncated: bool
     columns: tuple[ColumnInfo, ...]
     stats: dict[str, ColumnStats]
-    preview: Rows
+    # Values of the id columns in row order, for results of at most model_max_rows rows.
+    ids: dict[str, tuple[JsonScalar, ...]]
 
 
 class ExportedTable(BaseModel, frozen=True):

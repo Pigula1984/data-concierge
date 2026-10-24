@@ -65,6 +65,7 @@ def service(
         yield AgentService(model, agent_tools, instructions, agent_settings)
 
 
+@pytest.mark.parametrize("mode", ["none", "minimal"])
 async def test_second_turn_starts_with_the_same_bytes(
     service: AgentService, deps: AgentDeps, requests: list[dict[str, Any]]
 ) -> None:
