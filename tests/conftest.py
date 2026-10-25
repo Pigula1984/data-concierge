@@ -279,9 +279,15 @@ def instructions(
 
 
 @pytest.fixture
-def agent_settings() -> Settings:
-    """Default model settings; the SQL Server values are required but unused offline."""
-    return Settings(sql_server="localhost", sql_password=SecretStr("unused"), _env_file=None)
+def agent_settings(mode: ModelDataAccess) -> Settings:
+    """Default model settings in the test's mode; the SQL Server values are required but
+    unused offline."""
+    return Settings(
+        sql_server="localhost",
+        sql_password=SecretStr("unused"),
+        model_data_access=mode,
+        _env_file=None,
+    )
 
 
 @pytest.fixture

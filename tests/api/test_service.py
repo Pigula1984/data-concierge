@@ -12,18 +12,20 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    TextPart,
     ToolCallPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.service import AgentService
 from data_concierge.api.service import AskService
 from data_concierge.api.sessions import InMemorySessionRepository
 from data_concierge.bootstrap import DuckDBSessionFactory
 from data_concierge.core.errors import ResultStoreError
-from data_concierge.core.settings import Settings
+from data_concierge.core.settings import ModelExposure, Settings
 from data_concierge.procedures.repository import ProcedureRepository
 from data_concierge.results.repository import DuckDBResultStore
 
@@ -42,18 +44,28 @@ def ask_service(
     agent_tools: tuple[Tool[AgentDeps], ...],
     instructions: str,
     agent_settings: Settings,
+    exposure: ModelExposure,
     repository: ProcedureRepository,
-) -> Callable[[FunctionModel], AskService]:
-    def build(model: FunctionModel) -> AskService:
+    scripted: Callable[..., FunctionModel],
+) -> Callable[..., AskService]:
+    """`ask_service(model, comments)`: the tools phase and the comment phase scripted apart."""
+
+    def build(model: FunctionModel, comments: FunctionModel | None = None) -> AskService:
         agent = AgentService(model, agent_tools, instructions, agent_settings)
+        comment = CommentService(comments or scripted(), agent_settings)
         factory = DuckDBSessionFactory(repository, agent_settings)
-        return AskService(agent, InMemorySessionRepository(), factory, today=lambda: TODAY)
+        sessions = InMemorySessionRepository()
+        return AskService(agent, comment, sessions, factory, exposure, today=lambda: TODAY)
 
     return build
 
 
 def present(status: str = "ok", **fields: object) -> ToolCallPart:
     return ToolCallPart("present_result", {"status": status, "message": "Gotowe.", **fields})
+
+
+def comment(text: str) -> ModelResponse:
+    return ModelResponse(parts=[TextPart(text)])
 
 
 def requests(model: FunctionModel) -> list[list[ModelMessage]]:
@@ -73,7 +85,7 @@ def user_prompts(messages: list[ModelMessage]) -> list[str]:
 
 
 async def test_second_ask_continues_the_conversation_with_its_history_and_handles(
-    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
 ) -> None:
     model = scripted(
         ToolCallPart("sales_order_list", YEAR_2024),
@@ -100,7 +112,7 @@ async def test_second_ask_continues_the_conversation_with_its_history_and_handle
 
 
 async def test_response_has_the_value_and_the_next_turn_sees_the_anchor(
-    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
 ) -> None:
     total = 'SELECT CAST(sum("SubTotal") AS DECIMAL(38,2)) AS net_sales FROM r1'
     model = scripted(
@@ -121,7 +133,7 @@ async def test_response_has_the_value_and_the_next_turn_sees_the_anchor(
 
 
 async def test_ask_without_session_id_starts_a_new_conversation(
-    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
 ) -> None:
     service = ask_service(scripted(present(), present()))
 
@@ -132,7 +144,7 @@ async def test_ask_without_session_id_starts_a_new_conversation(
 
 
 async def test_clarification_candidates_come_from_the_handle_and_the_choice_continues(
-    ask_service: Callable[[FunctionModel], AskService],
+    ask_service: Callable[..., AskService],
     scripted: Callable[..., FunctionModel],
     procedure_calls: list[tuple[str, dict[str, object]]],
 ) -> None:
@@ -171,7 +183,7 @@ async def test_clarification_candidates_come_from_the_handle_and_the_choice_cont
 
 
 async def test_failure_in_the_agent_layer_gives_an_error_with_the_correlation_id(
-    ask_service: Callable[[FunctionModel], AskService],
+    ask_service: Callable[..., AskService],
     scripted: Callable[..., FunctionModel],
     fail_procedures: Callable[[Exception], None],
     caplog: pytest.LogCaptureFixture,
@@ -200,7 +212,7 @@ async def test_failure_in_the_agent_layer_gives_an_error_with_the_correlation_id
 
 
 async def test_unknown_session_is_not_continued_and_the_agent_is_not_called(
-    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
 ) -> None:
     model = scripted(present())
 
@@ -213,7 +225,7 @@ async def test_unknown_session_is_not_continued_and_the_agent_is_not_called(
 
 
 async def test_prompt_for_the_agent_carries_the_date_from_the_injected_clock(
-    ask_service: Callable[[FunctionModel], AskService], scripted: Callable[..., FunctionModel]
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
 ) -> None:
     model = scripted(present())
 
@@ -225,7 +237,7 @@ async def test_prompt_for_the_agent_carries_the_date_from_the_injected_clock(
 
 
 async def test_broken_session_store_ends_the_turn_and_the_session(
-    ask_service: Callable[[FunctionModel], AskService],
+    ask_service: Callable[..., AskService],
     scripted: Callable[..., FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -250,7 +262,7 @@ async def test_broken_session_store_ends_the_turn_and_the_session(
 
 
 async def test_model_provider_error_gives_an_error_response(
-    ask_service: Callable[[FunctionModel], AskService],
+    ask_service: Callable[..., AskService],
 ) -> None:
     def overloaded(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(529, "claude-haiku-5-5", {"type": "overloaded_error"})
@@ -259,3 +271,110 @@ async def test_model_provider_error_gives_an_error_response(
 
     assert response.status == "error"
     assert "Identyfikator zgłoszenia" in response.message
+
+
+TOTAL_SQL = 'SELECT CAST(sum("SubTotal") AS DECIMAL(38,2)) AS net_sales FROM r1'
+
+
+@pytest.mark.parametrize("mode", ["minimal"])
+async def test_comment_of_mode_minimal_is_filled_in_the_response_and_a_template_in_history(
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": MONTHLY_SQL}),
+        ToolCallPart("query", {"sql": TOTAL_SQL}),
+        present(tables=[{"handle": "r2", "title": "Sprzedaż po miesiącach"}]),
+        present("no_data"),
+    )
+    comments = scripted(
+        comment("Najwięcej w {r2[1].month}: {r2[1].net_sales}, razem {r3.net_sales}.")
+    )
+    service = ask_service(model, comments)
+
+    first = await service.ask("Sprzedaż po miesiącach za 2024", user_id=7)
+    await service.ask("A w 2019?", user_id=7, session_id=first.session_id)
+
+    assert first.status == "ok"
+    assert first.message == "Najwięcej w 2024-01-01: 149,7500, razem 159,75."
+    # r3 is anchored only by the comment, so it joins the provenance.
+    assert [step.handle for step in first.provenance] == ["r1", "r2", "r3"]
+    # The comment phase saw the draft; the next turn sees the comment as a template.
+    assert "Gotowe." in str(requests(comments)[0])
+    second_turn_start = str(requests(model)[4])
+    assert (
+        "Najwięcej w {r2[1].month}: {r2[1].net_sales}, razem {r3.net_sales}." in second_turn_start
+    )
+    assert "Gotowe." not in second_turn_start
+    assert "149,7500" not in second_turn_start
+
+
+@pytest.mark.parametrize("mode", ["minimal"])
+async def test_failed_comment_phase_gives_the_draft_and_a_log_entry(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def overloaded(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(529, "claude-haiku-5-5", {"type": "overloaded_error"})
+
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": TOTAL_SQL}),
+        present(message="Sprzedaż netto w 2024: {r2.net_sales}."),
+        present("no_data"),
+    )
+    service = ask_service(model, FunctionModel(overloaded))
+
+    with caplog.at_level(logging.WARNING, logger="data_concierge.api.service"):
+        response = await service.ask("Sprzedaż w 2024", user_id=7)
+    await service.ask("A w 2019?", user_id=7, session_id=response.session_id)
+
+    assert response.status == "ok"
+    assert response.message == "Sprzedaż netto w 2024: 159,75."
+    [record] = caplog.records
+    assert record.getMessage().startswith("the comment phase failed (correlation id ")
+    # The history keeps the draft the user read.
+    assert "Sprzedaż netto w 2024: {r2.net_sales}." in str(requests(model)[3])
+
+
+@pytest.mark.parametrize("mode", ["minimal"])
+async def test_comment_with_bad_anchors_after_all_retries_gives_the_draft(
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": TOTAL_SQL}),
+        present(message="Sprzedaż netto w 2024: {r2.net_sales}."),
+    )
+    comments = scripted(*(comment("Suma: {r9.net_sales}.") for _ in range(3)))
+
+    response = await ask_service(model, comments).ask("Sprzedaż w 2024", user_id=7)
+
+    assert response.message == "Sprzedaż netto w 2024: 159,75."
+    assert len(requests(comments)) == 3
+
+
+@pytest.mark.parametrize(
+    ("mode", "status"),
+    [
+        pytest.param("minimal", "needs_clarification", id="minimal-needs_clarification"),
+        pytest.param("minimal", "no_data", id="minimal-no_data"),
+        pytest.param("minimal", "unsupported", id="minimal-unsupported"),
+        pytest.param("none", "ok", id="none-ok"),
+    ],
+)
+async def test_comment_phase_runs_only_for_status_ok_in_mode_minimal(
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel], status: str
+) -> None:
+    fields = (
+        {"clarification": {"question": "Który okres?"}} if status == "needs_clarification" else {}
+    )
+    comments = scripted()
+
+    response = await ask_service(scripted(present(status, **fields)), comments).ask(
+        "Raport", user_id=7
+    )
+
+    assert response.status == status
+    assert requests(comments) == []

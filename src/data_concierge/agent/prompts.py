@@ -1,5 +1,5 @@
 """The agent's fixed instructions (architecture, sections 7.2, 7.5, 8 and 11.3; architecture
-002, section 6.4)."""
+002, sections 5.2 and 6.4)."""
 
 from collections.abc import Mapping
 
@@ -74,6 +74,11 @@ in `message` that the data could not be fetched, never that it does not exist.
 - Return only the handles that answer the request, each with a title. Status ok means the \
 tables answer it."""
 
+# Mode minimal: a second pass writes the final comment (architecture 002, section 5.2).
+DRAFT_COMMENT = """\
+- Keep `message` a short draft with anchors: after you end the turn with status ok, a second \
+pass sees the rows of the returned tables and writes the final comment."""
+
 # Where the values for PIVOT and filters come from, by mode (architecture 002, section 4.4).
 VALUES_NONE = """\
 - PIVOT only over a dimension whose values the procedure description lists ("Wartości \
@@ -146,6 +151,28 @@ JOIN (SELECT DISTINCT "CustomerID" FROM r1) AS c ON c."CustomerID" = o."Customer
 GROUP BY 1
 ORDER BY month"""
 
+# The comment phase of mode minimal (architecture 002, section 5.2); the same in every turn.
+COMMENT_INSTRUCTIONS = """\
+You write the final comment of an answer of Data Concierge, a data assistant for the \
+AdventureWorks company database. You get the user's request, the draft answer of the tools \
+phase and the tables of the answer: the handles it returns and the handles its anchors name. A \
+table lists its rows in the handle's order, the first being row 1, without its hidden columns; \
+a table with `rows` null is too large to show or has only hidden columns, so you see only its \
+structure and row count.
+
+# Rules
+- Write the comment in Polish, in two to four sentences: what the tables show, e.g. the total, \
+the trend, the best and the worst period, the items that stand out. Do not repeat the tables \
+row by row and do not contradict the table titles and the assumptions.
+- Write every amount, quantity and name from the data as an anchor the backend replaces with \
+the value, never as text, not even rounded: {r3.net_sales} is a column of a handle with \
+exactly one row, {r2[1].month} a column in row 1 of a handle, {r2#rows} the row count of a \
+handle. Hidden columns can be anchored too, e.g. {r4[1].CustomerName}.
+- A value no row holds (e.g. a total of a table without a total row) has no anchor: describe it \
+without the number.
+- Keep the anchors of the draft that still fit.
+- Answer with the comment only."""
+
 
 class AgentInstructions:
     """Builds the system instructions once per process: rules, SQL guidance, the procedures
@@ -170,6 +197,8 @@ class AgentInstructions:
         seen = SEEN_MINIMAL.format(max_listed_values=MAX_LISTED_VALUES) if minimal else SEEN_NONE
         role = ROLE.format(model_max_rows=self._model_max_rows, seen=seen)
         rules = RULES.format(model_max_rows=self._model_max_rows)
+        if self._exposure.comment_phase:
+            rules += "\n" + DRAFT_COMMENT
         sql = SQL_GUIDE.format(values=VALUES_MINIMAL if minimal else VALUES_NONE)
         return "\n\n".join((role, rules, sql, self._procedures()))
 

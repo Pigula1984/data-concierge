@@ -162,7 +162,7 @@ SELECT CASE WHEN "City" = 'Berlin' THEN "CustomerName" ELSE "City" END AS "City"
 SELECT coalesce("CustomerName", "Territory") AS "Territory" FROM r1
 ```
 
-W trybie `minimal` wartości takiej kolumny trafiłyby do modelu jako wartości wymiaru. Ta sama klasa ryzyka dotyczy pola `ids` w obu trybach: miara podana pod nazwą kolumny `id` (np. `CAST(sum("SubTotal") AS INT) AS "CustomerID"`) dziedziczy jej rolę, więc jej wartości trafiłyby do modelu jak klucze. Takie zapytanie model musi napisać sam, a typowe zestawienia (grupowanie po kolumnie źródłowej, aliasy z nowymi nazwami) dają poprawne oznaczenie. Przyjmujemy to ryzyko na etapie POC i rozwiążemy je po akceptacji podejścia (sekcja 12).
+W trybie `minimal` wartości takiej kolumny trafiłyby do modelu jako wartości wymiaru, a w fazie komentarza wszystkie jej wiersze (do `model_max_rows`), gdy uchwyt jest zwracany użytkownikowi lub użyty w kotwicy szkicu. Ta sama klasa ryzyka dotyczy pola `ids` w obu trybach: miara podana pod nazwą kolumny `id` (np. `CAST(sum("SubTotal") AS INT) AS "CustomerID"`) dziedziczy jej rolę, więc jej wartości trafiłyby do modelu jak klucze. Takie zapytanie model musi napisać sam, a typowe zestawienia (grupowanie po kolumnie źródłowej, aliasy z nowymi nazwami) dają poprawne oznaczenie. Przyjmujemy to ryzyko na etapie POC i rozwiążemy je po akceptacji podejścia (sekcja 12).
 
 Domyślnie kolumna jest widoczna, a właściciel oznacza wrażliwe (decyzja D6). Zasada oznaczania: wrażliwe są nazwy i opisy, które wskazują konkretnego klienta, produkt lub osobę, oraz identyfikatory biznesowe, których model nie potrzebuje do łączenia wyników. Wymiary potrzebne do filtrów i zestawień (kategoria, terytorium, miasto, typ klienta) zostają widoczne.
 
@@ -218,7 +218,7 @@ Dotyczy obu trybów, bo tekst błędu z wartością nie pomaga modelowi poprawi�
 
 Historia, którą sesja zapisuje i przekazuje do kolejnej tury (`result.all_messages()` w `AgentService.run`), zawiera wyniki narzędzi w postaci podsumowań z danego trybu i argumenty `present_result` z kotwicami. Odpowiedź z podstawionymi wartościami (`Response`) nie wraca do modelu. W trybie zamkniętym historia nie zawiera więc żadnej wartości z bazy.
 
-W trybie ograniczonym faza komentarza nie dopisuje się do historii fazy narzędzi. Plan ustali, czy szablon komentarza z fazy 2 ma zastąpić szkic w zapisanym `present_result`, żeby kolejna tura wiedziała, co użytkownik przeczytał.
+W trybie ograniczonym faza komentarza nie dopisuje się do historii fazy narzędzi. Szablon komentarza z fazy 2 (z kotwicami, bez podstawionych wartości) zastępuje szkic w argumentach ostatniego wywołania `present_result`, żeby kolejna tura wiedziała, co użytkownik przeczytał. Gdy faza 2 zawiedzie, w historii zostaje szkic, który użytkownik dostał.
 
 ### 6.4. Instrukcje i opisy narzędzi
 
@@ -254,13 +254,13 @@ Przykłady z sekcji 10 dokumentu 001 dostają warianty dla trybu zamkniętego.
 |-------|--------|
 | `core` | `Settings.model_data_access` (`none` / `minimal`). Błędy SQL Server dla modelu bez tekstu sterownika. |
 | `catalog` | `ColumnSpec.sensitive`. `values` dla wymiarów, po których robimy `PIVOT` (np. `Category`). |
-| `results` | Podsumowanie według polityki trybu (sekcje 4.1 i 5.1) w miejsce stałego podglądu i statystyk. Wrażliwość kolumn wyników `query` (sekcja 5.3). Odczyt komórki dla kotwic. |
+| `results` | Podsumowanie według polityki trybu (sekcje 4.1 i 5.1) w miejsce stałego podglądu i statystyk. Wrażliwość kolumn wyników `query` (sekcja 5.3). Odczyt komórki dla kotwic. Tabele dla fazy komentarza (`ResultService.excerpt`): wiersze bez kolumn `sensitive`, do `model_max_rows` wierszy, przy większych tylko struktura i `row_count`. |
 | `query` | Komunikaty błędów DuckDB bez wartości (sekcja 6.2). |
 | `agent` | Instrukcje i opisy narzędzi zależne od trybu. Kotwice (`agent/anchors.py`) i formatowanie wartości (`agent/formatting.py`), sprawdzane w walidatorze wyniku. `candidates_from` w `ClarificationRequest`, czyli pytaniu doprecyzowującym od modelu. `ResponseAssembler`: podstawienie kotwic, uchwyty kotwic w `provenance`, kandydaci z uchwytu. Faza komentarza w trybie `minimal`. |
-| `api` | Kontrakt odpowiedzi bez zmian. |
+| `api` | Kontrakt odpowiedzi bez zmian. `AskService` uruchamia fazę komentarza po fazie narzędzi (tryb `minimal`, status `ok`) i podmienia szablon w historii (sekcja 6.3). |
 | `evals` | Uruchomienie w obu trybach (sekcja 9). |
 
-Polityka trybu to obiekt wartości `ModelExposure` w `core/settings.py`, zbudowany przy starcie z `model_data_access`. Kompozycja wstrzykuje go do serwisu wyników (które pola podsumowania widzi model), instrukcji i rejestru narzędzi (teksty według trybu). Ustawienie `model_max_rows` (domyślnie 50) zastąpiło ustawienia podglądu: rządzi polem `ids` i liczbą kandydatów.
+Polityka trybu to obiekt wartości `ModelExposure` w `core/settings.py`, zbudowany przy starcie z `model_data_access`. Kompozycja wstrzykuje go do serwisu wyników (które pola podsumowania widzi model), instrukcji i rejestru narzędzi (teksty według trybu) oraz do `AskService` (czy uruchamiać fazę komentarza). Ustawienie `model_max_rows` (domyślnie 50) zastąpiło ustawienia podglądu: rządzi polem `ids`, liczbą kandydatów i tabelami fazy komentarza.
 
 ## 9. Ewaluacja
 
@@ -286,6 +286,7 @@ Przypadek może mieć oczekiwania zależne od trybu. Plan ustali format w `cases
 - **Kolejność w `ids`.** Wartości kolumn `id` idą w kolejności wierszy uchwytu. Po zapytaniu z `ORDER BY` po mierze (top N) model widzi więc ranking klientów lub produktów, choć bez kwot. Wynika to z D1.
 - **Kolumny wyliczone** z wartości wrażliwych mogą przejść jako liczbowe (sekcja 5.3).
 - **Alias o nazwie kolumny niewrażliwej** (`UNION ALL`, `CASE`, `coalesce`) przenosi wartości wrażliwe do kolumny oznaczonej jako niewrażliwa (sekcja 5.3). Przyjęte na etapie POC.
+- **Wartość wpisana w komentarz zamiast kotwicy.** W trybie `minimal` faza komentarza widzi wiersze. Gdy model wpisze wartość jako tekst, a nie kotwicą, szablon z tą wartością trafia do historii (sekcja 6.3) i do kolejnych tur fazy narzędzi. Backend nie skanuje tekstu (sekcja 12), a zestaw ewaluacyjny mierzy liczby spoza kotwic (sekcja 9).
 - **Prompt użytkownika** może zawierać dane (nazwisko, kwotę) i zawsze trafia do modelu.
 - **`data_range`** to dane z bazy wystawione celowo przez katalog.
 - **Jakość w trybie zamkniętym** będzie niższa. Ile, pokaże zestaw ewaluacyjny.

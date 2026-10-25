@@ -20,6 +20,7 @@ from data_concierge.results.models import (
     ResultTable,
     Rows,
     StoredResult,
+    TableExcerpt,
 )
 from data_concierge.results.repository import ResultStore
 
@@ -107,6 +108,25 @@ class ResultService:
             f"LIMIT 1 OFFSET {row - 1}"
         )
         return value
+
+    def excerpt(self, handle: Handle) -> TableExcerpt:
+        """The table for the comment phase: its rows up to model_max_rows, never the values
+        of sensitive columns (architecture 002, section 5.1)."""
+        stored = self._store.describe(handle)
+        columns = zip(stored.table_schema.columns, stored.column_infos, strict=True)
+        shown = [(column, info) for column, info in columns if not column.sensitive]
+        rows = None
+        if shown and stored.row_count <= self._model_max_rows:
+            select = ", ".join(quote_identifier(column.name) for column, _ in shown)
+            rows = self._rows(self._store.query(f"SELECT {select} FROM {quote_identifier(handle)}"))
+        return TableExcerpt(
+            handle=handle,
+            row_count=stored.row_count,
+            truncated=self.is_truncated(handle),
+            columns=tuple(info for _, info in shown),
+            hidden_columns=tuple(c.name for c in stored.table_schema.columns if c.sensitive),
+            rows=rows,
+        )
 
     def export(self, handle: Handle, max_rows: int) -> ExportedTable:
         stored = self._store.describe(handle)

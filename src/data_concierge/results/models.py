@@ -110,6 +110,18 @@ class ResultSummary(BaseModel, frozen=True):
     ids: dict[str, tuple[JsonScalar, ...]]
 
 
+class TableExcerpt(BaseModel, frozen=True):
+    """A table as the comment phase of mode minimal sees it (architecture 002, section 5.1):
+    rows without the sensitive columns, and none for a table above model_max_rows rows."""
+
+    handle: Handle
+    row_count: int
+    truncated: bool
+    columns: tuple[ColumnInfo, ...]
+    hidden_columns: tuple[str, ...]
+    rows: Rows | None
+
+
 class ExportedTable(BaseModel, frozen=True):
     """Full table data for the response; decimals as text, dates in ISO format."""
 

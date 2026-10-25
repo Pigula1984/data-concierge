@@ -13,6 +13,7 @@ from pydantic_ai.providers import Provider, infer_provider
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from data_concierge.agent.assembler import ResponseAssembler
+from data_concierge.agent.comment import CommentService
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
@@ -107,9 +108,10 @@ class CompositionRoot:
             AgentInstructions(catalog, data_ranges, exposure, settings.model_max_rows).text(),
             settings,
         )
+        comments = CommentService(model, settings)
         sessions = InMemorySessionRepository()
         factory = DuckDBSessionFactory(procedures, settings)
-        return cls(AskService(agent, sessions, factory, today))
+        return cls(AskService(agent, comments, sessions, factory, exposure, today))
 
     @staticmethod
     def configured_model(settings: Settings) -> Model:

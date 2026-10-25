@@ -26,6 +26,11 @@ class AnchorError(DataConciergeError):
     section 6.1); the message tells the model why."""
 
 
+class CommentError(DataConciergeError):
+    """The comment phase of mode minimal could not write a comment; the turn keeps its draft
+    (architecture 002, section 5.2)."""
+
+
 class ParameterValidationError(DataConciergeError):
     """Procedure arguments supplied by the model are invalid."""
 
