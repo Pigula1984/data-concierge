@@ -1,13 +1,31 @@
 """The case file is checked before any paid run: offline against the catalog, and its reference
 queries against the local SQL Server."""
 
+from pathlib import Path
+
 import pytest
 from cases import CASES_PATH, EvalCase
+from pydantic import ValidationError
 
 from data_concierge.catalog.models import Catalog
 from data_concierge.core.sqlserver import SqlServerClient
 
 CASES = EvalCase.load_all(CASES_PATH)
+# A pivot that mode none may also return in the long shape (architecture 002, section 9).
+MODE_CASE = """
+- id: pivot
+  group: raporty i pivoty
+  prompt: kategorie w kolumnach
+  expect:
+    status: [ok]
+    calls: [{tool: sales_order_line_list}]
+    result: {columns: [bikes], sql: SELECT 1 AS bikes}
+  modes:
+    none:
+      result:
+        - {columns: [bikes], sql: SELECT 1 AS bikes}
+        - {columns: [category, net_sales], sql: "SELECT 'Bikes' AS category, 1 AS net_sales"}
+"""
 GROUPS = {
     "listy",
     "sprzedaż za okres",
@@ -41,6 +59,31 @@ def test_expected_calls_name_exposed_tools_and_their_arguments(catalog: Catalog)
             assert set(call.args) <= arguments[call.tool], case.id
 
 
+def test_a_mode_replaces_only_the_fields_it_names(tmp_path: Path) -> None:
+    path = tmp_path / "cases.yaml"
+    path.write_text(MODE_CASE, encoding="utf-8")
+
+    (case,) = EvalCase.load_all(path)
+
+    assert case.expectation("minimal") == case.expect
+    long = case.expectation("none")
+    assert [rule.columns for rule in long.results] == [("bikes",), ("category", "net_sales")]
+    assert long.status == ("ok",)
+    assert long.calls == case.expect.calls
+    assert [rule.columns for rule in case.reference_rules] == [
+        ("bikes",),
+        ("category", "net_sales"),
+    ]
+
+
+def test_an_unknown_mode_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "cases.yaml"
+    path.write_text(MODE_CASE.replace("  none:", "  full:"), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="full"):
+        EvalCase.load_all(path)
+
+
 def test_every_catalog_example_is_a_case(catalog: Catalog) -> None:
     prompts = {case.prompt for case in CASES}
     examples = [example.prompt for entry in catalog.entries for example in entry.examples]
@@ -50,12 +93,12 @@ def test_every_catalog_example_is_a_case(catalog: Catalog) -> None:
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "case", [case for case in CASES if case.expect.results], ids=lambda case: case.id
+    "case", [case for case in CASES if case.reference_rules], ids=lambda case: case.id
 )
 def test_reference_queries_return_the_compared_columns(
     case: EvalCase, admin_client: SqlServerClient
 ) -> None:
-    for rule in case.expect.results:
+    for rule in case.reference_rules:
         reference = admin_client.fetch(rule.sql)
 
         assert reference.rows, case.id
