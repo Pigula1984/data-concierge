@@ -5,11 +5,14 @@ from collections.abc import Callable
 from datetime import date
 
 from data_concierge.agent.assembler import ResponseAssembler
+from data_concierge.agent.comment import CommentService
+from data_concierge.agent.models import AgentTurn
 from data_concierge.agent.service import AgentService
 from data_concierge.api.schemas import Response
 from data_concierge.api.sessions import Session, SessionFactory, SessionRepository
 from data_concierge.core.context import RequestContext
-from data_concierge.core.errors import ResultStoreError
+from data_concierge.core.errors import CommentError, ResultStoreError
+from data_concierge.core.settings import DEFAULT_EXPOSURE, ModelExposure
 
 logger = logging.getLogger(__name__)
 
@@ -24,19 +27,25 @@ class AskService:
     """Runs one turn of the agent in a session and returns the response of section 9.
 
     It never raises: any failure of the turn becomes status `error` with the correlation id,
-    and the session keeps the history from before the turn, unless its DuckDB broke.
+    and the session keeps the history from before the turn, unless its DuckDB broke. In mode
+    minimal a turn with status ok gets its comment from the comment phase (architecture 002,
+    section 5.2).
     """
 
     def __init__(
         self,
         agent: AgentService,
+        comments: CommentService,
         sessions: SessionRepository,
         factory: SessionFactory,
+        exposure: ModelExposure = DEFAULT_EXPOSURE,
         today: Callable[[], date] = date.today,
     ) -> None:
         self._agent = agent
+        self._comments = comments
         self._sessions = sessions
         self._factory = factory
+        self._exposure = exposure
         self._today = today
 
     async def ask(self, prompt: str, user_id: int, session_id: str | None = None) -> Response:
@@ -70,12 +79,29 @@ class AskService:
         return self._sessions.get(session_id) is not None
 
     async def _turn(self, session: Session, prompt: str, context: RequestContext) -> Response:
-        turn = await self._agent.run(
-            self._with_date(prompt), session.history, session.deps(context)
-        )
+        dated = self._with_date(prompt)
+        turn = await self._agent.run(dated, session.history, session.deps(context))
+        if self._exposure.comment_phase and turn.answer.status == "ok":
+            turn = await self._commented(turn, dated, session, context)
         response = session.assembler.assemble(turn.answer, session.id, context.correlation_id)
         self._sessions.save(session.with_history(turn.messages))
         return response
+
+    async def _commented(
+        self, turn: AgentTurn, prompt: str, session: Session, context: RequestContext
+    ) -> AgentTurn:
+        """The turn with the comment of the comment phase, in the answer and in the history;
+        when the phase fails, the turn keeps its draft."""
+        try:
+            comment = await self._comments.write(prompt, turn.answer, session.results)
+        except CommentError as exc:
+            logger.warning(
+                "the comment phase failed (correlation id %s), the draft is used: %s",
+                context.correlation_id,
+                exc.detail,
+            )
+            return turn
+        return turn.with_message(comment)
 
     def _with_date(self, prompt: str) -> str:
         """The current date goes in the user's message, so the instructions stay the same in

@@ -12,14 +12,13 @@ from pydantic_ai.usage import UsageLimits
 
 from data_concierge.agent.anchors import Anchors
 from data_concierge.agent.deps import AgentDeps
-from data_concierge.agent.models import AgentAnswer, AgentTurn, CandidatesFrom
+from data_concierge.agent.models import OUTPUT_TOOL, AgentAnswer, AgentTurn, CandidatesFrom
 from data_concierge.core.settings import Settings
 from data_concierge.core.types import ColumnKind
 from data_concierge.results.service import ResultService
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_TOOL = "present_result"
 # Pydantic AI appends the AgentAnswer docstring after ". ", so no closing period here.
 OUTPUT_DESCRIPTION = "End the turn: the status, a short comment and the handles to return"
 
@@ -42,7 +41,7 @@ class AgentService:
             instructions=instructions,
             tools=tools,
             retries=settings.agent_retries,
-            model_settings=self._model_settings(settings),
+            model_settings=self.model_settings(settings),
             # An answer ends the turn before tools called in the same response run, so it can
             # only name handles whose summaries the model has already seen (section 7.5).
             end_strategy="early",
@@ -75,7 +74,7 @@ class AgentService:
         return AgentTurn(answer=result.output, messages=tuple(result.all_messages()))
 
     @staticmethod
-    def _model_settings(settings: Settings) -> AnthropicModelSettings:
+    def model_settings(settings: Settings) -> AnthropicModelSettings:
         """Claude settings; another provider ignores the `anthropic_` keys (section 11.2).
 
         Thinking blocks bound to a changed conversation start are dropped instead of failing

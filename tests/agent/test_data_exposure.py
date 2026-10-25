@@ -1,5 +1,6 @@
 """In mode `none` no value from the rows reaches the model (architecture 002, section 4; plan
-U7, KTD10).
+U7, KTD10); in mode `minimal` rows reach only the comment phase, and sensitive values never
+(section 5; plan U8).
 
 The session's procedures return sentinel rows. A scripted model records every request it
 gets: the instructions, the tool definitions and all messages, history included. The test
@@ -12,16 +13,27 @@ from collections.abc import Callable, Sequence
 
 import pytest
 from pydantic_ai import Tool
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelResponse, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from data_concierge.agent.assembler import ResponseAssembler
+from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.formatting import ValueFormatter
 from data_concierge.agent.models import AgentTurn
 from data_concierge.agent.service import AgentService
-from data_concierge.core.settings import Settings
-from data_concierge.core.types import ColumnRole
+from data_concierge.api.service import AskService
+from data_concierge.api.sessions import InMemorySessionRepository
+from data_concierge.api.sessions import Session as ApiSession
+from data_concierge.core.settings import ModelExposure, Settings
+from data_concierge.core.types import Column, ColumnRole
+from data_concierge.results.service import ResultService
 
 pytestmark = pytest.mark.anyio
 
@@ -32,6 +44,10 @@ MONTHLY_SQL = (
     "FROM r2 GROUP BY 1 ORDER BY month"
 )
 TOTAL_SQL = 'SELECT CAST(sum("SubTotal") AS DECIMAL(38,2)) AS annual_total FROM r2'
+TOP_CUSTOMER_SQL = (
+    'SELECT "CustomerID", "CustomerName", CAST(sum("SubTotal") AS DECIMAL(38,2)) AS net_sales '
+    'FROM r2 GROUP BY 1, 2 ORDER BY net_sales DESC, "CustomerID"'
+)
 # Small counts are left out: they would match row counts the model may see.
 CANDIDATES_SQL = (
     'SELECT "CustomerID", "AccountNumber", "CustomerName", "Territory" FROM r1 '
@@ -54,7 +70,7 @@ def present(status: str = "ok", message: str = "Gotowe.", **fields: object) -> T
 class RecordingModel:
     """Replays one response per step and keeps the text of every request it receives."""
 
-    def __init__(self, *steps: ToolCallPart) -> None:
+    def __init__(self, *steps: ToolCallPart | TextPart) -> None:
         self._steps = list(steps)
         self.traffic: list[str] = []
 
@@ -98,19 +114,23 @@ class Session:
         return sorted(v for v in (*SENTINELS, *self._hidden_values()) if v in self.model.text)
 
     def _hidden_values(self) -> set[str]:
-        """Every value of every handle, raw and as the user reads it, except ids and dates."""
-        formatter = ValueFormatter()
-        found: set[str] = set()
-        for handle in self.deps.results.handles():
-            exported = self.deps.results.export(handle, max_rows=10_000)
-            for index, column in enumerate(exported.columns):
-                if column.role in (ColumnRole.ID, ColumnRole.TIME):
-                    continue
-                for row in exported.rows:
-                    if row[index] is not None:
-                        found.add(str(row[index]))
-                        found.add(formatter.format(row[index], column.type, column.role))
-        return found
+        """Every value of every handle except ids and dates."""
+        return values(self.deps.results, lambda c: c.role not in (ColumnRole.ID, ColumnRole.TIME))
+
+
+def values(results: ResultService, kept: Callable[[Column], bool]) -> set[str]:
+    """The values of the kept columns of every handle, raw and as the user reads them."""
+    formatter = ValueFormatter()
+    found: set[str] = set()
+    for handle in results.handles():
+        columns = results.describe(handle).table_schema.columns
+        rows = results.export(handle, max_rows=10_000).rows
+        for index, column in enumerate(columns):
+            for row in rows if kept(column) else ():
+                if row[index] is not None:
+                    found.add(str(row[index]))
+                    found.add(formatter.format(row[index], column.type, column.role))
+    return found
 
 
 @pytest.fixture
@@ -194,3 +214,73 @@ async def test_candidates_and_the_next_turn_show_the_model_no_values(
         "SENTINEL-ACCOUNT-1A, SENTINEL-NAME-7Q, SENTINEL-TERRITORY-9M"
     )
     assert conversation.leaked() == []
+
+
+class SentinelSessions:
+    """Hands out the session over the sentinel rows, so the test can read its handles."""
+
+    def __init__(self, deps: AgentDeps) -> None:
+        self._deps = deps
+
+    def create(self) -> ApiSession:
+        deps = self._deps
+        return ApiSession(
+            id="s1",
+            procedures=deps.procedures,
+            queries=deps.queries,
+            results=deps.results,
+            assembler=ResponseAssembler(deps.results, 10_000),
+        )
+
+
+@pytest.mark.parametrize("mode", ["minimal"])
+async def test_in_mode_minimal_rows_reach_only_the_comment_and_sensitive_values_never(
+    agent_tools: tuple[Tool[AgentDeps], ...],
+    instructions: str,
+    agent_settings: Settings,
+    exposure: ModelExposure,
+    sentinel_deps: AgentDeps,
+) -> None:
+    tools_model = RecordingModel(
+        ToolCallPart("customer_list", {"city": "Berlin"}),
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": TOTAL_SQL}),
+        ToolCallPart("query", {"sql": TOP_CUSTOMER_SQL}),
+        present(
+            message="Sprzedaż netto w 2024: {r3.annual_total}.",
+            # The procedure handle itself goes to the user.
+            tables=[{"handle": "r2", "title": "Zamówienia, najlepszy {r4[1].CustomerName}"}],
+            assumptions=["Najlepszy klient: {r4[1].CustomerName}"],
+        ),
+        present("no_data"),
+    )
+    comment_model = RecordingModel(
+        TextPart("Razem {r3.annual_total}; najwięcej {r4[1].CustomerName}: {r4[1].net_sales}.")
+    )
+    service = AskService(
+        AgentService(FunctionModel(tools_model), agent_tools, instructions, agent_settings),
+        CommentService(FunctionModel(comment_model), agent_settings),
+        InMemorySessionRepository(),
+        SentinelSessions(sentinel_deps),
+        exposure,
+    )
+
+    response = await service.ask("Zamówienia klientów z Berlina w 2024", user_id=7)
+    await service.ask("A w 2019?", user_id=7, session_id=response.session_id)
+
+    results = sentinel_deps.results
+    sensitive = values(results, lambda column: column.sensitive)
+    measures = values(results, lambda column: column.role is ColumnRole.MEASURE)
+    assert response.message == (
+        "Razem 156\N{NO-BREAK SPACE}790,02; najwięcej SENTINEL-NAME-7Q: "
+        "144\N{NO-BREAK SPACE}444,34."
+    )
+    assert sorted(v for v in sensitive | measures if v in tools_model.text) == []
+    assert sorted(v for v in sensitive if v in comment_model.text) == []
+    # Literal sentinels too, in case a lost `sensitive` flag shrank the set above.
+    for sentinel in ("SENTINEL-NAME-7Q", "SENTINEL-ACCOUNT-1A", "98765.4321"):
+        assert sentinel not in tools_model.text
+    for sentinel in ("SENTINEL-NAME-7Q", "SENTINEL-ACCOUNT-1A"):
+        assert sentinel not in comment_model.text
+    # The rows of the procedure handle returned as a table reach the comment phase only.
+    assert "98765.4321" in comment_model.text

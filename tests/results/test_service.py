@@ -146,6 +146,55 @@ def test_empty_result_has_no_ids_and_no_dates() -> None:
     assert summary.stats == {"OrderDate": ColumnStats(min=None, max=None)}
 
 
+def test_excerpt_for_the_comment_has_the_rows_without_sensitive_columns() -> None:
+    service, _ = _service(MINIMAL)
+    handle = service.save(_customer_orders(2))
+
+    excerpt = service.excerpt(handle)
+
+    assert excerpt.handle == handle
+    assert (excerpt.row_count, excerpt.truncated) == (2, False)
+    assert [info.name for info in excerpt.columns] == [
+        "CustomerID",
+        "OrderDate",
+        "CustomerType",
+        "SubTotal",
+    ]
+    assert excerpt.hidden_columns == ("AccountNumber", "CustomerName")
+    assert excerpt.rows == (
+        (11000, "2024-03-01", "type 00", "0.2500"),
+        (11007, "2024-02-29", "type 01", "1.2500"),
+    )
+
+
+def test_excerpt_has_rows_up_to_the_model_row_limit_and_above_it_only_its_structure() -> None:
+    service, _ = _service(MINIMAL)
+
+    small = service.excerpt(service.save(_customer_orders(50)))
+    large = service.excerpt(service.save(_customer_orders(51)))
+
+    assert small.rows is not None
+    assert len(small.rows) == 50
+    assert large.row_count == 51
+    assert large.rows is None
+    assert len(large.columns) == 4
+
+
+def test_excerpt_of_a_table_with_only_sensitive_columns_has_no_rows() -> None:
+    service, _ = _service(MINIMAL)
+    schema = TableSchema(columns=(CUSTOMER_ORDERS_SCHEMA.columns[3],))
+    data = pa.table(
+        {"CustomerName": pa.array(["Customer 0"])}, schema=pa.schema(schema.arrow_fields)
+    )
+    lineage = ProcedureLineage(procedure="api.Test", params={}, truncated=False)
+
+    excerpt = service.excerpt(service.save(ResultTable(data=data, schema=schema, lineage=lineage)))
+
+    assert excerpt.columns == ()
+    assert excerpt.hidden_columns == ("CustomerName",)
+    assert excerpt.rows is None
+
+
 def test_export_cuts_at_max_rows_and_flags_truncation() -> None:
     service, _ = _service()
     handle = service.save(_orders(10_001))

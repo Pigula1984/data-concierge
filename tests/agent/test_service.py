@@ -415,6 +415,15 @@ async def test_instructions_of_mode_minimal_name_the_dimension_values(
     assert "the values of dimension columns with at most 20 distinct values" in text
     assert "or from the dimension values of the handle" in text
     assert "You never see names, amounts or quantities" not in text
+    assert "a short draft" in text
+
+
+async def test_instructions_of_mode_none_have_no_draft_rule(
+    catalog: Catalog, data_ranges: dict[str, DataRange]
+) -> None:
+    text = AgentInstructions(catalog, data_ranges, ModelExposure.for_mode("none")).text()
+
+    assert "a short draft" not in text
 
 
 async def test_instructions_follow_the_model_row_limit(
