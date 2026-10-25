@@ -19,7 +19,7 @@ from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
 from data_concierge.api.controller import router
 from data_concierge.api.service import AskService
-from data_concierge.api.sessions import InMemorySessionRepository, Session
+from data_concierge.api.sessions import InMemorySessionRepository, Session, SessionRepository
 from data_concierge.catalog.repository import (
     ProcedureMetadataRepository,
     SqlServerMetadataRepository,
@@ -92,6 +92,7 @@ class CompositionRoot:
         procedures: ProcedureRepository,
         model: Model,
         today: Callable[[], date] = date.today,
+        sessions: SessionRepository | None = None,
     ) -> CompositionRoot:
         catalog_service = CatalogService(
             YamlCatalogRepository(settings.catalog_path).load(), metadata
@@ -109,7 +110,7 @@ class CompositionRoot:
             settings,
         )
         comments = CommentService(model, settings)
-        sessions = InMemorySessionRepository()
+        sessions = sessions if sessions is not None else InMemorySessionRepository()
         factory = DuckDBSessionFactory(procedures, settings)
         return cls(AskService(agent, comments, sessions, factory, exposure, today))
 

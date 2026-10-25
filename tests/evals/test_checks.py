@@ -1,11 +1,15 @@
-"""Scoring evaluation cases offline: result comparison, call matching and the number audit."""
+"""Scoring evaluation cases offline: result comparison, call matching, candidates, the number
+audit, the report and the recording model."""
 
 import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from cases import CaseChecker, ExpectedCall, ResultRule
+from harness import RecordingModel
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -13,12 +17,19 @@ from pydantic_ai.messages import (
     RetryPromptPart,
     TextPart,
     ToolCallPart,
-    ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from report import CaseOutcome, EvalReport, NumberAudit, RunArchive, TurnTrace
 
-from data_concierge.api.schemas import Response, ResponseColumn, ResponseTable
+from data_concierge.agent.models import OUTPUT_TOOL
+from data_concierge.api.schemas import (
+    Candidate,
+    Clarification,
+    Response,
+    ResponseColumn,
+    ResponseTable,
+)
 from data_concierge.catalog.models import Catalog
 from data_concierge.core.sqlserver import SqlRows
 from data_concierge.core.types import ColumnType
@@ -48,6 +59,27 @@ ORDERS_CALL = (
 
 def answer(*tables: ResponseTable, message: str = "Gotowe.") -> Response:
     return Response(status="ok", session_id="s1", message=message, tables=tables)
+
+
+def template(message: str, *assumptions: str) -> ModelResponse:
+    """The model's final answer as the session history keeps it."""
+    args = {"status": "ok", "message": message, "assumptions": list(assumptions)}
+    return ModelResponse(parts=[ToolCallPart(OUTPUT_TOOL, args)])
+
+
+def outcome(case_id: str = "a", **changes: object) -> CaseOutcome:
+    fields: dict[str, object] = {
+        "case_id": case_id,
+        "group": "listy",
+        "status": "ok",
+        "status_ok": True,
+        "procedure_ok": True,
+        "params_ok": True,
+        "result_ok": True,
+        "query_retries": 0,
+        "numbers_outside_anchors": (),
+    }
+    return CaseOutcome(**(fields | changes))  # type: ignore[arg-type]
 
 
 def test_contains_matches_values_ignoring_column_names_order_and_scale(catalog: Catalog) -> None:
@@ -91,43 +123,93 @@ def test_expected_arguments_match_as_a_subset_by_parameter_name(catalog: Catalog
     assert not checker.procedures_called([ExpectedCall(tool="customer_search")], [ORDERS_CALL])
 
 
-def test_numbers_in_the_comment_are_found_at_the_shown_precision() -> None:
-    table = MONTHLY.model_copy(update={"rows": (("2024-06-01", "43671889.5012", 400),)})
-    message = (
-        "Sprzedaż netto w 2024: 43 671 889,50, czyli 400 zamówień w 12 miesiącach. "
-        "Średnio 1 234,56 na zamówienie."
-    )
+def test_numbers_written_outside_anchors_are_listed_and_anchored_ones_are_not() -> None:
+    history = [
+        template(
+            "Sprzedaż netto w 2024: {r3.net_sales}, w {r2#rows} miesiącach. "
+            "Najlepszy był {r2[150].month}, średnio 1 234,56 na zamówienie.",
+            "Okres od 2024-01-01, 6 500 zamówień.",
+        )
+    ]
 
-    assert NumberAudit.unmatched(answer(table, message=message), []) == ("1 234,56",)
+    assert NumberAudit.outside_anchors(history) == ("1 234,56", "6 500")
 
 
-def test_turn_trace_counts_query_retries_and_reads_query_results_of_the_last_turn() -> None:
+def test_the_number_audit_reads_the_last_template_of_the_history() -> None:
+    draft = template("Sprzedaż 43 671 889,50.")
+    comment = template("Sprzedaż {r3.net_sales}.")
+    history: list[ModelMessage] = [draft, ModelRequest(parts=[UserPromptPart("?")]), comment]
+
+    assert NumberAudit.outside_anchors(history) == ()
+    assert NumberAudit.outside_anchors([ModelResponse(parts=[TextPart("...")])]) == ()
+
+
+def test_turn_trace_counts_query_retries_of_the_last_turn() -> None:
     earlier = ModelRequest(parts=[RetryPromptPart("old", tool_name="query")])
     turn: list[ModelMessage] = [
         ModelRequest(parts=[UserPromptPart("Raport")]),
         ModelResponse(parts=[TextPart("...")]),
         ModelRequest(parts=[RetryPromptPart("column is DOUBLE", tool_name="query")]),
-        ModelRequest(parts=[ToolReturnPart("query", {"preview": [["2024-01-01", "1234.5000"]]})]),
     ]
 
-    trace = TurnTrace.from_messages([earlier, *turn])
-
-    assert trace.query_retries == 1
-    assert Decimal("1234.5") in trace.seen_values
+    assert TurnTrace.from_messages([earlier, *turn]).query_retries == 1
 
 
-def test_report_counts_each_group_and_lists_failed_cases() -> None:
-    report = EvalReport()
-    passed = CaseOutcome("a", "listy", "ok", True, True, True, True, 0, ())
-    failed = CaseOutcome("b", "listy", "error", False, True, True, None, 2, ("1 234,56",))
-    report.add(passed)
-    report.add(failed)
+def test_report_names_the_mode_counts_each_group_and_lists_failed_cases() -> None:
+    report = EvalReport("minimal")
+    report.add(outcome("a", anchor_retries=1, turns=2, seconds=10.0, cost=Decimal("0.02")))
+    report.add(
+        outcome(
+            "b",
+            status="error",
+            status_ok=False,
+            result_ok=None,
+            candidates_ok=False,
+            query_retries=2,
+            numbers_outside_anchors=("1 234,56",),
+            drafts=1,
+            seconds=5.0,
+            cost=Decimal("0.01"),
+        )
+    )
 
     text = report.render()
 
-    assert "| listy | 2 | 1 | 1/2 | 2/2 | 2/2 | 1/1 | 2 | 1 |" in text
-    assert "- b: status error" in text
+    assert text.startswith("Mode: minimal")
+    assert "| listy | 2 | 1 | 1/2 | 2/2 | 2/2 | 1/1 | 0/1 | 2 | 1 | 1 | 1 | 5.0 | 0.0100 |" in text
+    assert "Turns: 3, time: 15 s, cost: $0.03" in text
+    assert "- b: status error, candidates" in text
     assert "- b: 1 234,56" in text
+
+
+def test_an_unknown_price_shows_no_cost() -> None:
+    report = EvalReport("none")
+    report.add(outcome(cost=Decimal("0.02")))
+    report.add(outcome("b", cost=None))
+
+    text = report.render()
+
+    assert "| 0.0 | - |" in text
+    assert "cost: unknown" in text
+
+
+def test_candidates_match_by_id_whatever_their_descriptions() -> None:
+    offered = Response(
+        status="needs_clarification",
+        session_id="s1",
+        message="Którego klienta?",
+        clarification=Clarification(
+            question="Którego klienta?",
+            candidates=(
+                Candidate(id=12698, description="AW00012698, Australia"),
+                Candidate(id=20550, description="dowolny opis"),
+            ),
+        ),
+    )
+
+    assert CaseChecker.candidates_match([20550, 12698], offered)
+    assert not CaseChecker.candidates_match([12698], offered)
+    assert not CaseChecker.candidates_match([12698, 20550], answer())
 
 
 def test_a_decimal_rounded_by_the_model_matches_at_its_own_scale(catalog: Catalog) -> None:
@@ -145,23 +227,26 @@ def test_a_decimal_rounded_by_the_model_matches_at_its_own_scale(catalog: Catalo
     assert not CaseChecker(catalog).result_matches(rule, answer(rounded), off)
 
 
-def test_dates_and_account_numbers_in_the_comment_are_not_amounts() -> None:
-    message = "Zamówienia od 30.05.2022 do 2025-06-29, klient AW00012698."
+def test_dates_and_account_numbers_in_the_template_are_not_amounts() -> None:
+    history = [template("Zamówienia od 30.05.2022 do 2025-06-29, klient AW00012698.")]
 
-    assert NumberAudit.unmatched(answer(message=message), []) == ()
+    assert NumberAudit.outside_anchors(history) == ()
 
 
 def test_numbers_with_no_break_separators_and_a_decimal_point_are_read() -> None:
-    table = MONTHLY.model_copy(update={"rows": (("2024-06-01", "2294.9900", 1),)})
-    message = "Sprzedaż 43\u00a0671\u202f889,50 i 2294.99."
+    nbsp, narrow = chr(0xA0), chr(0x202F)
+    grouped = f"43{nbsp}671{narrow}889,50"
 
-    assert NumberAudit.unmatched(answer(table, message=message), []) == ("43\u00a0671\u202f889,50",)
+    assert NumberAudit.outside_anchors([template(f"Sprzedaż {grouped} i 2294.99.")]) == (
+        grouped,
+        "2294.99",
+    )
 
 
-def test_a_number_outside_results_does_not_fail_a_case() -> None:
-    outcome = CaseOutcome("a", "listy", "ok", True, True, True, True, 0, ("1 234,56",))
+def test_the_measures_do_not_fail_a_case() -> None:
+    measured = outcome(numbers_outside_anchors=("1 234,56",), anchor_retries=2, drafts=1)
 
-    assert outcome.passed
+    assert measured.passed
 
 
 def test_rows_match_in_any_order_when_a_name_is_also_in_another_row(catalog: Catalog) -> None:
@@ -218,8 +303,41 @@ def test_turn_trace_keeps_the_calls_with_their_sql_and_the_corrections() -> None
     ]
 
 
+@pytest.mark.anyio
+async def test_recording_model_counts_anchor_retries_once_and_keeps_every_response() -> None:
+    def reply(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(f"comment {len(messages)}")])
+
+    def check(comment: str) -> str:
+        if comment == "comment 1":
+            raise ModelRetry("fix these anchors: {r9.x}: unknown handle r9")
+        if comment == "comment 3":
+            raise ModelRetry("write it shorter")
+        return comment
+
+    model = RecordingModel(FunctionModel(reply))
+    agent = Agent(model, output_type=str, retries=3)
+    agent.output_validator(check)
+
+    result = await agent.run("Komentarz")
+
+    assert result.output == "comment 5"
+    assert model.anchor_retries == 1
+    assert len(model.responses) == 3
+    assert model.cost is None
+    model.clear()
+    assert (model.anchor_retries, model.responses) == (0, [])
+
+
+def test_run_archive_is_named_by_its_start_and_mode(tmp_path: Path) -> None:
+    archive = RunArchive.started_now(tmp_path, "none")
+
+    assert archive.directory.parent == tmp_path
+    assert archive.directory.name.endswith("-none")
+
+
 def test_run_archive_writes_each_case_and_the_report(tmp_path: Path) -> None:
-    archive = RunArchive(tmp_path / "20261020-210500")
+    archive = RunArchive(tmp_path / "20261020-210500-none")
 
     case = archive.save_case("p5", {"id": "p5", "today": date(2025, 7, 1), "sql": "SELECT 1"})
     report = archive.save_report("| group |")

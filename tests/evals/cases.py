@@ -1,9 +1,10 @@
 """Evaluation cases from evals/cases.yaml and the checks that score one answered case.
 
 A case holds a prompt (and the user's answers to clarification questions), the expected status,
-the procedure calls it expects with their model arguments, and a reference query run in SQL
-Server. Results are compared by values, not column names: the model picks its own aliases and
-column order (plan U18).
+the procedure calls it expects with their model arguments, a reference query run in SQL Server
+and the ids of the clarification candidates. Results are compared by values, not column names:
+the model picks its own aliases and column order (plan U18). A case may change its expectation
+in one mode, only for the changes listed in architecture 002, section 9 (plan KTD11).
 """
 
 from collections.abc import Mapping, Sequence
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from data_concierge.api.schemas import AnswerStatus, Response, ResponseTable
 from data_concierge.catalog.models import Catalog
+from data_concierge.core.settings import ModelDataAccess
 from data_concierge.core.sqlserver import SqlRows
 from data_concierge.core.types import ColumnKind
 
@@ -26,6 +28,7 @@ DEFAULT_TODAY = date(2025, 7, 1)
 
 type Value = object
 type Call = tuple[str, Mapping[str, object]]
+type CandidateId = int | str
 
 
 class _CaseModel(BaseModel, frozen=True, extra="forbid"):
@@ -62,12 +65,21 @@ class Expectation(_CaseModel):
     # Each group lists ways of writing one fact (e.g. a date as ISO text or in Polish); at least
     # one of them must appear in the answer's assumptions, ignoring case.
     assumptions: tuple[tuple[str, ...], ...] = ()
+    # Checked only when the final status is needs_clarification: the ids the user chooses from.
+    candidates: tuple[CandidateId, ...] = ()
 
     @property
     def results(self) -> tuple[ResultRule, ...]:
         if self.result is None:
             return ()
         return self.result if isinstance(self.result, tuple) else (self.result,)
+
+
+class ModeExpectation(_CaseModel):
+    """What one mode expects instead of the case's own expectation; fields left out keep it."""
+
+    status: tuple[AnswerStatus, ...] = ()
+    result: ResultRule | tuple[ResultRule, ...] | None = None
 
 
 class EvalCase(_CaseModel):
@@ -77,6 +89,23 @@ class EvalCase(_CaseModel):
     followups: tuple[str, ...] = ()
     today: date = DEFAULT_TODAY
     expect: Expectation
+    modes: dict[ModelDataAccess, ModeExpectation] = Field(default_factory=dict)
+
+    def expectation(self, mode: ModelDataAccess) -> Expectation:
+        override = self.modes.get(mode)
+        if override is None:
+            return self.expect
+        return self.expect.model_copy(
+            update={name: getattr(override, name) for name in override.model_fields_set}
+        )
+
+    @property
+    def reference_rules(self) -> tuple[ResultRule, ...]:
+        """Every reference query of the case, its own and those of its modes, each once."""
+        rules = [*self.expect.results]
+        for mode in self.modes:
+            rules += [rule for rule in self.expectation(mode).results if rule not in rules]
+        return tuple(rules)
 
     @classmethod
     def load_all(cls, path: Path = CASES_PATH) -> tuple[EvalCase, ...]:
@@ -102,6 +131,14 @@ class CaseChecker:
     def assumptions_match(expected: Sequence[Sequence[str]], response: Response) -> bool:
         text = " ".join(response.assumptions).casefold()
         return all(any(form.casefold() in text for form in group) for group in expected)
+
+    @staticmethod
+    def candidates_match(expected: Sequence[CandidateId], response: Response) -> bool:
+        """The clarification offers exactly the expected ids, whatever their descriptions."""
+        if response.clarification is None:
+            return False
+        offered = {candidate.id for candidate in response.clarification.candidates}
+        return offered == set(expected)
 
     def result_matches(self, rule: ResultRule, response: Response, reference: SqlRows) -> bool:
         wanted = [self._reference_row(rule, reference, row) for row in reference.rows]

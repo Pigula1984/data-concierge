@@ -1,9 +1,13 @@
 # Evaluation set (plan U18, architecture section 13): prompts run through ask() on the real
 # model and database. Each case names the expected status, the procedure calls with their model
-# arguments (matched as a subset; unlisted arguments are not checked) and, for an `ok` answer,
-# a reference query run in SQL Server. Results are compared by values, not column names.
+# arguments (matched as a subset; unlisted arguments are not checked), for an `ok` answer a
+# reference query run in SQL Server, and for a `needs_clarification` answer the ids of the
+# candidates (`candidates`, compared as a set, whatever their descriptions). Results are
+# compared by values, not column names.
+# `modes` changes the expectation (`status`, `result`) in one mode (`none` or `minimal`), only
+# for the changes architecture 002, section 9 expects; any other failure stays a failure.
 # `today` defaults to 2025-07-01 (data covers 2022-05-30 to 2025-06-29).
-# Run: uv run pytest -m eval tests/evals
+# Run: DC_MODEL_DATA_ACCESS=none (or minimal) uv run pytest -m eval tests/evals
 
 # --- Lists with a filter ---------------------------------------------------------------------
 
@@ -68,6 +72,7 @@
     calls:
       - tool: customer_search
         args: {name: Mohamed Pal}
+    candidates: [12698, 20550, 28763]
     result:
       columns: [CustomerID]
       sql: |
@@ -599,6 +604,7 @@
     calls:
       - tool: customer_search
         args: {name: Mohamed Pal}
+    candidates: [12698, 20550, 28763]
 
 - id: produkt-niejednoznaczny
   group: trudne
@@ -608,6 +614,8 @@
     calls:
       - tool: product_search
         args: {name: HL Mountain Frame}
+    # Every color and size of the frame.
+    candidates: [739, 740, 741, 742, 743, 744, 745, 746, 747, 748]
 
 - id: klient-nie-istnieje
   group: trudne
