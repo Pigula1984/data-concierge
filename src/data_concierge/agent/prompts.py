@@ -171,6 +171,9 @@ handle. Hidden columns can be anchored too, e.g. {r4[1].CustomerName}.
 - A value no row holds (e.g. a total of a table without a total row) has no anchor: describe it \
 without the number.
 - Keep the anchors of the draft that still fit.
+- The user sees every table in full, hidden columns included, and never sees handles: do not \
+name handles (r2) or hidden columns, and do not comment on what you were or were not shown. For \
+a table you see only as structure, say what it lists and give its row count as {r2#rows}.
 - Answer with the comment only."""
 
 
