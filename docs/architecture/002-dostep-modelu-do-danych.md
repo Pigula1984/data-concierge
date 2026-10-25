@@ -1,6 +1,6 @@
 # Data Concierge: dostęp modelu do danych (etap 2)
 
-Status: projekt zatwierdzony przez właściciela (decyzje D1–D8 z 2026-10-24), przed planem wdrożenia. Wersja 0.2, data: 2026-10-24.
+Status: wdrożone (etapy 2A–2D planu [`2026-10-24-1618-feat-dostep-modelu-do-danych-plan.md`](../plans/2026-10-24-1618-feat-dostep-modelu-do-danych-plan.md)), decyzje D1–D8 właściciela z 2026-10-24. Wynik ewaluacji obu trybów w sekcji 9, odejścia od projektu w sekcji 13. Wersja 1.0, data: 2026-10-25.
 Rozszerza [`001-architektura-data-concierge.md`](001-architektura-data-concierge.md) (v3.7), który opisuje v1. Ten dokument przejmuje sprawy, które 001 odkładał na później: odwołania zamiast liczb w komentarzu (001, sekcja 7.5), konfigurację tego, co z danych trafia do modelu (001, sekcje 11.3 i 12), oraz oznaczanie kolumn w katalogu. Kontrola liczb w komentarzu zostaje odłożona (sekcja 12).
 
 ## 1. Cel i zakres
@@ -32,7 +32,7 @@ Do tego dochodzą komunikaty błędów DuckDB i tekst błędu sterownika SQL Ser
 
 Tryb to ustawienie procesu (`Settings.model_data_access`, zmienna środowiskowa), czytane przy starcie. Nie da się go zmienić per żądanie ani per sesja, z trzech powodów:
 
-- **Stały początek rozmowy.** Instrukcje i opisy narzędzi zależą od trybu: `query` i `describe_result` dziś mówią o podglądzie, a tryb zamknięty potrzebuje instrukcji o kotwicach i braku danych. Powstają raz przy starcie, bo od tego zależy cache i wiązanie bloków myślenia (001, sekcja 11.3).
+- **Stały początek rozmowy.** Instrukcje i opisy narzędzi zależą od trybu: `query` i `describe_result` opisują podsumowanie trybu, a tryb zamknięty potrzebuje instrukcji o kotwicach i braku danych. Powstają raz przy starcie, bo od tego zależy cache i wiązanie bloków myślenia (001, sekcja 11.3).
 - **Historia.** Sesja w trybie ograniczonym ma w historii wartości z danych. Przełączenie jej na tryb zamknięty dalej wysyłałoby te wartości do modelu.
 - **Prostota.** Jeden tryb na proces to jedna ścieżka w testach na proces.
 
@@ -79,7 +79,7 @@ Kolumna `id`, która coś mówi o kliencie lub produkcie (numer konta, numer pro
 
 ### 4.3. Pytanie doprecyzowujące z uchwytu
 
-Dziś model sam przepisuje kandydatów (`Candidate.id`, `description`) z wierszy, które widział. W trybie zamkniętym ich nie widzi, więc zamiast listy wskazuje uchwyt:
+W v1 model sam przepisywał kandydatów (`Candidate.id`, `description`) z wierszy, które widział. W trybie zamkniętym ich nie widzi, więc zamiast listy wskazuje uchwyt:
 
 ```json
 {"question": "Znaleziono {r2#rows} klientów o tej nazwie. Którego wybierasz?",
@@ -128,7 +128,7 @@ Model nie widzi:
 
 ### 5.2. Dwie fazy tury
 
-1. **Faza narzędzi.** Agent z narzędziami jak dziś, z podsumowaniami według sekcji 5.1. Kończy się `AgentAnswer` z kompletem pól, a `message` jest szkicem z kotwicami.
+1. **Faza narzędzi.** Agent z narzędziami jak w trybie zamkniętym, z podsumowaniami według sekcji 5.1. Kończy się `AgentAnswer` z kompletem pól, a `message` jest szkicem z kotwicami.
 2. **Faza komentarza.** Osobny agent Pydantic AI bez narzędzi, z własną stałą instrukcją, na tym samym modelu. Dostaje prompt użytkownika, szkic odpowiedzi (status, tytuły, założenia, komentarz) i dane tabel z sekcji 5.1, bez kolumn `sensitive`. Zwraca nowy `message` z kotwicami.
 
 Faza komentarza działa tylko przy statusie `ok`. Gdy zawiedzie (błąd, zła kotwica po wyczerpaniu ponowień), odpowiedź dostaje szkic z fazy narzędzi, a przypadek trafia do logu. Koszt: jedno dodatkowe wywołanie modelu na turę, z krótkim kontekstem.
@@ -166,7 +166,7 @@ W trybie `minimal` wartości takiej kolumny trafiłyby do modelu jako wartości 
 
 Domyślnie kolumna jest widoczna, a właściciel oznacza wrażliwe (decyzja D6). Zasada oznaczania: wrażliwe są nazwy i opisy, które wskazują konkretnego klienta, produkt lub osobę, oraz identyfikatory biznesowe, których model nie potrzebuje do łączenia wyników. Wymiary potrzebne do filtrów i zestawień (kategoria, terytorium, miasto, typ klienta) zostają widoczne.
 
-Wstępne oznaczenie katalogu `catalog/agent-procedures.yaml` (wejdzie do pliku razem z obsługą pola w kodzie, bo dziś nieznany klucz jest błędem katalogu):
+Oznaczenie katalogu `catalog/agent-procedures.yaml` (wprowadzone w etapie 2A razem z obsługą pola w kodzie):
 
 | Kolumna | Procedury | Dlaczego |
 |---------|-----------|----------|
@@ -210,9 +210,9 @@ Kotwice działają w obu trybach. W trybie ograniczonym model widzi liczby w faz
 
 Dotyczy obu trybów, bo tekst błędu z wartością nie pomaga modelowi poprawić wywołania:
 
-- **DuckDB:** błędy parsera, wiązania i katalogu (`ParserException`, `BinderException`, `CatalogException`) cytują SQL modelu i schemat, więc wracają bez zmian. Pozostałe (np. `ConversionException`, `InvalidInputException`, `OutOfRangeException`) wracają jako nazwa klasy i ogólny opis, np. „ConversionException: a value could not be converted; use TRY_CAST or filter the column first”. Pełny tekst trafia do logu z identyfikatorem zgłoszenia.
+- **DuckDB:** błędy parsera, wiązania i katalogu (`ParserException`, `BinderException`, `CatalogException`) cytują SQL modelu i schemat, więc wracają bez zmian. Pozostałe (np. `ConversionException`, `InvalidInputException`, `OutOfRangeException`) wracają jako nazwa klasy i ogólny opis, np. „ConversionException: a value could not be converted; use TRY_CAST or filter the column first”. Wyjątkiem są stałe teksty silnika, które nie cytują wartości, np. „More than one row returned by a subquery” (`InvalidInputException`): wracają bez zmian, bo mówią modelowi, co poprawić. Pełny tekst trafia do logu z identyfikatorem zgłoszenia.
 - **SQL Server:** model dostaje numer błędu i SQLSTATE bez tekstu sterownika (`core/sqlserver.py`). Pełny tekst trafia do logu.
-- **Komunikaty backendu** (kontrole `query`, limity, walidacja parametrów) nie zawierają wartości z danych i zostają bez zmian. Plan to potwierdzi przeglądem.
+- **Komunikaty backendu** (kontrole `query`, limity, walidacja parametrów) nie zawierają wartości z danych i zostają bez zmian. Potwierdził to przegląd w etapie 2A.
 
 ### 6.3. Historia sesji
 
@@ -230,7 +230,7 @@ Każdy tryb ma własną stałą część instrukcji i opisy `query`, `describe_r
 - pytania doprecyzowujące przez `candidates_from`;
 - `PIVOT` tylko z wartości z katalogu.
 
-Przykłady z sekcji 10 dokumentu 001 dostają warianty dla trybu zamkniętego.
+Przykłady zapytań w instrukcjach (raport miesięczny, jednowierszowe zapytanie do komentarza, kandydaci z uchwytu, P5) są wspólne dla obu trybów i od razu używają kotwic oraz `candidates_from`, więc nie mają osobnych wariantów.
 
 ## 7. Co trafia do dostawcy modelu
 
@@ -278,7 +278,35 @@ Przypadki, w których oczekiwany wynik może się zmienić w trybie zamkniętym:
 - **Sprzedaż klienta** (`zamowienia-aaron-wright`, `suma-aaron-wright`): `CustomerID` przechodzi do drugiej procedury przez pole `ids` (D1).
 - **Komentarz z liczbami** (`p3-raport-miesiace-2024` i inne, gdzie suma jest w komentarzu): suma przez kotwicę.
 
-Przypadek może mieć oczekiwania zależne od trybu. Plan ustali format w `cases.yaml`.
+Przypadek może mieć oczekiwania zależne od trybu: pole `modes` w `evals/cases.yaml` zmienia `status` albo `result` w jednym trybie, tylko dla zmian z powyższej listy. Kandydatów porównujemy po `id` w obu trybach, bo w obu przychodzą z uchwytu (D8), więc oczekiwane `id` (`candidates`) stoją w zwykłym oczekiwaniu przypadku. Tryb przebiegu wybiera zmienna `DC_MODEL_DATA_ACCESS`, a katalog przebiegu nazywa się `evals/runs/<początek>-<tryb>`.
+
+Liczby spoza kotwic liczymy w końcowym szablonie z historii sesji, czyli po podmianie z fazy komentarza (sekcja 6.3): tekst z kotwicami usuniętymi przed szukaniem liczb, bez dat, lat i liczb poniżej 100. Ta miara zastąpiła miarę v1 „liczby z komentarza spoza wyników”, która przy kotwicach zgłaszała tylko wartości wstawione przez backend. Ponowienia przez kotwice i koszt obu faz zbiera model nagrywający w ewaluacji, bo `capture_run_messages` widzi tylko pierwsze uruchomienie agenta.
+
+### 9.1. Wyniki (2026-10-25)
+
+Haiku 5.5, `effort: medium`, 37 przypadków, 39 tur (dwa przypadki mają drugą turę po pytaniu doprecyzowującym):
+
+| Miara | v1 (2026-10-20) | `none` | `minimal` |
+|-------|-----------------|--------|-----------|
+| Przypadki zaliczone | 37/37 (po poprawce porównań, 001, sekcja 13) | **37/37** | **37/37** |
+| Kandydaci zgodni po `id` | nie sprawdzano | 3/3 | 3/3 |
+| Ponowienia `query` | 0 | 1 | 1 |
+| Ponowienia przez złe kotwice | nie dotyczy | 0 | 3, wszystkie w fazie narzędzi |
+| Liczby wpisane poza kotwicami | nie dotyczy | 8, wszystkie to klucze techniczne | 9: 6 kluczy technicznych, 2 razy `row_count` (198), 1 zaokrąglona kwota („2,4 tys.”) |
+| Odpowiedzi ze szkicem zamiast komentarza | nie dotyczy | nie dotyczy | 0 |
+| Średni czas tury | nie mierzono | 6,6 s | 8,9 s |
+| Średni koszt tury | nie mierzono | 0,0009 USD | 0,0012 USD |
+| Koszt przebiegu | nie mierzono | 0,04 USD | 0,05 USD |
+
+Przebiegi: `evals/runs/20261025-095500-none` i `evals/runs/20261025-184452-minimal` (poza gitem), ten drugi po poprawce instrukcji fazy komentarza (niżej). Koszt liczy ewaluacja z cennika `genai-prices` dla każdej odpowiedzi modelu osobno, z uwzględnieniem tokenów z cache.
+
+- **Brak spadku względem v1.** Żaden przypadek nie potrzebował oczekiwań według trybu (`modes`). Pivot kwartałów po kategoriach działa w obu trybach dzięki `values` dla `Category` w katalogu. `CustomerID` przechodzi do `sales_order_list` przez `ids`. Sumy w komentarzu idą przez kotwice.
+- **Liczby poza kotwicami** w trybie `none` to wyłącznie identyfikatory: `CustomerID` 12698 i 12650, `ProductID` 747 i 804. Model widzi je w `ids` (D1) albo dostał je od użytkownika. W trybie `minimal` dochodzą `row_count` wpisany tekstem (198 adresów z Berlina, w założeniach i w komentarzu; to metadane, które model widzi w obu trybach, D4) oraz jedna zaokrąglona kwota z fazy komentarza: „po około 2,4 tys. każde” w `suma-aaron-wright`. To przypadek ryzyka z sekcji 10 (wartość wpisana zamiast kotwicy), mimo że instrukcja zabrania także wartości zaokrąglonych. Poza tym żadnej kwoty ani innej liczby od 100 wzwyż (poza latami) model nie wpisał sam. Mniejszych liczb całkowitych (liczności, ilości) miara nie sprawdza.
+- **Ponowienia przez kotwice:** model odwołał się do uchwytu, którego jeszcze nie było, bo w tej samej odpowiedzi wywołał `query` i `present_result` (`end_strategy='early'` kończy turę przed `query`), albo użył `{rN.kolumna}` bez numeru wiersza na uchwycie z kilkoma wierszami. Każdy taki przypadek skończył się poprawnym szablonem, najwyżej po dwóch prośbach o poprawkę (`pivot-kwartaly-kategorie-2024`).
+- **Komentarz w trybie `minimal`** jest pełniejszy: trend, najlepszy i najsłabszy okres, kolejne pozycje rankingu, także z nazwami z kolumn wrażliwych wstawionymi kotwicami (`Westside Plaza, osiągnął 418 802,45`). W trybie `none` komentarz to suma i najlepsza pozycja. Faza komentarza wydłuża turę o ok. 2,3 s i podnosi koszt o ok. 30%.
+- **Poprawka fazy komentarza.** Pierwszy przebieg `minimal` (`20261025-095931-minimal`, 37/37) pokazał komentarz, który mówił użytkownikowi o ukrytych wierszach i nazwie uchwytu („Wiersze nie są tu wyświetlane, więc nazwy produktów trzeba odczytać bezpośrednio z tabeli r2”, `gdzie-uzyto-hl-fork`). Instrukcja fazy komentarza dostała regułę: użytkownik widzi pełne tabele i nie widzi uchwytów, więc komentarz nie wymienia uchwytów ani ukrytych kolumn, nie mówi, czego model nie widział, a liczbę wierszy tabeli widzianej tylko jako struktura podaje kotwicą `{rN#rows}`. Po poprawce ten komentarz opisuje tabelę bez takich wzmianek.
+- **Zmienność modelu.** Przebieg pośredni (`20261025-183747-minimal`, z pierwszą wersją reguły) dał 36/37: w `zamowienia-wg-typu-2024` model zwrócił poprawne liczby zamówień (12 646 i 1 598) w jednym wierszu z kolumną na typ klienta, a przypadek oczekuje wiersza na typ. Faza narzędzi nie zależy od zmienionej instrukcji, a w kolejnym przebiegu przypadek przeszedł, więc to zmienność modelu, a nie skutek trybu.
+- **Treść komentarza nie jest sprawdzana.** Zestaw mierzy tylko liczby spoza kotwic. W `top5-klientow-2024` (tryb `minimal`) komentarz nazywa sprzedaż pięciu klientów (ok. 4% rocznej) „dużą częścią przychodu”: liczby z kotwic są poprawne, ale ocena nie.
 
 ## 10. Ryzyka szczątkowe
 
@@ -289,7 +317,7 @@ Przypadek może mieć oczekiwania zależne od trybu. Plan ustali format w `cases
 - **Wartość wpisana w komentarz zamiast kotwicy.** W trybie `minimal` faza komentarza widzi wiersze. Gdy model wpisze wartość jako tekst, a nie kotwicą, szablon z tą wartością trafia do historii (sekcja 6.3) i do kolejnych tur fazy narzędzi. Backend nie skanuje tekstu (sekcja 12), a zestaw ewaluacyjny mierzy liczby spoza kotwic (sekcja 9).
 - **Prompt użytkownika** może zawierać dane (nazwisko, kwotę) i zawsze trafia do modelu.
 - **`data_range`** to dane z bazy wystawione celowo przez katalog.
-- **Jakość w trybie zamkniętym** będzie niższa. Ile, pokaże zestaw ewaluacyjny.
+- **Jakość w trybie zamkniętym** jest niższa w komentarzu (krótszy, bez trendów), ale zestaw ewaluacyjny nie pokazał spadku trafności (sekcja 9.1). Zestaw nie sprawdza treści komentarza poza liczbami spoza kotwic.
 
 ## 11. Decyzje
 
@@ -312,3 +340,17 @@ Decyzje właściciela projektu z 2026-10-24:
 - **Narzędzie wyszukiwania wartości** (np. `find_values(handle, column, text)`) do filtrów po wymiarach z wieloma wartościami. Dziś tę rolę pełnią procedury wyszukiwania z parametrem.
 - **Wrażliwość kolumn `query` odporna na aliasy** (sekcja 5.3), po akceptacji podejścia z POC. Możliwe kierunki: każda kolumna tekstowa wyniku czytającego kolumnę wrażliwą jest wrażliwa (prościej, ale model straci wartości wymiarów w takich zestawieniach), albo śledzenie pochodzenia kolumn z drzewa zapytania DuckDB (`json_serialize_sql`), co odchodzi od zasady, że backend nie analizuje treści zapytania (001, sekcja 7.3).
 - **Wyłączenie kolumn wolnotekstowych z kontekstu** jako ochrona przed pośrednią iniekcją (001, sekcja 12): `sensitive` daje ten sam efekt technicznie, ale cel i oznaczenie ustalimy razem z ochroną przed iniekcją.
+
+## 13. Odejścia od projektu przy wdrożeniu
+
+Zmiany względem wersji 0.2 z 2026-10-24, wprowadzone do odpowiednich sekcji w trakcie etapów 2A–2D:
+
+- **Alias o nazwie kolumny niewrażliwej** (sekcje 5.3 i 10): wrażliwość kolumny wyniku `query` dziedziczona po nazwie i typie nie wykrywa wartości wrażliwych pod aliasem kolumny niewrażliwej. Właściciel przyjął to ryzyko na etapie POC (2026-10-24), poprawka czeka na akceptację podejścia (sekcja 12).
+- **Próba kotwicy** (sekcja 6.1): tekst w nawiasach klamrowych zaczynający się od `r` i cyfry, który nie pasuje do składni (np. `{r1#count}`), jest błędem odsyłanym do modelu, żeby niewypełniony nawias nie trafił do użytkownika (decyzja właściciela z 2026-10-24).
+- **`id_column` kandydatów** (sekcja 4.3): musi być kolumną liczbową albo tekstową i nie może być wrażliwa, bo wybór użytkownika wraca do modelu jako `id`.
+- **Szablon w historii** (sekcja 6.3): rozstrzygnięte, że szablon komentarza z fazy 2 zastępuje szkic w argumentach ostatniego `present_result`.
+- **Polityka trybu** (sekcja 8): obiekt wartości `ModelExposure` w `core/settings.py` zamiast osobnej klasy w module wyników. Jedno ustawienie `model_max_rows` (50) zastąpiło dwa ustawienia podglądu.
+- **Komunikaty błędów** (sekcja 6.2): stałe teksty DuckDB bez wartości z danych (podzapytanie skalarne zwróciło więcej niż jeden wiersz) wracają do modelu bez zmian.
+- **Przykłady w instrukcjach** (sekcja 6.4): jeden zestaw dla obu trybów, od razu z kotwicami i `candidates_from`, zamiast wariantów dla trybu zamkniętego.
+- **Instrukcja fazy komentarza** (sekcja 5.2): dodana po ewaluacji reguła, że komentarz nie wymienia uchwytów ani ukrytych kolumn i nie mówi, czego model nie widział (sekcja 9.1).
+- **Ewaluacja** (sekcja 9): kandydaci porównywani po `id` w obu trybach, a nie tylko w zamkniętym; miara liczb spoza kotwic zastąpiła miarę liczb spoza wyników z v1.

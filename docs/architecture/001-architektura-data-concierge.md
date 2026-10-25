@@ -1,6 +1,6 @@
 # Data Concierge: opis architektury backendu (wersja 3, happy-flow tylko do odczytu)
 
-Status: opis koncepcji, implementacja w toku według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.7, data: 2026-10-24. Etap 2 (dostęp modelu do danych) opisuje [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md).
+Status: v1 wdrożona według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.8, data: 2026-10-25. Etap 2 (dostęp modelu do danych, wdrożony) opisuje [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md).
 Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (sekcja 14), research bibliotek z 2026-10-11, prototyp parsera DuckDB z 2026-10-12, sprawdzenie danych i metadanych w lokalnej bazie AdventureWorks2025.
 
 > **Historia zmian.**
@@ -18,6 +18,7 @@ Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (
 > **v3.6 (uzupełnienie z implementacji etapu 4, 2026-10-19):** `ask` z nieznanym `session_id` zwraca `error` z informacją o wygasłej sesji i nie woła agenta. Backend dokleja do promptu wiersz `Current date: RRRR-MM-DD`. Wejścia to `data-concierge ask` i `data-concierge chat` oraz `POST /ask` z fabryki `create_app` dla uvicorna (sekcja 4). Błąd przetwarzania to status `error` w odpowiedzi HTTP 200, a niepoprawne żądanie to 422 (sekcja 9). Błąd wewnętrzny DuckDB usuwa sesję (sekcja 11.2).
 > **v3.6 (uzupełnienie z implementacji etapu 5, 2026-10-20):** zestaw ewaluacyjny to `evals/cases.yaml` (37 przypadków w 7 grupach), uruchamiany przez `uv run pytest -m eval tests/evals`. Wyniki porównujemy po wartościach, a nie po nazwach kolumn, a kwotę w skali kolumny odpowiedzi. Pierwsze uruchomienie (Haiku 5.5): 33/37, a po poprawce porównań 37/37, bez ponowień `query` (sekcja 13).
 > **v3.7 (2026-10-24):** sprawy odłożone w v1 przechodzą do etapu 2, opisanego w [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md): przełącznik dostępu modelu do danych (tryb zamknięty i ograniczony), kotwice zamiast liczb w komentarzu (sekcja 7.5) i oznaczanie kolumn wrażliwych w katalogu (sekcje 11.3 i 12). Poprawka sekcji 11.3: w v1 podgląd nie jest konfigurowany per kolumna. Zmienione sekcje: 3, 7.5, 11.3, 12.
+> **v3.8 (2026-10-25):** opis zgodny z systemem po etapie 2 (dokument 002, wdrożony). Model nie widzi wierszy wyników: narzędzia zwracają podsumowanie (schemat, liczba wierszy, zakresy dat, klucze `ids`, w trybie `minimal` wartości wymiarów), wartości w tekstach dla użytkownika idą przez kotwice, kandydatów buduje backend z uchwytu (`candidates_from`), a wartości do `PIVOT` pochodzą z `values` w katalogu. Ustawienie `model_max_rows` zastąpiło limity podglądu. Zestaw ewaluacyjny działa w obu trybach i mierzy kotwice, liczby spoza kotwic, szkice, czas i koszt: 37/37 w obu trybach. Zmienione sekcje: 3, 4, 5.2, 6.1, 6.2, 7.2, 7.4, 7.5, 8, 9, 10, 11.3, 12, 13.
 
 ## 1. Cel i zakres
 
@@ -60,10 +61,10 @@ Poza zakresem v1: frontend, zapisy, procesy w tle, strażnicy, zatwierdzanie, ob
 | Skąd agent wie o procedurach | **Osobny plik YAML z opisami pisanymi pod agenta** (kiedy użyć, kiedy nie, przykłady, powiązania), walidowany przy starcie z metadanymi bazy | Wąski, opisany kontekst poprawia trafność [1]. Opis techniczny procedury i opis dla agenta to różne rzeczy (sekcja 5.1). |
 | Jak model wywołuje procedury | Jedno narzędzie na procedurę, generowane z YAML, ze ścisłym schematem parametrów. Tryb `strict` dostawcy dla narzędzi procedur i narzędzia `query`, sterowany ustawieniem. | Typowane parametry, walidacja przed wywołaniem, model nie wymyśla nazw [2]. `query` ma jeden parametr tekstowy, więc mieści się w budżecie trybu `strict` Anthropic (sekcja 6.1). |
 | Duża liczba procedur | W v1 bez wyszukiwania narzędzi: wszystkie definicje w kontekście | Przy kilkunastu procedurach to wystarcza. Gdy katalog urośnie: tool search Claude API (`defer_loading`, obsługiwany przez Pydantic AI) albo własne `find_procedures` (sekcja 6.3). |
-| Gdzie są dane | W magazynie wyników backendu, pod uchwytami. Model widzi schemat, statystyki i kilka wierszy. | Koszt, opóźnienie, limit kontekstu [4][5]. Etap 2 ogranicza to, co widzi model, przełącznikiem trybów (dokument 002). |
+| Gdzie są dane | W magazynie wyników backendu, pod uchwytami. Model widzi podsumowanie uchwytu: schemat, liczbę wierszy, zakresy dat i klucze techniczne, a w trybie `minimal` także wartości wymiarów. Wierszy nie widzi (od etapu 2). | Koszt, opóźnienie, limit kontekstu [4][5]. Ile danych trafia do dostawcy modelu, ustala przełącznik trybów (dokument 002). |
 | Jak liczyć | Model pisze **jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji** (narzędzie `query`: CTE, `JOIN`, `WHERE`, `GROUP BY`, `PIVOT`, wybrane funkcje okna). Backend sprawdza, że to jedna instrukcja `SELECT`, kontroluje nazwy i typy wyniku i wykonuje je w **DuckDB** (wariant B, sekcja 7.7). | Nie trzeba przewidywać z góry wszystkich kombinacji: agent łączy wyniki kilku procedur i filtruje je sam. Model ustala „co”, DuckDB liczy „ile”. |
 | SQL od modelu w DuckDB | Wykonanie w zablokowanym połączeniu sesji (bez plików, sieci, rozszerzeń i zmian konfiguracji) z limitami pamięci, wątków, czasu i wierszy, bez analizy treści zapytania | Ochronę daje silnik, a nie własny walidator SQL. Zapytanie widzi tylko wyniki, które sesja już pobrała (sekcje 7.3 i 7.4a). |
-| Liczby w komentarzu | v1: model pisze komentarz swobodnie, korzystając z wartości z małych wyników zapytań policzonych przez backend. Bez kontroli. | Prostota na start. Ryzyko pomyłki przy przepisywaniu liczb jest znane. Kotwice zamiast liczb przechodzą do etapu 2 (sekcja 7.5, dokument 002). |
+| Liczby w komentarzu | Od etapu 2 model wstawia wartości z danych kotwicami (`{r3.net_sales}`), a backend je sprawdza i podstawia (002, sekcja 6.1). Bez kontroli liczb wpisanych poza kotwicami. | Model nie przepisuje liczb, więc nie może ich źle zaokrąglić, a w trybie `none` nawet ich nie widzi. Kontrolę tekstu odkładamy, a zestaw ewaluacyjny mierzy liczby spoza kotwic (sekcja 7.5). |
 | Pętla agenta | **Pydantic AI** z modelem `anthropic:claude-haiku-5-5` | Jeden kod dla wielu dostawców (zmiana modelu = zmiana konfiguracji) [6]. Vercel AI SDK jest w TypeScript, więc nie pasuje do backendu w Pythonie (sekcja 11). |
 | Koniec tury | Model zwraca `AgentAnswer` (status, komentarz, uchwyty, założenia, pytanie), a `ResponseAssembler` dokleja dane uchwytów i proweniencję | Model nie przepisuje danych tabel, więc nie może ich przekłamać (sekcje 6.2 i 9). |
 | Uprawnienia DB | Dedykowany login SQL `agent_reader` z samym `EXECUTE` na wybranych procedurach, bez dostępu do tabel, od v1 | Przy dostępie wyłącznie przez procedury kosztuje to tyle samo co konto read-only. Te same uprawnienia wystarczają do walidacji katalogu przy starcie (sekcja 5.5). |
@@ -103,7 +104,7 @@ flowchart LR
 | **Katalog agenta** | Plik YAML: opisy procedur pod agenta, parametry, kolumny wyniku z typami i rolami (sekcja 5). |
 | **Rejestr narzędzi** | Generuje definicje narzędzi z YAML, waliduje parametry, dokleja parametry wstrzykiwane przez backend (np. `@UserId`). |
 | **Wykonawca procedur** | `EXEC` z parametrami, limit wierszy i czasu, zamiana wyniku na tabelę z typami z katalogu (bez utraty precyzji), zapis do magazynu. Razem z odczytem metadanych katalogu to jedyny kod zależny od silnika bazy. Oba działają na wspólnym kliencie SQL Server w module `core` (`SqlServerClient`). Klient otwiera połączenie osobno na każde wywołanie, pilnuje limitu czasu i podaje komunikaty błędów bez danych logowania: przy błędzie połączenia lub logowania tylko kod SQLSTATE. To jedyne miejsce, które importuje sterownik `pyodbc`. |
-| **Magazyn wyników** | Wyniki sesji pod uchwytami `r1`, `r2`… jako tabele w DuckDB (w pamięci procesu), ze schematem, statystykami i pochodzeniem każdego uchwytu: wywołaniem procedury albo zapytaniem `query` z pełnym SQL i listą uchwytów źródłowych. |
+| **Magazyn wyników** | Wyniki sesji pod uchwytami `r1`, `r2`… jako tabele w DuckDB (w pamięci procesu), ze schematem i pochodzeniem każdego uchwytu: wywołaniem procedury albo zapytaniem `query` z pełnym SQL i listą uchwytów źródłowych. |
 | **Silnik zapytań** | Przyjmuje SQL od modelu (narzędzie `query`): sprawdza, że to jedna instrukcja `SELECT`, wiąże je (`DESCRIBE`), sprawdza nazwy i typy wyniku oraz obcięte źródła, wykonuje w połączeniu sesji i zapisuje wynik pod nowym uchwytem (sekcja 7). |
 | **Składanie odpowiedzi** | `ResponseAssembler`: z `AgentAnswer` od modelu buduje `Response` (sekcja 9). Dokleja pełne dane wskazanych uchwytów i proweniencję, czyli wszystkich przodków tych uchwytów z grafu pochodzenia. Docelowo także kontrola liczb w komentarzu (sekcja 7.5). |
 
@@ -176,7 +177,7 @@ Pola istotne dla agenta:
 
 - **`use_when` / `not_for`** kierują wyborem procedury i odsyłają do właściwej, gdy pytanie jest „obok”.
 - **`hint` przy parametrze** mówi, skąd wziąć wartość (np. „bierz id z `customer_search`, nie zgaduj”) i jak zamienić język naturalny na wartość (okres → daty).
-- **`role` kolumny** (`id`, `dimension`, `measure`, `time`) mówi modelowi, jak używać kolumny w SQL: sumować `measure`, grupować po `dimension` i okresach z `time`, łączyć uchwyty po `id`. Backend nie egzekwuje ról w SQL (sekcja 7.3), ale używa ich do statystyk w opisie uchwytu.
+- **`role` kolumny** (`id`, `dimension`, `measure`, `time`) mówi modelowi, jak używać kolumny w SQL: sumować `measure`, grupować po `dimension` i okresach z `time`, łączyć uchwyty po `id`. Backend nie egzekwuje ról w SQL (sekcja 7.3), ale używa ich w podsumowaniu uchwytu dla modelu (zakresy dat, wartości wymiarów, `ids`).
 - **`default_for`** rozstrzyga typowe niejednoznaczności („sprzedaż” = SubTotal). Agent pokazuje to w `assumptions`.
 - **`inject`** oznacza parametry doklejane przez backend (tożsamość). Model ich nie widzi ani nie ustawia.
 - **`exposed: false`** oznacza procedurę wołaną tylko przez backend, np. procedurę zakresu dat. Model nie dostaje dla niej narzędzia.
@@ -264,33 +265,39 @@ Każda procedura z katalogu to osobne narzędzie, np. `sales_order_list`. Opis n
 }
 ```
 
-Wynik wywołania procedury zwracany modelowi (nie pełne dane):
+Wynik wywołania procedury zwracany modelowi to podsumowanie uchwytu (`ResultSummary`), bez wierszy (002, sekcje 4.1 i 5.1):
 
 ```json
 {
   "handle": "r1",
   "row_count": 14244,
   "truncated": false,
-  "columns": [{"name": "OrderDate", "type": "date", "role": "time"}, {"name": "SubTotal", "type": "decimal(19,4)", "role": "measure"}, "..."],
-  "stats": {"OrderDate": {"min": "2024-01-01", "max": "2024-12-31"}, "CustomerType": {"values": ["individual", "store"]}, "CustomerName": {"distinct_count": 9876}},
-  "preview": ["… do 10 wierszy …"]
+  "columns": [{"name": "OrderDate", "type": "date", "role": "time"}, {"name": "CustomerID", "type": "int", "role": "id"}, {"name": "CustomerName", "type": "string", "role": "dimension"}, {"name": "SubTotal", "type": "decimal(19,4)", "role": "measure"}, "..."],
+  "stats": {"OrderDate": {"min": "2024-01-01", "max": "2024-12-31"}, "CustomerType": {"values": ["individual", "store"]}},
+  "ids": {}
 }
 ```
+
+- `stats` ma min i max kolumn `time`. Wartości wymiarów (do 20, inaczej ich liczba) są tylko w trybie `minimal` i nigdy dla kolumn `sensitive` (tu `CustomerName`). W trybie `none` w przykładzie zostaje samo `OrderDate`.
+- `ids` ma wartości kolumn `id` bez `sensitive`, w kolejności wierszy, tylko dla wyników do `model_max_rows` (50) wierszy. Tak model przekazuje np. `CustomerID` z `customer_search` do `sales_order_list` (002, sekcja 4.2).
+- Miary nie mają statystyk w żadnym trybie.
+
+Opis narzędzia procedury wymienia też wartości wymiarów z `values` w katalogu („Wartości wymiarów: …”), w obu trybach. Z nich model bierze wartości do `PIVOT` i filtrów (sekcja 7.2).
 
 ### 6.2. Narzędzia stałe
 
 | Narzędzie | Rola |
 |-----------|------|
-| `query` | Przyjmuje jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji (sekcja 7). Zwraca nowy uchwyt z opisem jak po wywołaniu procedury (schemat, statystyki, podgląd, a dla małych wyników cały wynik) i SQL faktycznie wykonany przez backend. Błąd kontroli z sekcji 7.3 albo wykonania wraca do modelu jako prośba o poprawkę (`ModelRetry`). |
-| `describe_result` | Pełny schemat i statystyki uchwytu (gdy podgląd nie wystarcza). |
-| `present_result` | Koniec tury: wynik `AgentAnswer` ze statusem, komentarzem, uchwytami do zwrócenia (z tytułami tabel), założeniami i ewentualnym pytaniem doprecyzowującym. W Pydantic AI to nie zwykłe narzędzie, tylko **typ wyniku agenta** (`output_type=ToolOutput(AgentAnswer, name="present_result")`): framework udostępnia go modelowi jako specjalne narzędzie wyjściowe i sam prosi o poprawkę, gdy odpowiedź nie pasuje do schematu [6]. `AgentAnswer` nie zawiera danych tabel. Pełną odpowiedź (sekcja 9) buduje z niego `ResponseAssembler`. Agent działa z `end_strategy='early'`: odpowiedź kończy turę, zanim wykonają się narzędzia wywołane w tej samej odpowiedzi modelu, więc model wskazuje tylko uchwyty, których opis już widział (sekcja 7.5). Status `error` model wybiera tylko wtedy, gdy procedura zawiodła i danych nie udało się pobrać. Odpowiedź pokazuje wtedy ogólny komunikat z identyfikatorem zgłoszenia, a komentarz modelu trafia do logu. |
+| `query` | Przyjmuje jedno zapytanie `SELECT` w dialekcie DuckDB nad uchwytami sesji (sekcja 7). Zwraca nowy uchwyt z podsumowaniem jak po wywołaniu procedury (sekcja 6.1, bez wierszy), z uchwytami źródłowymi i SQL faktycznie wykonanym przez backend. Błąd kontroli z sekcji 7.3 albo wykonania wraca do modelu jako prośba o poprawkę (`ModelRetry`). Komunikaty błędów nie cytują danych (002, sekcja 6.2). |
+| `describe_result` | Podsumowanie uchwytu jeszcze raz, np. uchwytu z wcześniejszej tury. Nie pokazuje wierszy. |
+| `present_result` | Koniec tury: wynik `AgentAnswer` ze statusem, komentarzem, uchwytami do zwrócenia (z tytułami tabel), założeniami i ewentualnym pytaniem doprecyzowującym. W Pydantic AI to nie zwykłe narzędzie, tylko **typ wyniku agenta** (`output_type=ToolOutput(AgentAnswer, name="present_result")`): framework udostępnia go modelowi jako specjalne narzędzie wyjściowe i sam prosi o poprawkę, gdy odpowiedź nie pasuje do schematu [6]. `AgentAnswer` nie zawiera danych tabel. Wartości z danych w tekstach dla użytkownika (komentarz, tytuły, założenia, pytanie) model pisze kotwicami, a walidator wyniku odsyła błędną kotwicę do poprawki (002, sekcja 6.1). Kandydatów do pytania doprecyzowującego model wskazuje uchwytem i kolumną `id` (`candidates_from`), a listę buduje backend (002, sekcja 4.3). Pełną odpowiedź (sekcja 9) buduje z niego `ResponseAssembler`. Agent działa z `end_strategy='early'`: odpowiedź kończy turę, zanim wykonają się narzędzia wywołane w tej samej odpowiedzi modelu, więc model wskazuje tylko uchwyty, których opis już widział (sekcja 7.5). Status `error` model wybiera tylko wtedy, gdy procedura zawiodła i danych nie udało się pobrać. Odpowiedź pokazuje wtedy ogólny komunikat z identyfikatorem zgłoszenia, a komentarz modelu trafia do logu. |
 
 Definicja narzędzia `query` (opis skrócony):
 
 ```json
 {
   "name": "query",
-  "description": "Run one read-only SELECT in DuckDB SQL over result handles of this session (r1, r2, ...). Use CTEs, JOIN, WHERE, GROUP BY, PIVOT. Keep money as DECIMAL: CAST(avg(...) AS DECIMAL(38,6)), divide with NULLIF(divisor, 0) and CAST the quotient to DECIMAL(38,6). Give every computed column an English snake_case alias. Write dates as literals, not current_date or now(). Add ORDER BY when order matters, with a tie-breaking id column for a stable top N. The result is stored under a new handle.",
+  "description": "Run one read-only SELECT in DuckDB SQL over result handles of this session (r1, r2, ...). The result is stored under a new handle and you get its summary (schema, row count, date ranges and ids), never its rows. Use CTEs, JOIN, WHERE, GROUP BY, PIVOT. Keep money as DECIMAL: CAST(avg(...) AS DECIMAL(38,6)), divide with NULLIF(divisor, 0) and CAST the quotient to DECIMAL(38,6), or to DECIMAL(38,2) for a value you anchor in a text for the user. Give every computed column an English snake_case alias. Write dates as literals, not current_date or now(). Add ORDER BY when order matters, with a tie-breaking id column for a stable top N.",
   "strict": true,
   "input_schema": {
     "type": "object",
@@ -311,10 +318,12 @@ Wynik `query` zwracany modelowi:
   "sources": ["r1", "r2"],
   "sql": "WITH … SELECT … ORDER BY m.month",
   "columns": [{"name": "month", "type": "date", "role": "time"}, {"name": "net_sales", "type": "decimal(38,4)", "role": "measure"}, "..."],
-  "stats": {"…": "…"},
-  "preview": ["… cały wynik, bo ma do 50 wierszy …"]
+  "stats": {"month": {"min": "2024-01-01", "max": "2024-12-01"}},
+  "ids": {}
 }
 ```
+
+Opis w nawiasie (`schema, row count, date ranges and ids`) zależy od trybu: w trybie `minimal` dochodzą wartości wymiarów. Opisy `query` i `describe_result` nadaje rejestr narzędzi według trybu, raz przy starcie (002, sekcja 6.4). Kolumny wyniku `query` dziedziczą rolę i wrażliwość z kolumny źródłowej o tej samej nazwie i typie (002, sekcja 5.3).
 
 ### 6.3. Gdy procedur jest dużo
 
@@ -345,7 +354,7 @@ Podział odpowiedzialności:
 
 ### 7.2. Narzędzie `query`
 
-Wejściem jest jeden tekst `sql` (definicja w sekcji 6.2). Zapytanie czyta tabele nazwane jak uchwyty sesji (`r1`, `r2`…) z kolumnami nazwanymi jak w schemacie uchwytu. Dozwolony jest każdy `SELECT` dialektu DuckDB: CTE, `JOIN`, `WHERE`, `GROUP BY`, `HAVING`, `QUALIFY`, funkcje okna, `UNION`, podzapytania, `PIVOT` w składni `FROM … PIVOT (<agregat> FOR <kolumna> IN (<wartości>))`, `range` i `generate_series` do siatki okresów. Uproszczona instrukcja `PIVOT <tabela> ON …` odpada, bo nie jest instrukcją `SELECT`. Wartości kolumny obrotu model bierze ze statystyk uchwytu albo z wcześniejszego `query`.
+Wejściem jest jeden tekst `sql` (definicja w sekcji 6.2). Zapytanie czyta tabele nazwane jak uchwyty sesji (`r1`, `r2`…) z kolumnami nazwanymi jak w schemacie uchwytu. Dozwolony jest każdy `SELECT` dialektu DuckDB: CTE, `JOIN`, `WHERE`, `GROUP BY`, `HAVING`, `QUALIFY`, funkcje okna, `UNION`, podzapytania, `PIVOT` w składni `FROM … PIVOT (<agregat> FOR <kolumna> IN (<wartości>))`, `range` i `generate_series` do siatki okresów. Uproszczona instrukcja `PIVOT <tabela> ON …` odpada, bo nie jest instrukcją `SELECT`. Model nie widzi wierszy, więc wartości kolumny obrotu bierze z `values` wymiaru w opisie procedury (katalog), a w trybie `minimal` także z wartości wymiarów w podsumowaniu uchwytu. Wymiar bez znanych wartości zostaje w postaci długiej: jeden wiersz na okres i wartość (002, sekcja 4.4).
 
 Wynik `query` zapisuje się pod nowym uchwytem. Model może go użyć w kolejnym `query`, opisać przez `describe_result` albo zwrócić w `present_result`.
 
@@ -418,7 +427,7 @@ FLOAT | REAL | DOUBLE               -> rejected: "column net_avg is DOUBLE; CAST
 anything else (LIST, STRUCT, MAP, INTERVAL, TIME, BLOB, UUID, ...) -> rejected
 ```
 
-`HUGEINT` pojawia się przy `sum` po kolumnie całkowitej (np. `sum("OrderQty")`), a `INTEGER` przy literałach (`1 AS one`), więc backend rzutuje każdą kolumnę całkowitą inną niż `BIGINT` na `BIGINT` w zewnętrznym `SELECT * REPLACE (…) FROM (<SQL>)`, zamiast obciążać tym model. Zewnętrzny `SELECT` nie zmienia kolejności wierszy podzapytania. Kolumna zmiennoprzecinkowa w wyniku to błąd, a nie ciche rzutowanie, bo backend nie wie, jakiej skali chce model. Rola kolumny wyniku: kolumna o tej samej nazwie i typie co kolumna źródłowa dziedziczy jej rolę, pozostałe dostają rolę z typu (`date`/`datetime` → `time`, `decimal`/`int` → `measure`, reszta → `dimension`). Rola służy tylko do statystyk w opisie uchwytu.
+`HUGEINT` pojawia się przy `sum` po kolumnie całkowitej (np. `sum("OrderQty")`), a `INTEGER` przy literałach (`1 AS one`), więc backend rzutuje każdą kolumnę całkowitą inną niż `BIGINT` na `BIGINT` w zewnętrznym `SELECT * REPLACE (…) FROM (<SQL>)`, zamiast obciążać tym model. Zewnętrzny `SELECT` nie zmienia kolejności wierszy podzapytania. Kolumna zmiennoprzecinkowa w wyniku to błąd, a nie ciche rzutowanie, bo backend nie wie, jakiej skali chce model. Rola kolumny wyniku: kolumna o tej samej nazwie i typie co kolumna źródłowa dziedziczy jej rolę, pozostałe dostają rolę z typu (`date`/`datetime` → `time`, `decimal`/`int` → `measure`, reszta → `dimension`). Rola służy tylko do podsumowania uchwytu dla modelu. Tak samo dziedziczona jest wrażliwość (`sensitive`, 002, sekcja 5.3).
 
 **Kolejność wierszy** wynika z `ORDER BY` w zapytaniu modelu. `preserve_insertion_order` zachowuje ją przy `CREATE TABLE … AS` i przy odczycie uchwytu. Zapytanie bez `ORDER BY` nie gwarantuje kolejności, tak jak każdy SQL.
 
@@ -482,7 +491,7 @@ Tabele w odpowiedzi liczy DuckDB, ale krótki komentarz tekstowy (np. „Sprzeda
 
 **v1:** model pisze komentarz swobodnie. Instrukcja systemowa każe mu brać liczby wyłącznie z wyników zapytań, które widzi w całości (np. jednowierszowe `query` z sumą roczną i najlepszym miesiącem), a nie liczyć samodzielnie. Nie ma mechanizmu, który by to wymuszał. Źródłem prawdy są tabele w odpowiedzi, a komentarz jest pomocniczy.
 
-**Przeszło do etapu 2** ([`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md), sekcja 6.1): odwołania zamiast liczb (kotwice) w obu trybach dostępu modelu do danych. Kontrola liczb zostaje odłożona (002, sekcja 12). Pierwotny zapis:
+**Przeszło do etapu 2** ([`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md), sekcja 6.1): odwołania zamiast liczb (kotwice) w obu trybach dostępu modelu do danych, wdrożone. Kontrola liczb zostaje odłożona (002, sekcja 12), a zestaw ewaluacyjny mierzy liczby wpisane poza kotwicami (sekcja 13). Pierwotny zapis:
 
 - **Kontrola liczb:** backend wyszukuje liczby w komentarzu i sprawdza, czy występują w wynikach zapytań, tabelach odpowiedzi lub prośbie. Liczba spoza nich oznacza prośbę do modelu o poprawkę, a przy kolejnej porażce odpowiedź bez komentarza.
 - **Odwołania zamiast liczb:** model pisze w komentarzu odwołanie do komórki wyniku, który sam policzył w tej turze (np. `{r4.annual_total}` dla jednowierszowego uchwytu `r4`), a backend wstawia wartość. Szablonów nie przygotowuje się z góry, bo model tworzy je przy każdym pytaniu. To mocniejsza gwarancja niż kontrola, ale wymaga od modelu dyscypliny w pisaniu komentarza.
@@ -534,18 +543,27 @@ sequenceDiagram
     T->>DB: EXEC api.SalesOrder_List @DateFrom, @DateTo, @CustomerID, @UserId
     DB-->>T: 14 244 wiersze
     T->>RS: zapis r1 (typy z katalogu, DECIMAL)
-    T-->>A: r1: schemat, statystyki, podgląd
+    T-->>A: r1: podsumowanie (schemat, liczba wierszy, zakres dat)
     A->>M: wynik narzędzia
     M-->>A: query(sql: SELECT … FROM r1 GROUP BY month)
     A->>T: jeden SELECT, DESCRIBE, nazwy i typy, obcięte źródła
     T->>RS: CREATE TABLE r2 AS <SQL wykonany> (12 wierszy)
-    T-->>A: r2: schemat, cały wynik (mały), SQL wykonany
+    T-->>A: r2: podsumowanie, SQL wykonany
     A->>M: wynik narzędzia
-    M-->>A: present_result(status ok, komentarz, zwróć r2)
-    A->>RS: pełne dane r2
+    M-->>A: query(sql: SELECT sum(net_sales) AS annual_total … FROM r2)
+    T-->>A: r3: podsumowanie (1 wiersz)
+    M-->>A: present_result(status ok, komentarz z kotwicą {r3.annual_total}, zwróć r2)
+    A->>A: sprawdzenie kotwic (błąd → prośba o poprawkę)
+    opt tryb minimal
+        A->>M: faza komentarza: prompt, szkic, wiersze r2 i r3 bez kolumn sensitive
+        M-->>A: komentarz z kotwicami
+    end
+    A->>RS: pełne dane r2, wartości kotwic
     A-->>API: odpowiedź
-    API-->>C: JSON: status, komentarz, tabela r2, proweniencja
+    API-->>C: JSON: status, komentarz z wartościami, tabela r2, proweniencja
 ```
+
+Model nie dostaje wierszy wyników. Komentarz pisze jako szablon z kotwicami, a wartości podstawia `ResponseAssembler`. W trybie `minimal` końcowy komentarz pisze osobna faza bez narzędzi, która widzi tabele (002, sekcja 5.2).
 
 Zasady ustalania parametrów:
 
@@ -554,7 +572,7 @@ Zasady ustalania parametrów:
 | Brak wymaganego parametru (np. okresu) | `needs_clarification`. |
 | Okres względny („ostatni kwartał”) | Rozwiązać względem daty bieżącej i pokazać daty w `assumptions`. Jeśli wypada poza `data_range`, zwrócić `no_data` z informacją o dostępnym zakresie. |
 | Wyszukiwanie zwraca 0 trafień | `no_data` z propozycją doprecyzowania. |
-| Wyszukiwanie zwraca kilka encji (klient, produkt) | `needs_clarification` z listą kandydatów. Nie wybierać samodzielnie. |
+| Wyszukiwanie zwraca kilka encji (klient, produkt) | `needs_clarification` z kandydatami z uchwytu wyszukiwania (`candidates_from`, do 50 wierszy). Nie wybierać samodzielnie. |
 | Parametr niejednoznaczny, ale wynik może to pokazać (miasto w kilku regionach) | Zwrócić wszystko z kolumną rozróżniającą i zapisać to w `assumptions`. |
 | Filtr po kolumnie wyniku, której procedura nie ma jako parametru (np. typ klienta w zamówieniach) | Pobrać dane zawężone dostępnymi parametrami i przefiltrować w `query`. |
 | Filtr „po innym zbiorze” (np. sprzedaż klientów z miasta) | Wywołać obie procedury i połączyć wyniki przez `JOIN` po kolumnie `id` w `query` (P5). |
@@ -562,7 +580,7 @@ Zasady ustalania parametrów:
 | Dane, których nie zwraca żadna procedura | `unsupported` z wyjaśnieniem, czego brakuje. |
 | Niejasna miara („sprzedaż”) | `default_for` z katalogu, nazwa kolumny w `assumptions`. |
 
-Limity v1: maks. 10 kroków pętli, `max_rows` z katalogu (domyślnie 100 000), 30 s na procedurę, 30 s i 100 000 wierszy wyniku na zapytanie `query`, podgląd dla modelu do 10 wierszy (cały wynik, jeśli ma do 50 wierszy, np. raport 12 miesięcy), maks. 10 000 wierszy na tabelę w odpowiedzi (z flagą `truncated`). Limity są w konfiguracji backendu. Limit czasu egzekwują sterowniki (sekcja 11.2). Prośba łącząca dwie procedury z jednym `query` i `present_result` zużywa 4 kroki.
+Limity v1: maks. 10 kroków pętli, `max_rows` z katalogu (domyślnie 100 000), 30 s na procedurę, 30 s i 100 000 wierszy wyniku na zapytanie `query`, `model_max_rows` = 50 (wyniki do tylu wierszy dają modelowi klucze `ids` i kandydatów do pytania doprecyzowującego, a w trybie `minimal` trafiają do fazy komentarza), maks. 10 000 wierszy na tabelę w odpowiedzi (z flagą `truncated`). Modelowi nie pokazujemy wierszy (002). Limity są w konfiguracji backendu. Limit czasu egzekwują sterowniki (sekcja 11.2). Prośba łącząca dwie procedury z jednym `query` i `present_result` zużywa 4 kroki.
 
 ## 9. Kontrakt odpowiedzi backendu
 
@@ -591,17 +609,20 @@ Pętla kończy się wynikiem `AgentAnswer` (narzędzie wyjściowe `present_resul
   "clarification": null,
   "provenance": [
     {"step": "procedure", "name": "api.SalesOrder_List", "params": {"DateFrom": "2024-01-01", "DateTo": "2025-01-01", "CustomerID": null}, "rows": 14244, "handle": "r1"},
-    {"step": "query", "sources": ["r1"], "submitted_sql": "WITH months AS (…) SELECT … ORDER BY m.month", "sql": "WITH months AS (…) SELECT … ORDER BY m.month", "rows": 12, "handle": "r2"}
+    {"step": "query", "sources": ["r1"], "submitted_sql": "WITH months AS (…) SELECT … ORDER BY m.month", "sql": "WITH months AS (…) SELECT … ORDER BY m.month", "rows": 12, "handle": "r2"},
+    {"step": "query", "sources": ["r2"], "submitted_sql": "SELECT month AS best_month, … LIMIT 1", "sql": "SELECT month AS best_month, … LIMIT 1", "rows": 1, "handle": "r3"}
   ]
 }
 ```
 
 (Wartości liczbowe w przykładzie są ilustracyjne.)
 
+- **`message` z kotwic:** model napisał `Sprzedaż netto w 2024: {r3.annual_total}. Najlepszy miesiąc: {r3.best_month}.`, a `ResponseAssembler` podstawił wartości z jednowierszowego `r3` sformatowane według typu kolumny: polskie separatory od pięciu cyfr, przecinek dziesiętny, skala z typu, daty ISO (002, sekcja 6.1, decyzja D3). Uchwyty z kotwic trafiają do `provenance` razem z przodkami, dlatego jest tu `r3`, choć nie ma go w `tables`. Kotwice działają też w tytułach tabel, `assumptions` i pytaniu doprecyzowującym.
+
 - **Kwoty dziesiętne jako tekst** (`"1234567.8900"`), żeby JSON nie zgubił precyzji. Typ podaje `columns`.
 - **`provenance`** ma krok `procedure` dla każdego wywołania procedury i krok `query` z listą `sources`, SQL od modelu (`submitted_sql`) i SQL wykonanym (`sql`). Kroki są w kolejności nadania uchwytów, a wspólny przodek kilku tabel pojawia się raz.
 - **Błędy:** `ask` nie rzuca wyjątku. Błąd przetwarzania daje `status: error` z ogólnym komunikatem i identyfikatorem zgłoszenia, a szczegóły trafiają do logu. Endpoint HTTP zwraca wtedy 200, a 422 tylko dla żądania, którego nie da się zwalidować (np. bez `prompt`).
-- **`clarification`** zawiera pytanie i listę kandydatów z id, np. trzech klientów „Mohamed Pal”. Kolejne wywołanie `ask` z tym samym `session_id` i odpowiedzią użytkownika kontynuuje rozmowę.
+- **`clarification`** zawiera pytanie i listę kandydatów z id, np. trzech klientów „Mohamed Pal”. Kandydatów buduje backend z uchwytu, który wskazał model (`candidates_from`): `id` z kolumny `id_column`, a opis z pozostałych kolumn wiersza, także wrażliwych, bo trafia do użytkownika, a nie do modelu (002, sekcja 4.3). Kolejne wywołanie `ask` z tym samym `session_id` i odpowiedzią użytkownika kontynuuje rozmowę.
 - **Koniec tury bez wymuszania narzędzia:** Sonnet 5.5 i Opus 5.5 nie pozwalają wymusić wywołania konkretnego narzędzia (`tool_choice` `any` lub `tool` zwraca błąd 400) [8], a Pydantic AI nie wymusza narzędzia przy włączonym myśleniu. Projekt na tym nie polega: odpowiedź to `output_type` agenta, a gdy model odpowie czymś, co nie pasuje do schematu, Pydantic AI prosi go o poprawkę [6]. Po wyczerpaniu ponowień backend zwraca `error` i loguje przypadek.
 
 ## 10. Przykłady przepływu
@@ -609,23 +630,23 @@ Pętla kończy się wynikiem `AgentAnswer` (narzędzie wyjściowe `present_resul
 **P1: „Daj mi listę klientów z miejscowości Berlin”**
 
 1. `customer_list(city="Berlin", country_region_code=null, customer_type=null)` → `r1` z kolumnami m.in. `CustomerName`, `CustomerType`, `City`, `StateProvince`, `CountryRegion`.
-2. Statystyki `r1` pokazują 5 różnych wartości `StateProvince`. Według zasad z sekcji 8 nie trzeba dopytywać, wystarczy zwrócić kolumnę regionu.
-3. `query`: `SELECT "CustomerName", "CustomerType", "City", "StateProvince" FROM r1 ORDER BY "StateProvince", "CustomerName"` → `r2`. Liczbę klientów model bierze z `row_count` w opisie `r2`.
-4. Odpowiedź: `ok`, tabela `r2`, komentarz z liczbą klientów, w `assumptions` informacja, że „Berlin występuje w 5 regionach, zwrócono wszystkie”.
+2. Berlin może leżeć w kilku regionach. W trybie `minimal` model widzi wartości `StateProvince` w podsumowaniu `r1`, w trybie `none` nie widzi ich wcale. Według zasad z sekcji 8 nie trzeba dopytywać, wystarczy zwrócić kolumnę regionu.
+3. `query`: `SELECT "CustomerName", "CustomerType", "City", "StateProvince" FROM r1 ORDER BY "StateProvince", "CustomerName"` → `r2`.
+4. Odpowiedź: `ok`, tabela `r2`, komentarz z liczbą klientów przez kotwicę `{r2#rows}`, w `assumptions` informacja, że zwrócono klientów ze wszystkich regionów o tej nazwie miasta, rozróżnionych kolumną `StateProvince`.
 
 **P2: „Pokaż sprzedaż klienta Mohamed Pal w 2024”**
 
-1. `customer_search(name="Mohamed Pal")` → 3 trafienia (12698, 20550, 28763).
-2. Odpowiedź: `needs_clarification` z trzema kandydatami (numer konta, terytorium, liczba zamówień).
+1. `customer_search(name="Mohamed Pal")` → `r1`, 3 wiersze. Model widzi `row_count` i `ids` (`CustomerID`: 12698, 20550, 28763), ale nie nazwy ani numery kont.
+2. Odpowiedź: `needs_clarification` z `candidates_from: {handle: r1, id_column: CustomerID}`. Backend buduje z wierszy `r1` trzech kandydatów z opisem (numer konta, terytorium, liczba zamówień).
 3. Kolejne `ask` z wyborem → `sales_order_list(date_from="2024-01-01", date_to="2025-01-01", customer_id=12698)` → `r1`.
 4. `query`: `SELECT "SalesOrderID", "OrderDate", "SubTotal", "TotalDue" FROM r1 ORDER BY "OrderDate"` → `r2` (tabela zamówień) i `query`: `SELECT sum("SubTotal") AS net_sales, count(*) AS order_count FROM r1` → `r3` (jeden wiersz do komentarza).
-5. Odpowiedź: tabela zamówień `r2`, w komentarzu suma z `r3`.
+5. Odpowiedź: tabela zamówień `r2`, w komentarzu suma przez kotwicę `{r3.net_sales}`.
 
 **P3: „Zrób raport sprzedaży po miesiącach za 2024”**
 
 1. `sales_order_list(date_from="2024-01-01", date_to="2025-01-01", customer_id=null)` → `r1`, 14 244 wiersze.
 2. `query` z SQL z sekcji 7.4 (siatka miesięcy z zakresu prośby, `sum("SubTotal")`, `count(DISTINCT "SalesOrderID")`, `LEFT JOIN` i `COALESCE`) → `r2`, 12 wierszy.
-3. `r2` wraca do modelu w całości, bo ma do 50 wierszy. Do komentarza model może policzyć jeszcze sumę roczną i najlepszy miesiąc:
+3. Model widzi tylko podsumowanie `r2` (12 wierszy, zakres miesięcy). Do komentarza liczy sumę roczną i najlepszy miesiąc w jednowierszowym wyniku, do którego odwoła się kotwicami:
 
 ```sql
 SELECT month     AS best_month,
@@ -637,7 +658,7 @@ LIMIT 1
 ```
 
    → `r3`, jeden wiersz. Przy remisie `ORDER BY` wybiera wcześniejszy miesiąc, a miesiące są unikalne, więc wynik nie zależy od kolejności wierszy.
-4. Odpowiedź: `ok`, tabela `r2`, komentarz oparty na wynikach zapytań, w `provenance` procedura i SQL (od modelu i wykonany).
+4. Odpowiedź: `ok`, tabela `r2`, komentarz `Sprzedaż netto w 2024: {r3.annual_total}, najlepszy miesiąc {r3.best_month} ({r3.best_month_sales}).` z wartościami podstawionymi przez backend, w `provenance` procedura i SQL (od modelu i wykonany). W trybie `minimal` faza komentarza widzi wiersze `r2` i `r3` i może dopisać np. trend, dalej z liczbami przez kotwice (`{r2[6].net_sales}`).
 
 Wariant „po miesiącach i kategoriach”: `sales_order_line_list` → `r1`, a potem jedno `query` z `PIVOT`:
 
@@ -651,11 +672,11 @@ FROM monthly
 PIVOT (sum(line_total) FOR category IN ('Bikes' AS bikes, 'Components' AS components, 'Clothing' AS clothing, 'Accessories' AS accessories))
 ```
 
-Wartości kategorii model bierze ze statystyk `r1` (wymiar ma do 20 wartości). Komórki bez sprzedaży mają `NULL`, chyba że model użyje `COALESCE` w zewnętrznym `SELECT`.
+Wartości kategorii model bierze z `values` wymiaru `Category` w katalogu, które opis narzędzia `sales_order_line_list` podaje jako „Wartości wymiarów” (sekcja 6.1). Bez nich zostałaby postać długa (`month`, `category`, `net_sales`). Komórki bez sprzedaży mają `NULL`, chyba że model użyje `COALESCE` w zewnętrznym `SELECT`.
 
 **P4: „Pokaż strukturę materiałową produktu HL Mountain Frame”**
 
-1. `product_search(name="HL Mountain Frame")` → 10 wariantów (Black/Silver × rozmiary 38–48), więc `needs_clarification`.
+1. `product_search(name="HL Mountain Frame")` → 10 wariantów (Black/Silver × rozmiary 38–48), więc `needs_clarification` z kandydatami z tego uchwytu (`ProductID`, opis z koloru, rozmiaru i numeru).
 2. Po wyborze: `get_bill_of_materials(start_product_id=…, check_date=<dziś lub data z prośby>)` → `r1`.
 3. `query` z wyborem kolumn i sortowaniem po poziomie → odpowiedź z tabelą.
 
@@ -718,7 +739,7 @@ ORDER BY month
 - **Stały początek rozmowy:** Haiku 5.5 wiąże bloki myślenia z niezmiennym początkiem rozmowy. Gdy zmieni się początek, który wytworzył blok, model odrzuca kontynuację, a Pydantic AI ponawia żądanie bez tego bloku, co kosztuje dodatkowe wywołanie i gubi rozumowanie. Dlatego instrukcje (reguły, skrót katalogu, zakresy danych) i zestaw narzędzi w stałej kolejności powstają raz przy starcie i nie zmieniają się w obrębie procesu. `block_binding.prefix_mismatch_behavior` ustawiamy jawnie na `drop_block`. Wtedy Anthropic sam pomija nieaktualny blok bez błędu 400, a Pydantic AI nie zgłasza ostrzeżenia `AnthropicStaleThinkingBlockWarning`. Pominięcie widać tylko w `provider_details['input_transformations']` odpowiedzi modelu, więc `AgentService` loguje je z identyfikatorem zgłoszenia. Sprawdzenie na żywo z 2026-10-19 (Haiku 5.5, narzędzia `strict`, `effort: medium`) potwierdziło dwie tury bez pominiętych bloków.
 - **Prompt caching:** stała część (definicje narzędzi w ustalonej kolejności, instrukcja systemowa, skrót katalogu) idzie na początek i jest cache'owana przez ustawienia `anthropic_cache*`. Data bieżąca trafia do wiadomości użytkownika, a nie do instrukcji, żeby początek rozmowy się nie zmieniał.
 - **Claude Agent SDK się nie nadaje.** To harness Claude Code z narzędziami do plików i powłoki, a tu potrzebne są wyłącznie nasze narzędzia.
-- **Co trafia do dostawcy modelu:** instrukcje, opisy procedur, parametry, schematy, statystyki, podglądy do 10 wierszy (cały wynik do 50 wierszy), SQL zapytań `query` i komunikaty błędów DuckDB i SQL Server, które mogą cytować wartości. Pełne zbiory danych zostają w backendzie. W v1 podgląd i statystyki nie są konfigurowane per kolumna (wcześniejsza wersja tego punktu twierdziła inaczej). Przełącznik trybów i oznaczanie kolumn wrażliwych w katalogu przechodzą do etapu 2 ([`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md)).
+- **Co trafia do dostawcy modelu:** ustala przełącznik `model_data_access` (`none` domyślnie albo `minimal`), opisany z pełną tabelą w [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md), sekcja 7. W obu trybach: instrukcje, opisy procedur (z `values` wymiarów z katalogu), parametry, podsumowania wyników bez wierszy (schemat, liczba wierszy, zakresy dat, klucze `ids`), SQL zapytań `query` i komunikaty błędów bez wartości z danych. Tryb `minimal` dodaje wartości wymiarów w podsumowaniach i tabele w fazie komentarza. Kolumny `sensitive` z katalogu nie trafiają do modelu w żadnym trybie. Do v1 model widział podglądy do 10 wierszy (cały wynik do 50 wierszy) i statystyki wszystkich kolumn.
 
 ## 12. Jak v1 zostawia miejsce na kolejne warstwy
 
@@ -727,8 +748,8 @@ ORDER BY month
 | Konto z samym `EXECUTE`, uprawnienia sprawdzane w procedurach | Konto `EXECUTE` od v1. `@UserId` wstrzykiwany przez `inject`, poza zasięgiem modelu. |
 | Zapisy z zatwierdzaniem, dry-run, limity rekordów | Katalog ma pole `access: read/write`. Procedury zapisu dojdą jako narzędzia wymagające zatwierdzenia. |
 | Log audytowy | Proweniencja: rzeczywiste wywołania procedur i pełny SQL zapytań z uchwytami źródłowymi, a nie opis wygenerowany przez model. |
-| Niezaufane pola tekstowe (pośrednia iniekcja) | Model widzi tylko podgląd. Oznaczanie kolumn w katalogu (`sensitive`) wchodzi w etapie 2 (dokument 002, sekcja 5.3). Wyłączenie kolumn wolnotekstowych jako ochrona przed iniekcją zostaje odłożone (002, sekcja 12). |
-| Kontrola liczb w komentarzu | Wartości liczone przez backend są w wynikach zapytań `query` i tabelach odpowiedzi, więc kontrola będzie porównaniem tekstu z gotową listą wartości (sekcja 7.5). Etap 2 wprowadza kotwice, a kontrolę odkłada (002, sekcja 12). |
+| Niezaufane pola tekstowe (pośrednia iniekcja) | Model nie widzi wierszy, a w trybie `minimal` widzi wartości wymiarów i tabele w fazie komentarza. Kolumny oznaczone w katalogu jako `sensitive` nie trafiają do modelu (dokument 002, sekcja 5.3). Wyłączenie kolumn wolnotekstowych jako ochrona przed iniekcją zostaje odłożone (002, sekcja 12). |
+| Kontrola liczb w komentarzu | Wartości z danych idą do tekstu kotwicami, a zestaw ewaluacyjny mierzy liczby wpisane poza nimi. Kontrola byłaby skanowaniem szablonu poza kotwicami (sekcja 7.5, 002, sekcja 12). |
 | Strażnik wejścia lub akcji | Pętla jest cienka, a strażnik to dodatkowy krok przed lub po wyborze narzędzia. |
 | Limity kroków, tokenów, rate limiting | Limity kroków i wierszy już są. `task_budget` w Claude API to opcja na limit tokenów w pętli. |
 | Frontend | Kontrakt odpowiedzi (sekcja 9) zawiera wszystko, czego UI potrzebuje: dane z typami, komentarz, pytania doprecyzowujące, proweniencję. |
@@ -764,7 +785,7 @@ Szczegóły wariantu B ustalone przy aktualizacji v3.5, do zatwierdzenia przez w
 
 **Zestaw ewaluacyjny:** 30–50 próśb z oczekiwaną procedurą i parametrami, oczekiwanym wynikiem (liczonym ręcznie SQL-em w SQL Server) i oczekiwanym statusem. Część przypadków pochodzi wprost z `examples` w YAML. Grupy: listy z filtrem (miasto, typ klienta), sprzedaż za okres, sprzedaż klienta, raporty po czasie i pivoty, łączenie zbiorów (P5), inne dziedziny (BOM, przełożeni). Przypadki trudne: okres względny, okres poza danymi, niejednoznaczny klient lub produkt, miasto w kilku regionach, „sprzedaż” bez miary, filtr po kolumnie bez parametru w procedurze (filtr w `query`), obliczenia na obciętym wyniku, dane, których nie zwraca żadna procedura (`unsupported`). Testy bezpieczeństwa SQL (próby czytania plików, dostępu do sieci, DDL, zmiany konfiguracji, wielu instrukcji) sprawdzają zablokowany silnik i są testami jednostkowymi, a nie częścią zestawu ewaluacyjnego. Ponieważ backend zwraca JSON, testy porównują odpowiedź z oczekiwaną automatycznie. Zestaw uruchamiamy przy każdej zmianie promptu, YAML lub modelu, a później dołączą do niego testy red-teamowe.
 
-Zestaw jest w `evals/cases.yaml`, a uruchamia go `uv run pytest -m eval tests/evals`, na prawdziwym modelu i bazie. Przypadek podaje oczekiwany status, wywołania procedur z argumentami modelu (porównywane jako podzbiór) i, dla odpowiedzi `ok`, zapytanie referencyjne w SQL Server. Tabelę odpowiedzi porównujemy z jego wierszami po wartościach, niezależnie od nazw i kolejności kolumn, które wybiera model. Kwota z odpowiedzi pasuje także do wartości referencyjnej zaokrąglonej do własnej skali tej kolumny. Przypadek może podać kilka poprawnych kształtów wyniku, np. sumę albo rozbicie na miesiące z sumą w komentarzu. Raport po przebiegu pokazuje dla każdej grupy trafność statusu, procedury, parametrów i wyniku, liczbę ponowień `query` oraz liczby z komentarza, których nie ma w tabelach ani w wynikach narzędzi. Liczby te są tylko mierzone i nie oblewają przypadku (sekcja 7.5); daty, lata i małe liczności pomijamy. Każdy przebieg zapisuje w `evals/runs/<początek przebiegu>` (poza gitem) plik JSON na przypadek: wywołania narzędzi w kolejności z SQL każdego zapytania `query`, prośby o poprawkę z komunikatem kontroli, wywołania procedur z parametrami, pełną odpowiedź i wynik oceny, oraz `report.md` z raportem. Plik przypadków sprawdzają testy bez modelu: schemat, nazwy narzędzi i argumentów, pokrycie przykładów z katalogu, a testy integracyjne wykonują każde zapytanie referencyjne.
+Zestaw jest w `evals/cases.yaml`, a uruchamia go `uv run pytest -m eval tests/evals`, na prawdziwym modelu i bazie. Przypadek podaje oczekiwany status, wywołania procedur z argumentami modelu (porównywane jako podzbiór) i, dla odpowiedzi `ok`, zapytanie referencyjne w SQL Server. Tabelę odpowiedzi porównujemy z jego wierszami po wartościach, niezależnie od nazw i kolejności kolumn, które wybiera model. Kwota z odpowiedzi pasuje także do wartości referencyjnej zaokrąglonej do własnej skali tej kolumny. Przypadek może podać kilka poprawnych kształtów wyniku, np. sumę albo rozbicie na miesiące z sumą w komentarzu. Dla pytania doprecyzowującego przypadek podaje `id` oczekiwanych kandydatów, porównywane jako zbiór bez względu na opisy. Tryb dostępu modelu do danych wybiera `DC_MODEL_DATA_ACCESS`, a przypadek może zmienić oczekiwanie w jednym trybie (`modes`), tylko dla zmian z dokumentu 002, sekcja 9. Raport po przebiegu podaje tryb i dla każdej grupy trafność statusu, procedury, parametrów, wyniku i kandydatów, liczbę ponowień `query` i ponowień przez złe kotwice, liczby wpisane przez model poza kotwicami w końcowym szablonie komentarza, odpowiedzi ze szkicem zamiast komentarza z fazy 2 (tryb `minimal`) oraz czas i koszt tury. Miary nie oblewają przypadku (sekcja 7.5); daty, lata i małe liczności pomijamy. Każdy przebieg zapisuje w `evals/runs/<początek przebiegu>-<tryb>` (poza gitem) plik JSON na przypadek: wywołania narzędzi w kolejności z SQL każdego zapytania `query`, prośby o poprawkę z komunikatem kontroli, wywołania procedur z parametrami, pełną odpowiedź i wynik oceny, oraz `report.md` z raportem. Przebiegi z 2026-10-25 po etapie 2: 37/37 w trybie `none` i 37/37 w trybie `minimal`, bez oczekiwań zależnych od trybu (002, sekcja 9.1). Plik przypadków sprawdzają testy bez modelu: schemat, nazwy narzędzi i argumentów, pokrycie przykładów z katalogu, a testy integracyjne wykonują każde zapytanie referencyjne.
 
 ## 14. Źródła i stan weryfikacji
 
