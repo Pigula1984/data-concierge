@@ -248,6 +248,8 @@ Przykłady zapytań w instrukcjach (raport miesięczny, jednowierszowe zapytanie
 | Tabele zwracane użytkownikowi | do 10 lub 50 | do 50, raz, bez `sensitive` | nie |
 | Wartości w komunikatach błędów | tak | nie | nie |
 
+Granica z tej tabeli dotyczy dostawcy modelu, nie własnych zapisów backendu. Log audytowy (001, sekcja 8.1) zapisuje lokalnie prompt, myślenie modelu i pełne odpowiedzi z wartościami, także z kolumn `sensitive`, w obu trybach. Plik zostaje na maszynie usługi i można go wyłączyć (`DC_AUDIT_LOG_ENABLED=false`).
+
 ## 8. Zmiany w kodzie według modułów
 
 | Moduł | Zmiana |

@@ -1,6 +1,6 @@
 # Data Concierge: opis architektury backendu (wersja 3, happy-flow tylko do odczytu)
 
-Status: v1 wdrożona według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.8, data: 2026-10-25. Etap 2 (dostęp modelu do danych, wdrożony) opisuje [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md).
+Status: v1 wdrożona według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.9, data: 2026-10-26. Etap 2 (dostęp modelu do danych, wdrożony) opisuje [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md).
 Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (sekcja 14), research bibliotek z 2026-10-11, prototyp parsera DuckDB z 2026-10-12, sprawdzenie danych i metadanych w lokalnej bazie AdventureWorks2025.
 
 > **Historia zmian.**
@@ -19,6 +19,7 @@ Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (
 > **v3.6 (uzupełnienie z implementacji etapu 5, 2026-10-20):** zestaw ewaluacyjny to `evals/cases.yaml` (37 przypadków w 7 grupach), uruchamiany przez `uv run pytest -m eval tests/evals`. Wyniki porównujemy po wartościach, a nie po nazwach kolumn, a kwotę w skali kolumny odpowiedzi. Pierwsze uruchomienie (Haiku 5.5): 33/37, a po poprawce porównań 37/37, bez ponowień `query` (sekcja 13).
 > **v3.7 (2026-10-24):** sprawy odłożone w v1 przechodzą do etapu 2, opisanego w [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md): przełącznik dostępu modelu do danych (tryb zamknięty i ograniczony), kotwice zamiast liczb w komentarzu (sekcja 7.5) i oznaczanie kolumn wrażliwych w katalogu (sekcje 11.3 i 12). Poprawka sekcji 11.3: w v1 podgląd nie jest konfigurowany per kolumna. Zmienione sekcje: 3, 7.5, 11.3, 12.
 > **v3.8 (2026-10-25):** opis zgodny z systemem po etapie 2 (dokument 002, wdrożony). Model nie widzi wierszy wyników: narzędzia zwracają podsumowanie (schemat, liczba wierszy, zakresy dat, klucze `ids`, w trybie `minimal` wartości wymiarów), wartości w tekstach dla użytkownika idą przez kotwice, kandydatów buduje backend z uchwytu (`candidates_from`), a wartości do `PIVOT` pochodzą z `values` w katalogu. Ustawienie `model_max_rows` zastąpiło limity podglądu. Zestaw ewaluacyjny działa w obu trybach i mierzy kotwice, liczby spoza kotwic, szkice, czas i koszt: 37/37 w obu trybach. Zmienione sekcje: 3, 4, 5.2, 6.1, 6.2, 7.2, 7.4, 7.5, 8, 9, 10, 11.3, 12, 13.
+> **v3.9 (2026-10-26):** log audytowy tury w pliku JSONL według planu [`2026-10-26-1708-feat-log-audytowy-plan.md`](../plans/2026-10-26-1708-feat-log-audytowy-plan.md): prompt, odpowiedzi modelu z myśleniem i wywołaniami narzędzi, wykonanie procedur i zapytań, to, co backend odesłał modelowi, faza komentarza i pełna odpowiedź, związane identyfikatorem korelacji. Odczyt poleceniem `data-concierge audit`. Myślenie modelu wraca jako streszczenie (`thinking.display: summarized`), bo bez tego Haiku 5.5 zwraca puste bloki. Zmienione sekcje: 4, 7.6, 8.1 (nowa), 11.3, 12.
 
 ## 1. Cel i zakres
 
@@ -106,9 +107,10 @@ flowchart LR
 | **Wykonawca procedur** | `EXEC` z parametrami, limit wierszy i czasu, zamiana wyniku na tabelę z typami z katalogu (bez utraty precyzji), zapis do magazynu. Razem z odczytem metadanych katalogu to jedyny kod zależny od silnika bazy. Oba działają na wspólnym kliencie SQL Server w module `core` (`SqlServerClient`). Klient otwiera połączenie osobno na każde wywołanie, pilnuje limitu czasu i podaje komunikaty błędów bez danych logowania: przy błędzie połączenia lub logowania tylko kod SQLSTATE. To jedyne miejsce, które importuje sterownik `pyodbc`. |
 | **Magazyn wyników** | Wyniki sesji pod uchwytami `r1`, `r2`… jako tabele w DuckDB (w pamięci procesu), ze schematem i pochodzeniem każdego uchwytu: wywołaniem procedury albo zapytaniem `query` z pełnym SQL i listą uchwytów źródłowych. |
 | **Silnik zapytań** | Przyjmuje SQL od modelu (narzędzie `query`): sprawdza, że to jedna instrukcja `SELECT`, wiąże je (`DESCRIBE`), sprawdza nazwy i typy wyniku oraz obcięte źródła, wykonuje w połączeniu sesji i zapisuje wynik pod nowym uchwytem (sekcja 7). |
+| **Log audytowy** | Zdarzenia każdej tury w pliku JSONL, od promptu do odpowiedzi, za interfejsem `AuditLog` (moduł `audit`). Szczegóły w sekcji 8.1. |
 | **Składanie odpowiedzi** | `ResponseAssembler`: z `AgentAnswer` od modelu buduje `Response` (sekcja 9). Dokleja pełne dane wskazanych uchwytów i proweniencję, czyli wszystkich przodków tych uchwytów z grafu pochodzenia. Docelowo także kontrola liczb w komentarzu (sekcja 7.5). |
 
-Proweniencja nie jest osobnym komponentem. Magazyn wyników zapisuje pochodzenie przy każdym uchwycie, a składanie odpowiedzi odczytuje graf pochodzenia zwracanych uchwytów (sekcja 7.6). Ten graf pozwala odtworzyć wynik bez modelu i jest zalążkiem logu audytowego.
+Proweniencja nie jest osobnym komponentem. Magazyn wyników zapisuje pochodzenie przy każdym uchwycie, a składanie odpowiedzi odczytuje graf pochodzenia zwracanych uchwytów (sekcja 7.6). Ten graf pozwala odtworzyć wynik bez modelu. Log audytowy (sekcja 8.1) zapisuje go przy każdym wykonaniu narzędzia razem z decyzjami modelu.
 
 ## 5. Katalog agenta (YAML)
 
@@ -508,7 +510,7 @@ Backend zwraca w odpowiedzi (pole `provenance`) wszystkich przodków zwracanych 
 
 - pozwala sprawdzić decyzję modelu (np. suma `TotalDue` zamiast `SubTotal`, `JOIN` po złej kolumnie),
 - pozwala odtworzyć wynik bez modelu: ponowne wywołanie procedur i wykonanie zapisanych SQL w tej samej kolejności. SQL odwołuje się do uchwytów po nazwie, a nowa sesja numeruje od `r1`, więc odtworzenie bez zmian działa, gdy proweniencja zaczyna się od `r1`. Po kilku turach rozmowy (np. P2 po pytaniu doprecyzowującym, z proweniencją `r3`, `r4`) trzeba przemianować uchwyty w SQL. Etap 4 sprawdza odtworzenie testem dla P3 i P5; narzędzia do odtwarzania z przemianowaniem v1 nie ma,
-- jest gotowym zapisem do późniejszego logu audytowego.
+- trafia do logu audytowego przy każdym wykonaniu procedury i zapytania (sekcja 8.1).
 
 ### 7.7. Porównanie z alternatywami i wybór
 
@@ -581,6 +583,30 @@ Zasady ustalania parametrów:
 | Niejasna miara („sprzedaż”) | `default_for` z katalogu, nazwa kolumny w `assumptions`. |
 
 Limity v1: maks. 10 kroków pętli, `max_rows` z katalogu (domyślnie 100 000), 30 s na procedurę, 30 s i 100 000 wierszy wyniku na zapytanie `query`, `model_max_rows` = 50 (wyniki do tylu wierszy dają modelowi klucze `ids` i kandydatów do pytania doprecyzowującego, a w trybie `minimal` trafiają do fazy komentarza), maks. 10 000 wierszy na tabelę w odpowiedzi (z flagą `truncated`). Modelowi nie pokazujemy wierszy (002). Limity są w konfiguracji backendu. Limit czasu egzekwują sterowniki (sekcja 11.2). Prośba łącząca dwie procedury z jednym `query` i `present_result` zużywa 4 kroki.
+
+### 8.1. Log audytowy
+
+Każda tura zostawia w pliku JSONL ciąg zdarzeń, który pozwala ją prześledzić od promptu do odpowiedzi, także gdy się nie udała. To POC: plik pokazuje ideę audytu, a nie jest magazynem produkcyjnym.
+
+Każdy wiersz pliku to jedno zdarzenie z czasem (UTC), identyfikatorem korelacji (`correlation_id`), `session_id`, `user_id`, rodzajem i danymi. Zdarzenia zapisują trzy miejsca przepływu:
+
+| Zdarzenie | Źródło | Dane |
+|-----------|--------|------|
+| `request` | `AskService` | prompt, data bieżąca, nowa czy kontynuowana sesja, tryb dostępu do danych, model |
+| `model_response` | capability audytu agenta (hook `after_model_request`) | treść myślenia (bez podpisów), tekst, wywołania narzędzi z `tool_call_id` i argumentami, w tym `present_result`, zużycie tokenów |
+| `tool_executed` | dekorator narzędzi | narzędzie, `tool_call_id`, czas, uchwyt, liczba wierszy, obcięcie i pochodzenie (procedura z parametrami bez wartości wstrzykiwanych albo SQL modelu i SQL wykonany), a przy błędzie klasa, komunikat dla modelu i pełny `detail` |
+| `model_input` | capability audytu agenta (hook `before_model_request`) | wyniki narzędzi, które zobaczył model, i prośby o poprawkę |
+| `comment` | `AskService` (tryb `minimal`) | komentarz z fazy komentarza albo przyczyna porażki |
+| `turn_failed` | `AgentService`, `AskService` | rodzaj i komunikat przyczyny (limit kroków, błąd modelu, błąd magazynu wyników) |
+| `response` | `AskService` | pełna odpowiedź z wartościami, tabelami i proweniencją, czas tury |
+
+Capability audytu tylko obserwuje pętlę Pydantic AI, więc żądania do modelu i przebieg tury się nie zmieniają. Kolejność w pliku jest kolejnością przepływu: decyzja modelu, wykonanie narzędzia, wynik dla modelu. Tura przerwana limitem kroków ma w pliku kroki sprzed przerwania. Wywołania narzędzi z tej samej odpowiedzi co końcowe `present_result` nie są wykonywane (`end_strategy='early'`, sekcja 6.2), więc nie mają `tool_executed`.
+
+Plik leży pod `DC_AUDIT_LOG_PATH` (domyślnie `logs/audit.jsonl`), a `DC_AUDIT_LOG_ENABLED=false` wyłącza log. Plik jest tylko dopisywany, a blokada trzyma wiersze w całości w obrębie jednego procesu: CLI i serwer HTTP nie powinny pisać do tego samego pliku jednocześnie. Błąd zapisu nie zmienia odpowiedzi i trafia do ostrzeżenia w logu Pythona. Log zawiera dane klientów, także z kolumn `sensitive`, bo zapisuje pełną odpowiedź. Zostaje na maszynie usługi i nie trafia do dostawcy modelu (002, sekcja 7).
+
+`data-concierge audit <id>` wypisuje turę (po `correlation_id`) albo całą rozmowę (po `session_id`, który jest w każdej odpowiedzi) krok po kroku. Polecenie nie łączy się z bazą ani z modelem.
+
+Poza zakresem POC: rotacja i retencja pliku, odporność na manipulację (podpisy, magazyn append-only), zapis do bazy lub OpenTelemetry, odczyt przez HTTP oraz wewnętrzne ponowienia fazy komentarza (log ma tylko jej wynik).
 
 ## 9. Kontrakt odpowiedzi backendu
 
@@ -737,6 +763,7 @@ ORDER BY month
 - **Odmowy:** odmowa modelu kończy się statusem `error`. Dla Haiku 5.5 nie ma automatycznego przełączenia na inny model po stronie serwera.
 - **Instrukcje o SQL:** instrukcja systemowa zawiera stałą część o pisaniu zapytań `query`: dialekt DuckDB, tabele to uchwyty z opisów wyników, cytowanie nazw kolumn w `"…"`, wskazówki z sekcji 7.2 (kwoty jako `DECIMAL`, `CAST` dla `avg` i dzielenia, `NULLIF`, `CAST(date_trunc(…) AS DATE)`, siatka okresów z zakresu prośby, `JOIN` po kolumnach `id`, aliasy po angielsku w `snake_case`, daty jako literały, kolumna rozstrzygająca remisy przy top N) oraz 2–3 przykłady z sekcji 10. Backend nie dopisuje `ORDER BY`, więc model pisze je zawsze, gdy kolejność ma znaczenie dla użytkownika lub dla `LIMIT`.
 - **Stały początek rozmowy:** Haiku 5.5 wiąże bloki myślenia z niezmiennym początkiem rozmowy. Gdy zmieni się początek, który wytworzył blok, model odrzuca kontynuację, a Pydantic AI ponawia żądanie bez tego bloku, co kosztuje dodatkowe wywołanie i gubi rozumowanie. Dlatego instrukcje (reguły, skrót katalogu, zakresy danych) i zestaw narzędzi w stałej kolejności powstają raz przy starcie i nie zmieniają się w obrębie procesu. `block_binding.prefix_mismatch_behavior` ustawiamy jawnie na `drop_block`. Wtedy Anthropic sam pomija nieaktualny blok bez błędu 400, a Pydantic AI nie zgłasza ostrzeżenia `AnthropicStaleThinkingBlockWarning`. Pominięcie widać tylko w `provider_details['input_transformations']` odpowiedzi modelu, więc `AgentService` loguje je z identyfikatorem zgłoszenia. Sprawdzenie na żywo z 2026-10-19 (Haiku 5.5, narzędzia `strict`, `effort: medium`) potwierdziło dwie tury bez pominiętych bloków.
+- **Treść myślenia:** Haiku 5.5 zwraca bloki myślenia bez treści, gdy żądanie nie prosi o nią jawnie (sprawdzone na żywo 2026-10-27). Dlatego `thinking.display` ustawiamy na `summarized`: model zwraca streszczenie rozumowania, które trafia do logu audytowego (sekcja 8.1). Ustawienie nie zmienia wejścia modelu ani stałego początku rozmowy, a cache promptu trafia jak wcześniej.
 - **Prompt caching:** stała część (definicje narzędzi w ustalonej kolejności, instrukcja systemowa, skrót katalogu) idzie na początek i jest cache'owana przez ustawienia `anthropic_cache*`. Data bieżąca trafia do wiadomości użytkownika, a nie do instrukcji, żeby początek rozmowy się nie zmieniał.
 - **Claude Agent SDK się nie nadaje.** To harness Claude Code z narzędziami do plików i powłoki, a tu potrzebne są wyłącznie nasze narzędzia.
 - **Co trafia do dostawcy modelu:** ustala przełącznik `model_data_access` (`none` domyślnie albo `minimal`), opisany z pełną tabelą w [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md), sekcja 7. W obu trybach: instrukcje, opisy procedur (z `values` wymiarów z katalogu), parametry, podsumowania wyników bez wierszy (schemat, liczba wierszy, zakresy dat, klucze `ids`), SQL zapytań `query` i komunikaty błędów bez wartości z danych. Tryb `minimal` dodaje wartości wymiarów w podsumowaniach i tabele w fazie komentarza. Kolumny `sensitive` z katalogu nie trafiają do modelu w żadnym trybie. Do v1 model widział podglądy do 10 wierszy (cały wynik do 50 wierszy) i statystyki wszystkich kolumn.
@@ -747,7 +774,7 @@ ORDER BY month
 |------------------|--------------|
 | Konto z samym `EXECUTE`, uprawnienia sprawdzane w procedurach | Konto `EXECUTE` od v1. `@UserId` wstrzykiwany przez `inject`, poza zasięgiem modelu. |
 | Zapisy z zatwierdzaniem, dry-run, limity rekordów | Katalog ma pole `access: read/write`. Procedury zapisu dojdą jako narzędzia wymagające zatwierdzenia. |
-| Log audytowy | Proweniencja: rzeczywiste wywołania procedur i pełny SQL zapytań z uchwytami źródłowymi, a nie opis wygenerowany przez model. |
+| Log audytowy | Plik JSONL ze zdarzeniami tury od v3.9 (sekcja 8.1), z rzeczywistymi wywołaniami procedur i pełnym SQL zapytań. Do zrobienia: trwały magazyn (baza albo OpenTelemetry), retencja i odporność na manipulację za tym samym interfejsem `AuditLog`. |
 | Niezaufane pola tekstowe (pośrednia iniekcja) | Model nie widzi wierszy, a w trybie `minimal` widzi wartości wymiarów i tabele w fazie komentarza. Kolumny oznaczone w katalogu jako `sensitive` nie trafiają do modelu (dokument 002, sekcja 5.3). Wyłączenie kolumn wolnotekstowych jako ochrona przed iniekcją zostaje odłożone (002, sekcja 12). |
 | Kontrola liczb w komentarzu | Wartości z danych idą do tekstu kotwicami, a zestaw ewaluacyjny mierzy liczby wpisane poza nimi. Kontrola byłaby skanowaniem szablonu poza kotwicami (sekcja 7.5, 002, sekcja 12). |
 | Strażnik wejścia lub akcji | Pętla jest cienka, a strażnik to dodatkowy krok przed lub po wyborze narzędzia. |

@@ -2,7 +2,7 @@
 
 ## 1. Zasada
 
-Kod dzielimy na **moduły według funkcji** (core, catalog, procedures, results, query, agent, api), a wewnątrz modułu na trzy warstwy:
+Kod dzielimy na **moduły według funkcji** (core, catalog, procedures, results, query, agent, api, audit), a wewnątrz modułu na trzy warstwy:
 
 | Warstwa | Odpowiedzialność | Czego nie robi |
 |---------|------------------|----------------|
@@ -42,6 +42,7 @@ def query(ctx: RunContext[AgentDeps], sql: str) -> QuerySummary:
 | `procedures` | — | `ProcedureService` (walidacja parametrów, `inject`, limity, proweniencja) | `ProcedureRepository` (adapter SQL Server) |
 | `results` | — | `ResultService` (zapis, odczyt i opis uchwytów według trybu: schemat, zakresy dat, `ids`, odczyt komórki dla kotwic) | `ResultStore` (tabele DuckDB pod uchwytami) |
 | `query` | — | `QueryService` (parsowanie → reguły → typy wyniku → pełne `ORDER BY` → wykonanie i zapis przez `ResultService`) | `SqlParser` (parser DuckDB na własnym połączeniu bez danych) |
+| `audit` | polecenie CLI `audit` (w module `api`) | `AuditService` (`TurnAudit` dla każdej tury: zdarzenia pod jej identyfikatorem korelacji), `AuditTrail` (odczyt dla polecenia `audit`) | `AuditLog`: `JsonlAuditLog` (plik JSONL), `NullAuditLog` (log wyłączony) |
 
 Moduły bez controllera są wewnętrzne: korzystają z nich serwisy innych modułów.
 
@@ -91,6 +92,7 @@ src/data_concierge/
 │   ├── prompts.py
 │   ├── anchors.py         # Anchors: check and fill {r3.net_sales} in texts for the user
 │   ├── formatting.py      # ValueFormatter: values as the user reads them
+│   ├── audit.py           # AuditCapability: model steps of a turn to the audit log
 │   ├── service.py         # AgentService
 │   └── assembler.py       # ResponseAssembler: AgentAnswer -> Response
 ├── api/
@@ -99,6 +101,10 @@ src/data_concierge/
 │   ├── schemas.py         # Response, request DTOs
 │   ├── sessions.py        # SessionRepository
 │   └── service.py         # AskService
+├── audit/
+│   ├── models.py          # AuditEvent
+│   ├── repository.py      # AuditLog protocol, JsonlAuditLog, NullAuditLog
+│   └── service.py         # AuditService, TurnAudit, AuditTrail
 └── bootstrap.py           # composition root: wires everything together
 
 tests/                     # mirrors src/data_concierge/

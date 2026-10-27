@@ -39,7 +39,7 @@ Obowiązują zasady z [`docs/standards/`](docs/standards/README.md). Najważniej
 
 ## Architektura: controller → service → repository
 
-Usługa jest modułowa (moduły według funkcji: `core`, `catalog`, `procedures`, `results`, `query`, `agent`, `api`), a wewnątrz modułu obowiązuje podział na warstwy:
+Usługa jest modułowa (moduły według funkcji: `core`, `catalog`, `procedures`, `results`, `query`, `agent`, `api`, `audit`), a wewnątrz modułu obowiązuje podział na warstwy:
 
 - **controller**: wejścia do systemu, czyli endpoint/CLI `ask()` **oraz narzędzia agenta Pydantic AI**. Cienkie: walidacja wejścia, mapowanie DTO, delegacja do serwisu, zamiana błędów domenowych na odpowiedź: w narzędziach `ModelRetry` dla błędów, które model może poprawić (parametry, uchwyt, SQL `query`), i `ToolFailed` dla nieudanego wykonania procedury; w endpoincie i CLI status `error`.
 - **service**: logika biznesowa i orkiestracja.
