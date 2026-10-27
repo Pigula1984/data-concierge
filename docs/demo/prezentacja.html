@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Concierge – POC</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #0E141A; overflow: hidden; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #frame { width: 1920px; height: 1080px; transform-origin: center center; flex: none; }
+  section { position: relative; width: 1920px; height: 1080px; overflow: hidden; flex: none; }
+  @media screen { section:not(.active) { display: none !important; } }
+  #cover p[style*="border-radius:999px"] { white-space: nowrap; flex: none; }
+  h1 { font-size: 96px; font-weight: 600; line-height: 1.1; }
+  h2 { font-size: 64px; font-weight: 600; line-height: 1.15; }
+  h3 { font-size: 44px; font-weight: 600; line-height: 1.2; }
+  p { line-height: 1.4; }
+  ul { padding-left: 1.2em; display: flex; flex-direction: column; gap: 0.2em; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 0.35em 0.6em; text-align: left; border-bottom: 1px solid rgba(23, 33, 43, 0.18); vertical-align: top; }
+  th { font-weight: 600; border-bottom: 2px solid rgba(23, 33, 43, 0.45); }
+  x-shape { display: block; flex: none; }
+  x-shape.arrow-right { clip-path: polygon(0 30%, 60% 30%, 60% 0, 100% 50%, 60% 100%, 60% 70%, 0 70%); }
+  svg.connectors { position: absolute; left: 0; top: 0; pointer-events: none; }
+  aside { display: none; }
+  #notes { position: fixed; left: 0; right: 0; bottom: 0; max-height: 40%; overflow: auto; display: none;
+    background: rgba(14, 20, 26, 0.94); color: #E6EAEE; font: 18px/1.5 'IBM Plex Sans', Arial, sans-serif; padding: 16px 24px; }
+  #notes.open { display: block; }
+  #counter { position: fixed; right: 16px; bottom: 12px; color: #8A96A3; font: 14px 'IBM Plex Sans', Arial, sans-serif; }
+  #notes.open ~ #counter { display: none; }
+  @media print {
+    @page { size: 1920px 1080px; margin: 0; }
+    html, body { height: auto; overflow: visible; background: none; }
+    #stage { position: static; display: block; }
+    #frame { transform: none !important; }
+    section { page-break-after: always; break-after: page; }
+    #notes, #counter { display: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="stage"><div id="frame">
+<section id="cover" data-transition="fade" style="background:#17212B;color:#F5F4EF;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:space-between;gap:48px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#B7C2CC">POC · spotkanie robocze · 28.10.2026</p>
+<div style="display:flex;flex-direction:column;gap:32px">
+<h1 style="font-size:120px;font-weight:600;line-height:1.05;color:#F5F4EF">Data Concierge</h1>
+<p style="font-size:40px;line-height:1.3;color:#D5DCE2;max-width:1400px">Pytanie po polsku zamieniamy na wywołanie procedur SQL Server, liczymy w DuckDB i oddajemy JSON z tabelami, komentarzem i pochodzeniem danych.</p>
+</div>
+<div style="display:flex;gap:16px;align-items:center">
+<p style="font-size:24px;padding:12px 24px;border-radius:999px;background:#26313D;color:#F5F4EF">Prompt</p>
+<x-shape class="arrow-right" style="background:#5A6878;width:40px;height:20px"></x-shape>
+<p style="font-size:24px;padding:12px 24px;border-radius:999px;background:#8FB1F0;color:#17212B;font-weight:600">Model wybiera</p>
+<x-shape class="arrow-right" style="background:#5A6878;width:40px;height:20px"></x-shape>
+<p style="font-size:24px;padding:12px 24px;border-radius:999px;background:#F0A774;color:#17212B;font-weight:600">SQL Server zwraca</p>
+<x-shape class="arrow-right" style="background:#5A6878;width:40px;height:20px"></x-shape>
+<p style="font-size:24px;padding:12px 24px;border-radius:999px;background:#F0A774;color:#17212B;font-weight:600">DuckDB liczy</p>
+<x-shape class="arrow-right" style="background:#5A6878;width:40px;height:20px"></x-shape>
+<p style="font-size:24px;padding:12px 24px;border-radius:999px;background:#26313D;color:#F5F4EF">JSON</p>
+<div style="flex:1"></div>
+<p style="font-size:24px;color:#B7C2CC">Claude Haiku 5.5 · Pydantic AI · DuckDB 1.5.6</p>
+</div>
+<aside>Spotkanie robocze, więc od razu do konkretów. Najpierw: jak to działa i gdzie jest model. Potem: co model widzi w dwóch trybach i co z tego wynika. Potem wyzwania: czas odpowiedzi, wolumen danych, pamięć. Na końcu demo. Kolory w całej prezentacji: niebieski to model, pomarańczowy to backend bez modelu (SQL Server, DuckDB). Dane demonstracyjne: baza Microsoft AdventureWorks2025 na lokalnym SQL Server.</aside>
+</section>
+<section id="flow" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Jak to działa · „raport sprzedaży po miesiącach za 2024”</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Model decyduje, backend pobiera i liczy</h2>
+</div>
+<div style="position:absolute;left:128px;top:296px;width:1664px;height:250px;background:#DCE5F6;border-radius:16px"></div>
+<div style="position:absolute;left:128px;top:576px;width:1664px;height:250px;background:#F6E3D4;border-radius:16px"></div>
+<p style="position:absolute;left:160px;top:336px;width:210px;font-size:40px;font-weight:700;color:#2456B5">Model</p>
+<p style="position:absolute;left:160px;top:396px;width:210px;font-size:24px;line-height:1.3;color:#2B3A4A">Claude Haiku 5.5 przez Pydantic AI</p>
+<p style="position:absolute;left:160px;top:616px;width:210px;font-size:40px;font-weight:700;color:#A9501A">Backend</p>
+<p style="position:absolute;left:160px;top:676px;width:210px;font-size:24px;line-height:1.3;color:#2B3A4A">bez modelu: SQL Server, DuckDB</p>
+<div style="position:absolute;left:400px;top:316px;width:340px;height:210px;background:#FCFCFA;border:2px solid #2456B5;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;line-height:1.25;color:#2456B5">1 · Wybór procedury</p>
+<p style="font-size:24px;line-height:1.35;font-family:'JetBrains Mono', 'Courier New', monospace;color:#2B3A4A">sales_order_list</p>
+</div>
+<div style="position:absolute;left:400px;top:596px;width:340px;height:210px;background:#FCFCFA;border:2px solid #A9501A;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;line-height:1.25;color:#A9501A">2 · EXEC na SQL Server</p>
+<p style="font-size:24px;line-height:1.35;font-family:'JetBrains Mono', 'Courier New', monospace;color:#2B3A4A">r1: 14 244 wierszy</p>
+</div>
+<div style="position:absolute;left:790px;top:316px;width:340px;height:210px;background:#FCFCFA;border:2px solid #2456B5;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;line-height:1.25;color:#2456B5">3 · SELECT nad uchwytami</p>
+<p style="font-size:24px;line-height:1.35;font-family:'JetBrains Mono', 'Courier New', monospace;color:#2B3A4A">GROUP BY month</p>
+</div>
+<div style="position:absolute;left:790px;top:596px;width:340px;height:210px;background:#FCFCFA;border:2px solid #A9501A;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;line-height:1.25;color:#A9501A">4 · DuckDB liczy</p>
+<p style="font-size:24px;line-height:1.35;font-family:'JetBrains Mono', 'Courier New', monospace;color:#2B3A4A">r2: 12 wierszy, r3: suma</p>
+</div>
+<div style="position:absolute;left:1180px;top:316px;width:340px;height:210px;background:#FCFCFA;border:2px solid #2456B5;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;line-height:1.25;color:#2456B5">5 · Komentarz z kotwicą</p>
+<p style="font-size:24px;line-height:1.35;font-family:'JetBrains Mono', 'Courier New', monospace;color:#2B3A4A">{r3.annual_total}</p>
+</div>
+<div style="position:absolute;left:1180px;top:596px;width:340px;height:210px;background:#FCFCFA;border:2px solid #A9501A;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;line-height:1.25;color:#A9501A">6 · Wstawia wartości</p>
+<p style="font-size:24px;line-height:1.35;font-family:'JetBrains Mono', 'Courier New', monospace;color:#2B3A4A">43 671 889,51</p>
+</div>
+<div style="position:absolute;left:1570px;top:316px;width:222px;height:490px;background:#17212B;border-radius:12px;padding:24px;display:flex;flex-direction:column;justify-content:center;gap:16px">
+<p style="font-size:40px;font-weight:700;color:#F5F4EF">JSON</p>
+<p style="font-size:24px;line-height:1.35;color:#D5DCE2">status, tabele, komentarz, proweniencja</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5A6472">Do modelu wraca tylko podsumowanie wyniku: schemat, liczba wierszy, zakres dat, klucze techniczne.</p>
+<svg class="connectors" viewBox="0 0 1920 1080" width="1920" height="1080"><defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5A6878"/></marker></defs><path d="M570.0 526.0 L570.0 596.0" fill="none" stroke="#5A6878" stroke-width="3" marker-end="url(#head)" style="color:#5A6878"/><path d="M740.0 701.0 H765.0 V421.0 H790.0" fill="none" stroke="#5A6878" stroke-width="3" marker-end="url(#head)" style="color:#5A6878"/><path d="M960.0 526.0 L960.0 596.0" fill="none" stroke="#5A6878" stroke-width="3" marker-end="url(#head)" style="color:#5A6878"/><path d="M1130.0 701.0 H1155.0 V421.0 H1180.0" fill="none" stroke="#5A6878" stroke-width="3" marker-end="url(#head)" style="color:#5A6878"/><path d="M1350.0 526.0 L1350.0 596.0" fill="none" stroke="#5A6878" stroke-width="3" marker-end="url(#head)" style="color:#5A6878"/><path d="M1520.0 701.0 L1570.0 701.0" fill="none" stroke="#5A6878" stroke-width="3" marker-end="url(#head)" style="color:#5A6878"/></svg>
+<aside>Jedna tura na przykładzie raportu miesięcznego. 1: model dostaje prompt, katalog procedur z pliku YAML (opisy pisane pod agenta: kiedy użyć, kiedy nie, parametry) i wybiera narzędzie sales_order_list z datami 2024-01-01 do 2025-01-01. 2: backend dokleja identyfikator użytkownika, woła procedurę api.SalesOrder_List kontem agent_reader, które ma tylko EXECUTE na procedurach i żadnego dostępu do tabel. Wynik, 14 244 zamówień, trafia do DuckDB w pamięci jako tabela r1. Model dostaje tylko podsumowanie: kolumny, liczbę wierszy, zakres dat. 3: model pisze zapytanie SELECT w dialekcie DuckDB nad r1, grupowanie po miesiącu, a potem drugie, jednowierszowe, z sumą roczną do komentarza. 4: backend sprawdza, że każde to jedna instrukcja SELECT z poprawnymi typami, i wykonuje je. Wyniki to r2 (12 miesięcy) i r3 (suma). 5: model kończy turę: wskazuje, które uchwyty zwrócić, i pisze komentarz jako szablon z kotwicami, np. {r3.annual_total}. 6: backend podstawia wartości i dokleja pełne tabele oraz proweniencję, czyli listę procedur z parametrami i zapytań SQL, z których da się odtworzyć wynik bez modelu.</aside>
+</section>
+<section id="roles" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Jak to działa · podział ról</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Model ustala „co”, DuckDB liczy „ile”</h2>
+</div>
+<div style="display:flex;gap:32px">
+<div style="flex:1;display:flex;flex-direction:column;gap:20px;background:#FCFCFA;border-top:8px solid #2456B5;border-radius:12px;padding:40px">
+<h3 style="font-size:40px;font-weight:600;color:#2456B5">Model</h3>
+<ul style="font-size:28px;line-height:1.4;color:#2B3A4A">
+<li>wybiera procedurę z katalogu YAML</li>
+<li>zamienia język na parametry: „2024” → daty</li>
+<li>pisze jeden SELECT nad uchwytami r1, r2…</li>
+<li>pisze komentarz jako szablon z kotwicami</li>
+<li>przy kilku trafieniach pyta użytkownika</li>
+</ul>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:20px;background:#FCFCFA;border-top:8px solid #A9501A;border-radius:12px;padding:40px">
+<h3 style="font-size:40px;font-weight:600;color:#A9501A">Backend, bez modelu</h3>
+<ul style="font-size:28px;line-height:1.4;color:#2B3A4A">
+<li>woła procedurę kontem z samym EXECUTE</li>
+<li>sprawdza SELECT: jedna instrukcja, typy, źródła</li>
+<li>DuckDB bez plików, sieci i rozszerzeń</li>
+<li>liczy kwoty jako DECIMAL, wstawia wartości</li>
+<li>zapisuje proweniencję i log audytowy</li>
+</ul>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5A6472">Model nie pisze SQL do SQL Servera i nie liczy żadnej sumy. Do SQL Servera trafiają tylko procedury z katalogu.</p>
+<aside>Najważniejsza zasada: model decyduje, jakie dane pobrać i co z nich policzyć, ale niczego sam nie liczy i nie przepisuje liczb. Po stronie modelu: wybór procedury z katalogu (dziś 9 narzędzi wygenerowanych z YAML), zamiana języka naturalnego na parametry, jedno zapytanie SELECT nad wynikami w DuckDB, komentarz z kotwicami i pytanie doprecyzowujące. Po stronie backendu: wywołanie procedury kontem agent_reader (samo EXECUTE, bez SELECT na tabelach), kontrola zapytania (jedna instrukcja SELECT, nazwy i typy kolumn, odrzucenie obliczeń na obciętym wyniku), wykonanie w zablokowanym połączeniu DuckDB, kwoty jako DECIMAL, podstawienie wartości kotwic, proweniencja i log audytowy. Ważne: na SQL Server model nie pisze żadnego SQL. SQL pisze tylko nad wynikami, które sesja już pobrała.</aside>
+</section>
+<section id="example" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Przykład · „Sprzedaż po miesiącach w 2024 dla klientów z Berlina”</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Dwie procedury, jedno złączenie w DuckDB</h2>
+</div>
+<div style="display:flex;gap:48px">
+<div style="flex:1.25;display:flex;flex-direction:column;gap:32px">
+<table style="font-size:28px;color:#2B3A4A">
+<tr><th style="width:14%">Uchwyt</th><th style="width:62%">Krok</th><th style="width:24%;text-align:right">Wiersze</th></tr>
+<tr><td>r1</td><td>procedura: klienci z miasta Berlin</td><td style="text-align:right">198</td></tr>
+<tr><td>r2</td><td>procedura: zamówienia z 2024</td><td style="text-align:right">14 244</td></tr>
+<tr><td>r3</td><td>SELECT: r2 JOIN r1, po miesiącu</td><td style="text-align:right">12</td></tr>
+<tr><td>r4</td><td>SELECT: suma, najlepszy miesiąc</td><td style="text-align:right">1</td></tr>
+</table>
+<div style="background:#17212B;border-radius:12px;padding:28px 32px">
+<p style="font-size:24px;line-height:1.45;font-family:'JetBrains Mono', 'Courier New', monospace;color:#D5DCE2">FROM r2 AS o<br>JOIN (SELECT DISTINCT "CustomerID" FROM r1) b<br>  ON b."CustomerID" = o."CustomerID"<br>GROUP BY month</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:20px">
+<div style="background:#DCE5F6;border-radius:12px;padding:28px 32px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:24px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#2456B5">Model pisze</p>
+<p style="font-size:26px;line-height:1.45;font-family:'JetBrains Mono', 'Courier New', monospace;color:#17212B">Sprzedaż netto klientów z Berlina w 2024 roku wyniosła {r4.annual_total}, w {r4.annual_orders} zamówieniach.</p>
+</div>
+<div style="background:#F6E3D4;border-radius:12px;padding:28px 32px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:24px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#A9501A">Użytkownik dostaje</p>
+<p style="font-size:28px;line-height:1.45;color:#17212B">Sprzedaż netto klientów z Berlina w 2024 roku wyniosła <b>237 350,54</b>, w <b>145</b> zamówieniach.</p>
+</div>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5A6472">Źródło: przebieg ewaluacji z 25.10.2026, tryb none, przypadek p5-berlin-miesiace-2024.</p>
+<aside>To jest sedno podejścia: nie ma procedury „sprzedaż klientów z miasta”. Model woła dwie procedury w ich naturalnym ziarnie: listę klientów z Berlina (198 adresów, bo Berlin występuje w pięciu regionach Niemiec) i zamówienia z 2024 (14 244). Potem sam pisze złączenie po CustomerID i grupowanie po miesiącu. DISTINCT jest potrzebny, bo lista klientów ma wiersz na adres. Drugie zapytanie daje jeden wiersz z sumą roczną i najlepszym miesiącem, żeby komentarz miał się do czego odwołać. Model nie widzi kwot: pisze szablon z kotwicami {r4.annual_total}, a backend wstawia 237 350,54 i 145. W odpowiedzi jest pełny SQL obu zapytań i parametry procedur, więc wynik da się odtworzyć bez modelu. To też jeden z promptów w demo.</aside>
+</section>
+<section id="duckdb" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Jak to działa · silnik obliczeń</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Dlaczego DuckDB, a nie Polars</h2>
+</div>
+<table style="font-size:28px;color:#2B3A4A">
+<tr><th style="width:20%"></th><th style="width:40%;color:#A9501A">DuckDB</th><th style="width:40%">Polars</th></tr>
+<tr><td><b>Czym jest</b></td><td>baza SQL w procesie, bez serwera</td><td>biblioteka DataFrame z API w Pythonie</td></tr>
+<tr><td><b>Model pisze</b></td><td>jeden SELECT, a SQL modele znają najlepiej</td><td>kod Pythona, który wymaga sandboxa</td></tr>
+<tr><td><b>Izolacja</b></td><td>blokada w silniku: pliki, sieć, rozszerzenia</td><td>osobny proces lub kontener po naszej stronie</td></tr>
+<tr><td><b>Kwoty</b></td><td>DECIMAL, sumy zgodne z SQL Server</td><td>typ Decimal jest, wsparcia nie sprawdzaliśmy</td></tr>
+<tr><td><b>Audyt</b></td><td>czytelny SQL, wynik odtwarzalny bez modelu</td><td>kod inny przy każdym pytaniu</td></tr>
+</table>
+<div style="flex:1"></div>
+<p style="font-size:32px;line-height:1.4;color:#17212B;border-left:6px solid #A9501A;padding:8px 0 8px 28px">Polars jest szybki, ale u nas obliczenia pisze model. Zmiana silnika oznaczałaby zmianę języka, w którym model pisze.</p>
+<aside>Pytanie, które na pewno padnie. Kluczowe jest to, że obliczenia pisze model, a nie my. Z DuckDB model pisze jedno zapytanie SELECT, czyli w języku, który zna najlepiej. Bezpieczeństwo daje sam silnik: połączenie sesji ma wyłączony dostęp do plików i sieci, autoinstalację rozszerzeń i zablokowaną konfigurację. Sprawdziliśmy to sondami: read_csv, COPY, ATTACH, INSTALL httpfs kończą się błędem uprawnień. Do tego limity: 512 MB pamięci i 2 wątki na sesję, limit czasu i wierszy. Kwoty zostają DECIMAL na całej ścieżce: money z SQL Server, Decimal w Pythonie, decimal128 w Arrow i DECIMAL w DuckDB. Zapytania referencyjne dają te same sumy co SQL Server. Polars oznaczałby, że model pisze kod Pythona, a to wymaga prawdziwego sandboxa: osobnego procesu albo kontenera. Polars ma też interfejs SQL, ale nie sprawdzaliśmy go w POC, w tym tego, czy da się w nim zablokować dostęp do plików tak jak w DuckDB. SQLite odpadł, bo nie ma typu DECIMAL.</aside>
+</section>
+<section id="modes" data-transition="fade" style="background:#E9ECEE;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#4F5966">Co widzi model · DC_MODEL_DATA_ACCESS</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Dwa tryby: none i minimal</h2>
+</div>
+<table style="font-size:28px;color:#2B3A4A">
+<tr><th style="width:62%">Co trafia do dostawcy modelu</th><th style="width:19%;text-align:center">none</th><th style="width:19%;text-align:center">minimal</th></tr>
+<tr><td>Katalog procedur, opisy narzędzi, prompt użytkownika</td><td style="text-align:center"><b>tak</b></td><td style="text-align:center"><b>tak</b></td></tr>
+<tr><td>Schemat wyniku, liczba wierszy, zakresy dat</td><td style="text-align:center"><b>tak</b></td><td style="text-align:center"><b>tak</b></td></tr>
+<tr><td>Klucze techniczne (CustomerID), do 50 wierszy</td><td style="text-align:center"><b>tak</b></td><td style="text-align:center"><b>tak</b></td></tr>
+<tr><td>Wartości wymiarów (terytorium, typ klienta), do 20</td><td style="text-align:center;color:#5A6472">nie</td><td style="text-align:center"><b>tak</b></td></tr>
+<tr><td>Tabele dla użytkownika, do 50 wierszy, raz na końcu</td><td style="text-align:center;color:#5A6472">nie</td><td style="text-align:center"><b>tak</b></td></tr>
+<tr><td>Wiersze wyników procedur i zapytań pośrednich</td><td style="text-align:center;color:#5A6472">nie</td><td style="text-align:center;color:#5A6472">nie</td></tr>
+<tr><td>Nazwy z bazy: klienci, produkty, osoby (sensitive)</td><td style="text-align:center;color:#5A6472">nigdy</td><td style="text-align:center;color:#5A6472">nigdy</td></tr>
+</table>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#4F5966">Tryb obowiązuje cały proces, zmiana wymaga restartu. Użytkownik w obu trybach dostaje pełne tabele.</p>
+<aside>Przełącznik to jedna zmienna środowiskowa, DC_MODEL_DATA_ACCESS, ustawiana dla całego procesu. Domyślnie none. W trybie none model widzi wyłącznie metadane: katalog, schemat wyniku, liczbę wierszy, zakresy dat i klucze techniczne, takie jak CustomerID, bo bez nich nie przekaże klienta z wyszukiwania do drugiej procedury. Nie widzi nazw ani kwot. Tryb minimal dokłada dwie rzeczy: wartości wymiarów (np. lista terytoriów), żeby model mógł poprawnie napisać filtr albo PIVOT, i raz na końcu tury tabele, które idą do użytkownika, do 50 wierszy, bez kolumn wrażliwych. Na tej podstawie druga faza pisze pełniejszy komentarz. Kolumny oznaczone w katalogu jako sensitive (nazwy klientów, produktów, imiona i nazwiska, numery kont) nie trafiają do modelu w żadnym trybie, ale użytkownik je widzi, także w komentarzu przez kotwice. Zastrzeżenie: prompt użytkownika zawsze trafia do modelu, więc jeśli użytkownik sam wpisze nazwisko, jak „Mohamed Pal” w demo, model je zobaczy. „Nigdy” dotyczy wartości odczytanych z bazy. Dlaczego nie per żądanie: instrukcje i opisy narzędzi zależą od trybu, a historia sesji w minimal ma już wartości z danych. Klient, który chce obu trybów, uruchamia dwie instancje.</aside>
+</section>
+<section id="comments" data-transition="fade" style="background:#E9ECEE;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#4F5966">Co widzi model · „Sprzedaż po miesiącach w 2024 dla klientów z Berlina”</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Ta sama tabela, inny komentarz</h2>
+</div>
+<div style="display:flex;gap:32px">
+<div style="flex:1;display:flex;flex-direction:column;gap:20px;background:#FCFCFA;border-radius:12px;padding:40px">
+<p style="font-size:24px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#4F5966">none · jedna faza</p>
+<p style="font-size:30px;line-height:1.45;color:#17212B">„Sprzedaż netto klientów z Berlina w 2024 roku wyniosła 237 350,54, w 145 zamówieniach. Najwięcej sprzedaży przypadło na miesiąc 2024-10-01 (91 192,37).”</p>
+<div style="flex:1"></div>
+<p style="font-size:24px;line-height:1.4;color:#4F5966">Model nie widział żadnej kwoty. Pisze szablon, liczby przychodzą przez kotwice.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:20px;background:#FCFCFA;border-radius:12px;padding:40px">
+<p style="font-size:24px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#4F5966">minimal · dwie fazy</p>
+<p style="font-size:30px;line-height:1.45;color:#17212B">„Sprzedaż netto klientów z Berlina w 2024 roku wyniosła 237 350,54, a najwyższy wynik przypadł na październik (91 192,37). Najsłabszy był kwiecień z sprzedażą 782,99 przy 1 zamówieniu, natomiast od lipca wartości utrzymują się na wyraźnie wyższym poziomie, z wyraźnym szczytem w październiku.”</p>
+<div style="flex:1"></div>
+<p style="font-size:24px;line-height:1.4;color:#4F5966">Druga faza widzi 12 wierszy tabeli i pisze trend. Liczby nadal przez kotwice.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#4F5966">Źródło: przebiegi ewaluacji z 25.10.2026 (none i minimal), cytaty dosłowne, w minimal bez ostatniego zdania o tabeli.</p>
+<aside>Ten sam prompt, te same procedury i to samo zapytanie, więc tabela w odpowiedzi jest identyczna. Różni się tylko komentarz. W trybie none model nie widział ani jednej kwoty, więc komentarz to szablon: suma i najlepszy miesiąc, które sam policzył jednowierszowym zapytaniem. W trybie minimal po fazie narzędzi jest druga, krótka faza bez narzędzi: model dostaje tabelę, która idzie do użytkownika (12 wierszy, bez kolumn wrażliwych), i pisze komentarz z trendem i najsłabszym miesiącem. Liczby i tak wstawia kotwicami, więc nie może ich źle przepisać ani zaokrąglić. Cytaty są dosłowne, z błędem językowym „z sprzedażą” włącznie: tego, co model napisze słowami, nic nie sprawdza. To pokażę też w demo.</aside>
+</section>
+<section id="proscons" data-transition="fade" style="background:#E9ECEE;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#4F5966">Co widzi model · ewaluacja 37 przypadków w obu trybach</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Ta sama trafność, różnica w komentarzu i koszcie</h2>
+</div>
+<div style="display:flex;gap:32px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-radius:12px;padding:40px">
+<h3 style="font-size:40px;font-weight:600;font-family:'JetBrains Mono', 'Courier New', monospace">none</h3>
+<p style="font-size:28px;color:#2B3A4A"><b>37/37</b> · <b>6,6 s</b> · <b>0,0009 USD</b> na turę</p>
+<p style="font-size:24px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#4F5966;padding:12px 0 0 0">Zalety</p>
+<ul style="font-size:28px;line-height:1.4;color:#2B3A4A">
+<li>do dostawcy nie trafia kwota ani nazwa</li>
+<li>jedna faza: szybciej i taniej</li>
+</ul>
+<p style="font-size:24px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#4F5966;padding:12px 0 0 0">Wady</p>
+<ul style="font-size:28px;line-height:1.4;color:#2B3A4A">
+<li>komentarz to suma i najlepsza pozycja</li>
+<li>model nie zauważy dziwnych sum po JOIN</li>
+<li>filtr wymaga pisowni, której model nie zna</li>
+</ul>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-radius:12px;padding:40px">
+<h3 style="font-size:40px;font-weight:600;font-family:'JetBrains Mono', 'Courier New', monospace">minimal</h3>
+<p style="font-size:28px;color:#2B3A4A"><b>37/37</b> · <b>8,9 s</b> · <b>0,0012 USD</b> na turę</p>
+<p style="font-size:24px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#4F5966;padding:12px 0 0 0">Zalety</p>
+<ul style="font-size:28px;line-height:1.4;color:#2B3A4A">
+<li>komentarz z trendem i najsłabszym okresem</li>
+<li>wartości wymiarów: poprawne filtry i PIVOT</li>
+</ul>
+<p style="font-size:24px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#4F5966;padding:12px 0 0 0">Wady</p>
+<ul style="font-size:28px;line-height:1.4;color:#2B3A4A">
+<li>tabele do 50 wierszy idą do dostawcy</li>
+<li>druga faza: ok. +2,3 s i +30% kosztu</li>
+<li>raz wpisał kwotę zamiast kotwicy</li>
+</ul>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#4F5966">Źródło: ewaluacja z 25.10.2026, Haiku 5.5, 39 tur. Koszt z cennika, z tokenami z cache.</p>
+<aside>Najważniejsze: zestaw ewaluacyjny, 37 przypadków przez prawdziwy model i bazę, przechodzi w obu trybach w całości. Tryb zamknięty nie psuje trafności. Różnica jest w komentarzu i w koszcie. None: do dostawcy modelu nie trafia żadna kwota ani nazwa, są tylko metadane, klucze techniczne i zakresy dat. Ale komentarz jest ubogi, a model nie może ocenić, czy wynik ma sens, np. czy złączenie nie zdublowało wierszy, bo widzi tylko liczbę wierszy. Filtr po wartości kolumny, która nie jest parametrem procedury, wymaga dokładnej pisowni, którą model musi zgadnąć albo wziąć z katalogu. Minimal: komentarz pisze druga faza, która widzi tabele dla użytkownika, więc jest trend, najlepszy i najsłabszy okres. Koszt: dodatkowe wywołanie modelu, ok. 2,3 s i ok. 30% więcej. Ryzyko: w jednym przypadku model wpisał kwotę słowami, „po około 2,4 tys. każde”, zamiast kotwicą. Liczby są w ułamkach centa na turę, przebieg całego zestawu kosztuje 4–5 centów.</aside>
+</section>
+<section id="latency" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Wyzwania · czas odpowiedzi</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">95–99% czasu tury to odpowiedzi modelu</h2>
+</div>
+<div style="display:flex;gap:40px;align-items:center">
+<div style="display:flex;gap:12px;align-items:center"><div style="width:28px;height:28px;background:#2456B5;border-radius:4px"></div><p style="font-size:24px;color:#2B3A4A">model, 3–4 wywołania po 2–5 s</p></div>
+<div style="display:flex;gap:12px;align-items:center"><div style="width:28px;height:28px;background:#C9692E;border-radius:4px"></div><p style="font-size:24px;color:#2B3A4A">SQL Server 0,07–0,53 s i DuckDB 4–29 ms</p></div>
+</div>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;gap:24px;align-items:center"><p style="width:400px;font-size:26px;color:#2B3A4A">raport po miesiącach</p><div style="width:1000px;display:flex;flex-direction:row"><div style="width:984px;height:40px;background:#2456B5"></div><div style="width:18px;height:40px;background:#C9692E"></div></div><p style="width:160px;font-size:26px;font-weight:600;text-align:right">19,1 s</p></div>
+<div style="display:flex;gap:24px;align-items:center"><p style="width:400px;font-size:26px;color:#2B3A4A">miesiące z % zmian</p><div style="width:1000px;display:flex;flex-direction:row"><div style="width:712px;height:40px;background:#2456B5"></div><div style="width:29px;height:40px;background:#C9692E"></div><div style="flex:1"></div></div><p style="width:160px;font-size:26px;font-weight:600;text-align:right">14,2 s</p></div>
+<div style="display:flex;gap:24px;align-items:center"><p style="width:400px;font-size:26px;color:#2B3A4A">top 5 klientów</p><div style="width:1000px;display:flex;flex-direction:row"><div style="width:398px;height:40px;background:#2456B5"></div><div style="width:18px;height:40px;background:#C9692E"></div><div style="flex:1"></div></div><p style="width:160px;font-size:26px;font-weight:600;text-align:right">8,0 s</p></div>
+<div style="display:flex;gap:24px;align-items:center"><p style="width:400px;font-size:26px;color:#2B3A4A">Mohamed Pal: pytanie</p><div style="width:1000px;display:flex;flex-direction:row"><div style="width:356px;height:40px;background:#2456B5"></div><div style="width:14px;height:40px;background:#C9692E"></div><div style="flex:1"></div></div><p style="width:160px;font-size:26px;font-weight:600;text-align:right">7,1 s</p></div>
+<div style="display:flex;gap:24px;align-items:center"><p style="width:400px;font-size:26px;color:#2B3A4A">Mohamed Pal: 12698</p><div style="width:1000px;display:flex;flex-direction:row"><div style="width:361px;height:40px;background:#2456B5"></div><div style="width:4px;height:40px;background:#C9692E"></div><div style="flex:1"></div></div><p style="width:160px;font-size:26px;font-weight:600;text-align:right">7,0 s</p></div>
+</div>
+<div style="flex:1"></div>
+<p style="font-size:28px;line-height:1.4;color:#2B3A4A"><b>Dźwignie:</b> mniej kroków (tabela i suma w jednym zapytaniu), szybszy model lub niższy effort, informacja o postępie w UI. Cache promptu już działa.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5A6472">Źródło: logs/audit.jsonl z 27.10.2026, tryb none, lokalny SQL Server. Średnia z ewaluacji: 6,6 s (none), 8,9 s (minimal).</p>
+<aside>Tu dane z logu audytowego z wczorajszych prób, pięć tur. Niebieskie to czas odpowiedzi modelu, pomarańczowe to łączny czas procedur SQL Server i zapytań DuckDB. Pomarańczowego prawie nie widać: procedura na lokalnej bazie to 0,07–0,53 s, DuckDB 4–29 ms. Model to 95–99% czasu tury. Typowa tura to 3–4 wywołania modelu: wybór procedury, zapytanie, czasem drugie zapytanie do komentarza i present_result. Każde 2–5 s. Pierwsza tura po starcie jest wolniejsza, bo zapisuje cache promptu (ok. 8,7 tys. tokenów instrukcji i narzędzi), a ta miała też cztery wywołania. Co możemy zrobić: zmniejszyć liczbę kroków, np. instrukcją, żeby suma do komentarza powstawała w tym samym zapytaniu co tabela; sprawdzić niższy effort myślenia albo inny model; w UI pokazywać postęp (wybieram procedurę, pobieram dane, liczę). Strumieniowanie odpowiedzi jest poza zakresem POC. Przy dużej i zdalnej bazie proporcje się zmienią, o tym za dwa slajdy. Następny: dlaczego czat wydaje się szybszy.</aside>
+</section>
+<section id="chatspeed" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Wyzwania · czas odpowiedzi</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Dlaczego czat wydaje się szybszy</h2>
+</div>
+<table style="font-size:28px;color:#2B3A4A">
+<tr><th style="width:28%"></th><th style="width:36%">Bot w czacie</th><th style="width:36%;color:#2456B5">Data Concierge</th></tr>
+<tr><td><b>Odpowiedź widać</b></td><td>na bieżąco, od pierwszych słów</td><td>dopiero jako gotowy JSON</td></tr>
+<tr><td><b>Wywołania modelu</b></td><td>zwykle jedno</td><td>3–4, jedno po drugim</td></tr>
+<tr><td><b>Kontekst wywołania</b></td><td>często kilkaset tokenów</td><td>9–11 tys. tokenów</td></tr>
+<tr><td><b>Myślenie</b></td><td>często wyłączone</td><td>effort medium przed każdym krokiem</td></tr>
+<tr><td><b>Model pisze</b></td><td>tekst dla człowieka</td><td>argumenty narzędzi, np. cały SQL</td></tr>
+</table>
+<div style="flex:1"></div>
+<p style="font-size:32px;line-height:1.4;color:#17212B;border-left:6px solid #2456B5;padding:8px 0 8px 28px">Liczy się czas do ostatniego słowa, nie do pierwszego. Czat też pracuje kilka sekund, ale od razu widać, że coś się dzieje.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5A6472">Kontekst i myślenie: logs/audit.jsonl z 27.10.2026. Dane o botach to typowe ustawienia, nie pomiar.</p>
+<aside>Częste pytanie: czemu czat odpowiada szybciej niż nasze API. To nie kwestia samego API, tylko tego, ile pracy robi jedna tura i czy ją widać. Po pierwsze czat strumieniuje: pierwsze słowa są po ułamku sekundy, reszta się dopisuje, więc wydaje się szybki, nawet gdy cała odpowiedź powstaje kilka sekund. My czekamy na koniec i wypisujemy gotowy JSON. Po drugie bot robi zwykle jedno wywołanie modelu, a nasza tura to pętla agenta: wybór procedury, zapytanie SQL, czasem drugie zapytanie, na koniec present_result. Każdy krok czeka na poprzedni, każdy 2–5 s. Po trzecie każde nasze wywołanie niesie ok. 9–11 tys. tokenów: instrukcje, opisy wszystkich narzędzi, historię tury. Cache promptu pomaga, ale wygasa po kilku minutach bezczynności. Po czwarte model myśli przed każdym krokiem (Haiku z effort medium), a boty do prostych pytań często mają myślenie wyłączone albo używają mniejszego modelu. Po piąte wywołanie narzędzia nie daje efektu strumieniowania: backend nic nie wykona, dopóki model nie dopisze całego SQL. Duże produkty mają też często priorytetową przepustowość albo własny cache odpowiedzi. Co możemy zrobić: pokazywać postęp w UI, zmniejszyć liczbę kroków, sprawdzić niższy effort na zestawie ewaluacyjnym, a przy rosnącym katalogu wyszukiwanie narzędzi, żeby nie wysyłać opisów wszystkich procedur.</aside>
+</section>
+<section id="volume" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Wyzwania · wolumen z SQL Server</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Dziś mała baza, docelowo duże wyniki procedur</h2>
+</div>
+<div style="display:flex;gap:32px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-top:6px solid #A9501A;border-radius:12px;padding:32px">
+<p style="font-size:64px;font-weight:600;line-height:1.1">0,3 s</p>
+<p style="font-size:24px;line-height:1.35;color:#2B3A4A">14 244 zamówień z 2024 z lokalnej bazy</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-top:6px solid #A9501A;border-radius:12px;padding:32px">
+<p style="font-size:64px;font-weight:600;line-height:1.1">100 000</p>
+<p style="font-size:24px;line-height:1.35;color:#2B3A4A">limit wierszy procedury; powyżej obliczenia są odrzucane</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-top:6px solid #A9501A;border-radius:12px;padding:32px">
+<p style="font-size:64px;font-weight:600;line-height:1.1">121 317</p>
+<p style="font-size:24px;line-height:1.35;color:#2B3A4A">wszystkie pozycje zamówień: już dziś ponad limit</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-top:6px solid #A9501A;border-radius:12px;padding:32px">
+<p style="font-size:64px;font-weight:600;line-height:1.1">30 s</p>
+<p style="font-size:24px;line-height:1.35;color:#2B3A4A">limit czasu jednej procedury</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:40px;font-weight:600">Docelowo</h3>
+<ul style="font-size:28px;line-height:1.4;color:#2B3A4A">
+<li>zawężać parametrami procedur: okres, klient, kategoria; to główna dźwignia</li>
+<li>pobierać strumieniowo, zamiast ładować cały wynik do obiektów Pythona</li>
+<li>zmierzyć na realnej bazie: sieć i obciążenie serwera dodadzą czas</li>
+<li>do decyzji: procedury w grubszym ziarnie (np. dziennym) dla raportów</li>
+</ul>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5A6472">Liczby: AdventureWorks2025, zamówienia od 30.05.2022 do 29.06.2025. Limity z konfiguracji POC.</p>
+<aside>AdventureWorks to mała baza: 31 465 zamówień i 121 317 pozycji. Pobranie całego roku zamówień to 0,3 s na lokalnej maszynie. Ale już dziś wszystkie pozycje zamówień z całego okresu przekraczają limit 100 000 wierszy z procedury. Co wtedy: wynik jest obcinany, a backend odrzuca każde zapytanie, które liczy na obciętym wyniku, bo suma z obciętych danych wyglądałaby na pełną. Model dostaje prośbę o zawężenie parametrów, np. krótszy okres. To świadoma decyzja, a nie błąd. Docelowo: po pierwsze filtry, które mocno zawężają wolumen, muszą być parametrami procedur, a odmowy i błędy obcięcia z logów pokażą, których parametrów brakuje. Po drugie dziś wynik idzie przez fetchall do obiektów Pythona i dopiero potem do Arrow; przy dużych wynikach trzeba pobierać partiami albo bezpośrednio do Arrow. Po trzecie sieć i obciążenie produkcyjnego serwera, tego nie mierzyliśmy. Do dyskusji: czy dopuszczamy procedury, które zwracają dane w grubszym ziarnie, np. sprzedaż dzienną, zamiast pojedynczych zamówień. To odejście od zasady, że procedury zwracają surowe wiersze.</aside>
+</section>
+<section id="memory" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Wyzwania · pamięć DuckDB</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Każda sesja trzyma swoje wyniki w pamięci</h2>
+</div>
+<div style="display:flex;gap:64px">
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<table style="font-size:28px;color:#2B3A4A">
+<tr><th style="width:36%;text-align:right">Wiersze</th><th style="width:30%;text-align:right">DuckDB</th><th style="width:34%;text-align:right">Arrow</th></tr>
+<tr><td style="text-align:right">14 244</td><td style="text-align:right">0,3 MB</td><td style="text-align:right">1,4 MB</td></tr>
+<tr><td style="text-align:right">100 000</td><td style="text-align:right">1,6 MB</td><td style="text-align:right">9,6 MB</td></tr>
+<tr><td style="text-align:right">1 000 000</td><td style="text-align:right">16,8 MB</td><td style="text-align:right">95,9 MB</td></tr>
+</table>
+<p style="font-size:24px;line-height:1.4;color:#5A6472">Jeden wynik o kształcie sales_order_list. Arrow to bufor w Pythonie przy przekazaniu do DuckDB.</p>
+</div>
+<div style="flex:1.15;display:flex;flex-direction:column;gap:16px">
+<ul style="font-size:28px;line-height:1.4;color:#2B3A4A">
+<li>każda sesja ma własną bazę DuckDB w procesie</li>
+<li>uchwyty żyją całą sesję, bo kolejna tura z nich korzysta</li>
+<li>memory_limit 512 MB i 2 wątki to limit sesji, nie procesu</li>
+<li>bufory Pythona przy pobieraniu są poza tym limitem</li>
+<li>w POC sesje nie wygasają</li>
+</ul>
+</div>
+</div>
+<div style="flex:1"></div>
+<p style="font-size:28px;line-height:1.4;color:#2B3A4A"><b>Docelowo:</b> czas życia i limit liczby sesji, zwalnianie pośrednich uchwytów, wspólny budżet pamięci, DuckDB w osobnym procesie (to daje też izolację).</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5A6472">Pomiar syntetyczny: 8 kolumn jak w sales_order_list, DuckDB 1.5.6, duckdb_memory(). Prawdziwe dane kompresują się gorzej.</p>
+<aside>Skoro większe wolumeny, to więcej pamięci. Jak to wygląda dziś: każda sesja, czyli rozmowa, ma własne połączenie DuckDB w pamięci procesu. Wszystkie wyniki procedur i zapytań z sesji zostają pod uchwytami do jej końca, bo np. po pytaniu doprecyzowującym kolejna tura korzysta z wcześniejszych uchwytów. Pomiar jest syntetyczny, na danych w kształcie listy zamówień: milion wierszy to ok. 17 MB w DuckDB i ok. 96 MB jako tabela Arrow w Pythonie. Prawdziwe dane, z różnorodnymi tekstami, kompresują się gorzej, więc to dolne oszacowanie. Limit 512 MB i 2 wątki dotyczą jednej sesji, a nie całego procesu: dziesięć aktywnych sesji to teoretycznie 5 GB. Bufory po stronie Pythona przy pobieraniu z SQL Server (fetchall, obiekty Pythona, Arrow) są poza limitem DuckDB. W POC sesje nie wygasają, żyją do restartu. Co trzeba zrobić przed wdrożeniem: czas życia sesji i limit ich liczby, usuwanie pośrednich uchwytów, wspólny budżet pamięci, a najlepiej DuckDB sesji w osobnym procesie albo kontenerze, co przy okazji domyka izolację SQL pisanego przez model.</aside>
+</section>
+<section id="limits" data-transition="fade" style="background:#F5F4EF;color:#17212B;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5A6472">Wyzwania · ograniczenia POC</p>
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Co działa, ale nie jest jeszcze sprawdzane</h2>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px">
+<div style="display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-radius:12px;padding:32px">
+<h3 style="font-size:32px;font-weight:600">Kotwica nie sprawdza sensu</h3>
+<p style="font-size:26px;line-height:1.4;color:#2B3A4A">„łączna sprzedaż netto wyniosła 36 313 572,48 zł”: to kwota kategorii Bikes, a „zł” dopisał model.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-radius:12px;padding:32px">
+<h3 style="font-size:32px;font-weight:600">Grosz różnicy</h3>
+<p style="font-size:26px;line-height:1.4;color:#2B3A4A">Suma roczna: raz 43 671 889,51, raz ,50. Model pisze SQL od nowa: raz sumuje zaokrągloną tabelę miesięcy, raz surowe zamówienia.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-radius:12px;padding:32px">
+<h3 style="font-size:32px;font-weight:600">Brak uwierzytelniania</h3>
+<p style="font-size:26px;line-height:1.4;color:#2B3A4A">user_id podaje wywołujący. Procedury przyjmują @UserId, ale go nie sprawdzają.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-radius:12px;padding:32px">
+<h3 style="font-size:32px;font-weight:600">Prompt injection</h3>
+<p style="font-size:26px;line-height:1.4;color:#2B3A4A">Ochrona odłożona. Alias w SQL może przenieść kolumnę wrażliwą do niewrażliwej.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-radius:12px;padding:32px">
+<h3 style="font-size:32px;font-weight:600">Sesje w procesie</h3>
+<p style="font-size:26px;line-height:1.4;color:#2B3A4A">Jeden proces, restart czyści rozmowy. Log audytowy to lokalny plik.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px;background:#FCFCFA;border-radius:12px;padding:32px">
+<h3 style="font-size:32px;font-weight:600">Katalog pisany ręcznie</h3>
+<p style="font-size:26px;line-height:1.4;color:#2B3A4A">9 narzędzi w kontekście. Przy dziesiątkach procedur potrzebne wyszukiwanie narzędzi.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5A6472">Przykłady z przebiegów ewaluacji z 25.10.2026: kategorie-2024, p3-raport-miesiace-2024 i terytoria-2024.</p>
+<aside>Uczciwie o tym, czego POC nie sprawdza. Pierwsze dwa to przykłady z naszych przebiegów. Kotwica gwarantuje, że liczba jest przepisana dokładnie, ale nie że to właściwa liczba: w trybie none model napisał „łączna sprzedaż netto wyniosła” i wstawił kotwicę do kwoty kategorii Bikes, a do tego dopisał „zł”, choć waluty nie znamy. W trybie minimal komentarz nazwał 4% rocznej sprzedaży „dużą częścią przychodu”. Tabele są poprawne, komentarz jest pomocniczy, ale treści komentarza nic nie kontroluje. Grosz różnicy: przy raporcie miesięcznym za 2024 model pisze dwa zapytania, które wykonuje DuckDB: tabelę 12 miesięcy z kwotami zaokrąglonymi do groszy i jednowierszową sumę roczną do komentarza. Model nie widzi kwot i niczego nie liczy, ale tekst zapytania generuje za każdym razem od nowa, a sumę roczną da się poprawnie zapisać na dwa sposoby: z gotowej tabeli miesięcy albo z surowych zamówień, i model raz wybiera jeden, raz drugi. Suma z zaokrąglonych miesięcy daje 43 671 889,51, suma z surowych zamówień zaokrąglona na końcu daje 43 671 889,50, czyli wartość dokładną. To nie zależy od trybu: oba warianty wychodzą też w samym trybie none (raport miesięczny dał ,51, sprzedaż według terytoriów ,50). Oba wyniki są poprawne dla swojego SQL i oba widać w proweniencji, ale użytkownik zobaczy różne liczby. Rozwiązanie na później: reguła w instrukcji, żeby sumy liczyć z dokładnych kwot i zaokrąglać na końcu. Dalej: brak uwierzytelniania, ochrona przed prompt injection odłożona, w tym znane ryzyko aliasów, które mogą przenieść wartości kolumny wrażliwej pod nazwę niewrażliwej. Sesje i log audytowy są lokalne. Katalog procedur piszemy ręcznie; przy dziesiątkach procedur trzeba będzie wyszukiwania narzędzi, Claude API ma do tego tool search.</aside>
+</section>
+<section id="demo" data-transition="fade" style="background:#1F4A9C;color:#F5F4EF;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:space-between;gap:48px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#D5DFF2">Na żywo · CLI, tryb none, potem minimal</p>
+<h1 style="font-size:120px;font-weight:600;line-height:1.05;color:#F5F4EF">Demo</h1>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;gap:28px;align-items:baseline"><p style="width:48px;font-size:40px;font-weight:600;color:#D5DFF2">1</p><p style="font-size:32px;line-height:1.35;color:#F5F4EF">„daj mi listę klientów z miejscowości Berlin” <span style="color:#D5DFF2">· jedna procedura</span></p></div>
+<div style="display:flex;gap:28px;align-items:baseline"><p style="width:48px;font-size:40px;font-weight:600;color:#D5DFF2">2</p><p style="font-size:32px;line-height:1.35;color:#F5F4EF">„Sprzedaż po miesiącach w 2024 dla klientów z Berlina” <span style="color:#D5DFF2">· dwie procedury i JOIN, oba tryby</span></p></div>
+<div style="display:flex;gap:28px;align-items:baseline"><p style="width:48px;font-size:40px;font-weight:600;color:#D5DFF2">3</p><p style="font-size:32px;line-height:1.35;color:#F5F4EF">„Pokaż sprzedaż klienta Mohamed Pal w 2024” <span style="color:#D5DFF2">· pytanie doprecyzowujące</span></p></div>
+</div>
+<aside>Przechodzę do terminala. Scenariusz i polecenia są w pliku docs/demo/scenariusz-demo.md. Kolejność: najpierw lista klientów z Berlina, czyli czyste wywołanie procedury z parametrem. Potem sprzedaż klientów z Berlina po miesiącach: dwie procedury i złączenie w DuckDB, najpierw w trybie none, potem po restarcie w minimal, żeby porównać komentarz. Na koniec Mohamed Pal: trzech klientów o tej samej nazwie, więc system pyta, którego wybrać, a kandydatów buduje backend. Po każdym prompcie mogę pokazać data-concierge audit z session_id, czyli krok po kroku, co model zdecydował i co backend wykonał.</aside>
+</section>
+</div></div>
+<div id="notes"></div>
+<div id="counter"></div>
+<script>
+  const slides = [...document.querySelectorAll('#frame > section')];
+  const frame = document.getElementById('frame');
+  const notes = document.getElementById('notes');
+  const counter = document.getElementById('counter');
+  let current = Math.max(0, Math.min(slides.length - 1, (parseInt(location.hash.slice(1), 10) || 1) - 1));
+  function fit() {
+    const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+    frame.style.transform = `scale(${scale})`;
+  }
+  function show(i) {
+    current = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, n) => s.classList.toggle('active', n === current));
+    const aside = slides[current].querySelector('aside');
+    notes.textContent = aside ? aside.textContent : '';
+    counter.textContent = `${current + 1} / ${slides.length} · N: notatki`;
+    history.replaceState(null, '', `#${current + 1}`);
+  }
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(e.key)) show(current + 1);
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) show(current - 1);
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key === 'n' || e.key === 'N') notes.classList.toggle('open');
+    else if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.();
+    else return;
+    e.preventDefault();
+  });
+  document.getElementById('stage').addEventListener('click', e => show(current + (e.clientX > window.innerWidth / 3 ? 1 : -1)));
+  window.addEventListener('resize', fit);
+  fit();
+  show(current);
+</script>
+</body>
+</html>
