@@ -11,8 +11,10 @@ from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from data_concierge.agent.anchors import Anchors
+from data_concierge.agent.audit import AuditCapability
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import OUTPUT_TOOL, AgentAnswer, AgentTurn, CandidatesFrom
+from data_concierge.audit.service import TurnAudit
 from data_concierge.core.settings import Settings
 from data_concierge.core.types import ColumnKind
 from data_concierge.results.service import ResultService
@@ -45,10 +47,16 @@ class AgentService:
             # An answer ends the turn before tools called in the same response run, so it can
             # only name handles whose summaries the model has already seen (section 7.5).
             end_strategy="early",
+            capabilities=[AuditCapability()],
         )
+        self._model_name = model if isinstance(model, str) else model.model_name
         self._max_candidates = settings.model_max_rows
         self._agent.output_validator(self._check_answer)
         self._limits = UsageLimits(request_limit=settings.max_agent_steps)
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
 
     async def run(self, prompt: str, history: Sequence[ModelMessage], deps: AgentDeps) -> AgentTurn:
         """On failure the history stays as it was, without the failed turn."""
@@ -60,6 +68,7 @@ class AgentService:
             logger.warning(
                 "agent turn failed (correlation id %s): %s", deps.context.correlation_id, exc
             )
+            deps.audit.record("turn_failed", TurnAudit.failure(exc))
             return AgentTurn(
                 answer=AgentAnswer(status="error", message=""), messages=tuple(history)
             )
@@ -78,7 +87,9 @@ class AgentService:
         """Claude settings; another provider ignores the `anthropic_` keys (section 11.2).
 
         Thinking blocks bound to a changed conversation start are dropped instead of failing
-        the request (KTD11); `_log_dropped_thinking` reports when that happens.
+        the request (KTD11); `_log_dropped_thinking` reports when that happens. Thinking comes
+        back summarized, not omitted, so the audit log shows why the model chose a tool
+        (architecture, section 8.1).
         """
         return AnthropicModelSettings(
             max_tokens=settings.max_output_tokens,
@@ -86,6 +97,7 @@ class AgentService:
             anthropic_thinking={
                 "type": "adaptive",
                 "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+                "display": "summarized",
             },
             anthropic_cache_instructions=True,
             anthropic_cache_tool_definitions=True,

@@ -120,7 +120,30 @@ Prompty z zestawu ewaluacyjnego (`evals/cases.yaml`). Dane obejmują zamówienia
 | `5 klientów z największą sprzedażą netto w 2024` | w trybie `minimal` komentarz wymienia klientów i kwoty przez kotwice, choć model nie widzi nazw |
 | `Jaki jest stan magazynowy produktu HL Fork?` | status `unsupported`, bo żadna procedura nie zwraca stanów magazynowych |
 
-Te same prompty w obu trybach (`none`, potem `minimal`) pokazują różnicę w komentarzu przy tych samych tabelach.
+Te same prompty w obu trybach (`none`, potem `minimal`) pokazują różnicę w komentarzu przy tych samych tabelach. Po każdym prompcie `data-concierge audit` z `session_id` odpowiedzi pokazuje, jak tura do niej doszła (sekcja niżej).
+
+## Log audytowy
+
+Każda tura (CLI i HTTP) dopisuje swoje zdarzenia do `logs/audit.jsonl`, jedno zdarzenie JSON na wiersz. Zdarzenia jednej tury mają ten sam `correlation_id`, a zdarzenia rozmowy ten sam `session_id`. Plik zawiera prompty i pełne odpowiedzi z danymi klientów, więc jest poza gitem. `DC_AUDIT_LOG_PATH` zmienia jego położenie, a `DC_AUDIT_LOG_ENABLED=false` wyłącza log.
+
+Przebieg tury krok po kroku, po `session_id` z odpowiedzi (cała rozmowa) albo po `correlation_id` (jedna tura):
+
+```powershell
+uv run data-concierge ask --user 1 "raport sprzedaży po miesiącach za 2024"
+uv run data-concierge audit <session_id>
+```
+
+| Zdarzenie | Co zawiera |
+|-----------|------------|
+| `request` | prompt, data doklejona przez backend, nowa czy kontynuowana sesja, tryb, model |
+| `model_response` | myślenie modelu, tekst, wywołania narzędzi z argumentami (także końcowe `present_result`), tokeny |
+| `tool_executed` | co backend wykonał: procedura z parametrami albo SQL zapytania, czas, uchwyt, liczba wierszy, a przy błędzie pełny opis, którego model nie widzi |
+| `model_input` | co backend odesłał modelowi: podsumowania wyników i prośby o poprawkę |
+| `comment` | wynik fazy komentarza w trybie `minimal` |
+| `turn_failed` | przyczyna przerwania tury (limit kroków, błąd modelu, błąd magazynu wyników) |
+| `response` | pełna odpowiedź dla użytkownika i czas tury |
+
+Polecenie `audit` czyta tylko plik, nie łączy się z bazą ani z modelem. Szczegóły: 001, sekcja 8.1.
 
 ## Testy i ewaluacja
 
@@ -145,7 +168,7 @@ Raport z trafnością według grup oraz miarami (ponowienia, liczby wpisane poza
 
 | Katalog | Zawartość |
 |---------|-----------|
-| `src/data_concierge/` | moduły `core`, `catalog`, `procedures`, `results`, `query`, `agent`, `api`; w każdym warstwy controller → service → repository |
+| `src/data_concierge/` | moduły `core`, `catalog`, `procedures`, `results`, `query`, `agent`, `api`, `audit`; w każdym warstwy controller → service → repository |
 | `catalog/agent-procedures.yaml` | katalog procedur pisany pod agenta: kiedy użyć, parametry, kolumny z rolami i wrażliwością |
 | `db/` | skrypty T-SQL i `deploy.ps1` |
 | `evals/` | przypadki ewaluacji; przebiegi w `evals/runs/` (poza gitem) |
@@ -161,3 +184,4 @@ Zasady pracy nad kodem (język, standardy, uv i ruff, cykl Compound Engineering)
 - Tylko odczyt: brak procedur zapisu.
 - Treści komentarza (np. ocen typu „duża część przychodu”) nic nie sprawdza. Ewaluacja mierzy tylko liczby wpisane poza kotwicami.
 - Ochrona przed prompt injection i wrażliwość kolumn odporna na aliasy w zapytaniach są odłożone (002, sekcje 10 i 12).
+- Log audytowy to lokalny plik bez rotacji i bez ochrony przed zmianą. CLI i serwer HTTP nie powinny pisać do tego samego pliku jednocześnie.

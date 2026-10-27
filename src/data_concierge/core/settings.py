@@ -37,6 +37,11 @@ class Settings(BaseSettings):
 
     catalog_path: Path = Path("catalog/agent-procedures.yaml")
 
+    # The audit log of every turn (architecture 8.1). A separate switch, because an empty
+    # path in `.env` counts as missing and falls back to the default.
+    audit_log_enabled: bool = True
+    audit_log_path: Path = Path("logs/audit.jsonl")
+
     # Output budget of one model request, thinking included.
     max_output_tokens: PositiveInt = 16_000
     # Corrections the model may make per tool and for the final answer (ModelRetry).
@@ -59,13 +64,14 @@ class ModelExposure(BaseModel, frozen=True):
     summaries. `comment_phase`: a second model pass writes the comment after seeing the tables.
     """
 
+    mode: ModelDataAccess
     dimension_values: bool
     comment_phase: bool
 
     @classmethod
     def for_mode(cls, mode: ModelDataAccess) -> ModelExposure:
         minimal = mode == "minimal"
-        return cls(dimension_values=minimal, comment_phase=minimal)
+        return cls(mode=mode, dimension_values=minimal, comment_phase=minimal)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> ModelExposure:

@@ -1,16 +1,20 @@
 """The composition root offline: startup validation and the configured model."""
 
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from anthropic import AsyncAnthropic
 from pydantic import SecretStr
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
+from data_concierge.audit.repository import JsonlAuditLog, NullAuditLog
 from data_concierge.bootstrap import CompositionRoot, DuckDBSessionFactory
 from data_concierge.catalog.models import Catalog, DataRange, ProcedureMetadata
+from data_concierge.catalog.service import CatalogService
 from data_concierge.core.context import RequestContext
 from data_concierge.core.errors import ConfigurationError
 from data_concierge.core.settings import Settings
@@ -101,3 +105,52 @@ def test_session_summaries_follow_the_configured_mode(
 
     # CustomerName is a sensitive dimension, so neither mode shows it.
     assert set(summary.stats) == dimension_stats
+
+
+def test_audit_log_writes_to_the_configured_file_when_enabled(
+    agent_settings: Settings, tmp_path: Path
+) -> None:
+    path = tmp_path / "audit.jsonl"
+    enabled = agent_settings.model_copy(update={"audit_log_enabled": True, "audit_log_path": path})
+
+    log = CompositionRoot.audit_log(enabled)
+
+    assert isinstance(log, JsonlAuditLog)
+    assert log.path == path
+
+
+def test_audit_log_keeps_nothing_when_disabled(agent_settings: Settings) -> None:
+    disabled = agent_settings.model_copy(update={"audit_log_enabled": False})
+
+    assert isinstance(CompositionRoot.audit_log(disabled), NullAuditLog)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.anyio
+async def test_assembled_service_writes_turns_to_the_audit_log_only_when_enabled(
+    agent_settings: Settings,
+    repository: ProcedureRepository,
+    scripted: Callable[..., FunctionModel],
+    data_ranges: dict[str, DataRange],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    enabled: bool,
+) -> None:
+    # The catalog check needs SQL Server; the wiring under test starts after it.
+    monkeypatch.setattr(CatalogService, "validate", lambda self: None)
+    monkeypatch.setattr(CatalogService, "load_data_ranges", lambda self: data_ranges)
+    path = tmp_path / "audit.jsonl"
+    settings = agent_settings.model_copy(
+        update={"audit_log_enabled": enabled, "audit_log_path": path}
+    )
+    present = ToolCallPart("present_result", {"status": "ok", "message": "Gotowe."})
+    root = CompositionRoot.assemble(settings, MissingProcedures(), repository, scripted(present))
+
+    response = await root.ask_service.ask("Raport", user_id=7)
+
+    if enabled:
+        events = JsonlAuditLog(path).events(response.session_id)
+        kinds = [event.event for event in events]
+        assert (kinds[0], kinds[-1]) == ("request", "response")
+    else:
+        assert not path.exists()

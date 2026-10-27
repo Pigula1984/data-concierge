@@ -7,6 +7,7 @@ from pydantic_ai.messages import ModelMessage
 
 from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.deps import AgentDeps
+from data_concierge.audit.service import TurnAudit
 from data_concierge.core.context import RequestContext
 from data_concierge.procedures.service import ProcedureService
 from data_concierge.query.service import QueryService
@@ -24,9 +25,13 @@ class Session:
     assembler: ResponseAssembler
     history: tuple[ModelMessage, ...] = ()
 
-    def deps(self, context: RequestContext) -> AgentDeps:
+    def deps(self, context: RequestContext, audit: TurnAudit) -> AgentDeps:
         return AgentDeps(
-            context=context, procedures=self.procedures, queries=self.queries, results=self.results
+            context=context,
+            procedures=self.procedures,
+            queries=self.queries,
+            results=self.results,
+            audit=audit,
         )
 
     def with_history(self, history: tuple[ModelMessage, ...]) -> Session:

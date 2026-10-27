@@ -23,9 +23,16 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import ToolDefinition
 
+from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
+from data_concierge.agent.service import AgentService
+from data_concierge.api.service import AskService
+from data_concierge.api.sessions import InMemorySessionRepository
+from data_concierge.audit.repository import AuditLog, NullAuditLog
+from data_concierge.audit.service import AuditService, TurnAudit
+from data_concierge.bootstrap import DuckDBSessionFactory
 from data_concierge.catalog.models import Catalog, CatalogEntry, DataRange
 from data_concierge.catalog.repository import YamlCatalogRepository
 from data_concierge.core.context import RequestContext
@@ -286,6 +293,7 @@ def agent_settings(mode: ModelDataAccess) -> Settings:
         sql_server="localhost",
         sql_password=SecretStr("unused"),
         model_data_access=mode,
+        audit_log_enabled=False,
         _env_file=None,
     )
 
@@ -328,11 +336,13 @@ def results(exposure: ModelExposure) -> ResultService:
 
 @pytest.fixture
 def deps(repository: FakeProcedureRepository, results: ResultService) -> AgentDeps:
+    context = RequestContext(user_id=7, role="analyst")
     return AgentDeps(
-        context=RequestContext(user_id=7, role="analyst"),
+        context=context,
         procedures=ProcedureService(repository, results),
         queries=QueryService(results, QueryPolicy()),
         results=results,
+        audit=TurnAudit(NullAuditLog(), context, session_id="s1"),
     )
 
 
@@ -340,11 +350,13 @@ def deps(repository: FakeProcedureRepository, results: ResultService) -> AgentDe
 def sentinel_deps(results: ResultService) -> AgentDeps:
     """A session whose procedures return the sentinel rows."""
     repository = FakeProcedureRepository(rows=SENTINEL_ROWS_BY_PROCEDURE)
+    context = RequestContext(user_id=7, role="analyst")
     return AgentDeps(
-        context=RequestContext(user_id=7, role="analyst"),
+        context=context,
         procedures=ProcedureService(repository, results),
         queries=QueryService(results, QueryPolicy()),
         results=results,
+        audit=TurnAudit(NullAuditLog(), context, session_id="s1"),
     )
 
 
@@ -391,3 +403,40 @@ def tool_definitions() -> ToolDefinitions:
         return seen
 
     return definitions
+
+
+ASK_TODAY = date(2025, 4, 15)
+
+
+@pytest.fixture
+def ask_service(
+    agent_tools: tuple[Tool[AgentDeps], ...],
+    instructions: str,
+    agent_settings: Settings,
+    exposure: ModelExposure,
+    repository: FakeProcedureRepository,
+    scripted: Callable[..., FunctionModel],
+) -> Callable[..., AskService]:
+    """`ask_service(model, comments, audit_log)`: the tools phase and the comment phase scripted
+    apart, and the audit log of the turns."""
+
+    def build(
+        model: FunctionModel,
+        comments: FunctionModel | None = None,
+        audit_log: AuditLog | None = None,
+    ) -> AskService:
+        agent = AgentService(model, agent_tools, instructions, agent_settings)
+        comment = CommentService(comments or scripted(), agent_settings)
+        factory = DuckDBSessionFactory(repository, agent_settings)
+        sessions = InMemorySessionRepository()
+        return AskService(
+            agent,
+            comment,
+            sessions,
+            factory,
+            exposure,
+            today=lambda: ASK_TODAY,
+            audit=AuditService(audit_log) if audit_log is not None else None,
+        )
+
+    return build
