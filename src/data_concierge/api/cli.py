@@ -1,5 +1,6 @@
-"""Command line entry point: `data-concierge ask` for one turn, `data-concierge chat` for a
-conversation read from standard input. Each turn prints the response JSON of section 9.
+"""Command line entry point: `data-concierge ask` for one turn, printed as the response JSON of
+section 9, and `data-concierge chat` for a conversation read from standard input, printed as
+text the user reads, or as the response JSON of every turn with `--diagnostic`.
 `data-concierge audit` prints a turn or a conversation from the audit log (section 8.1)."""
 
 import argparse
@@ -9,16 +10,19 @@ import json
 import logging
 import sys
 from collections.abc import Callable, Sequence
-from typing import TextIO
+from typing import Protocol, TextIO, override
 
 from pydantic import JsonValue
 
-from data_concierge.api.schemas import Response
+from data_concierge.agent.formatting import ValueFormatter
+from data_concierge.api.schemas import Clarification, Response, ResponseColumn, ResponseTable
 from data_concierge.api.service import AskService
 from data_concierge.audit.models import AuditEvent, AuditEventKind
 from data_concierge.audit.service import AuditTrail
 from data_concierge.bootstrap import CompositionRoot
 from data_concierge.core.settings import Settings
+from data_concierge.core.types import ColumnKind, ColumnRole
+from data_concierge.results.models import JsonScalar
 
 
 class CommandLine:
@@ -39,8 +43,13 @@ class CommandLine:
             "ask", parents=[user], help="answer one prompt and print the response JSON"
         )
         ask.add_argument("prompt")
-        commands.add_parser(
+        chat = commands.add_parser(
             "chat", parents=[user], help="one conversation, one prompt per line of standard input"
+        )
+        chat.add_argument(
+            "--diagnostic",
+            action="store_true",
+            help="print the response JSON of every turn instead of the conversation",
         )
         audit = commands.add_parser(
             "audit", help="print a turn or a conversation from the audit log, step by step"
@@ -51,31 +60,168 @@ class CommandLine:
     async def run(self, args: argparse.Namespace) -> int:
         if args.command == "ask":
             return await self.ask(args.prompt, args.user)
-        return await self.chat(args.user)
+        if args.diagnostic:
+            return await self.chat(args.user, JsonPrinter(self._stdout))
+        return await self.chat(args.user, ConversationPrinter(self._stdout, self._stdin.isatty()))
 
     async def ask(self, prompt: str, user_id: int) -> int:
         response = await self._service.ask(prompt, user_id)
-        self._write(response)
+        JsonPrinter(self._stdout).answer(prompt, response)
         return 1 if response.status == "error" else 0
 
-    async def chat(self, user_id: int) -> int:
+    async def chat(self, user_id: int, printer: ResponsePrinter) -> int:
         session_id: str | None = None
-        for line in self._stdin:
-            prompt = line.strip()
-            if not prompt:
-                continue
-            response = await self._service.ask(prompt, user_id, session_id)
-            self._write(response)
-            # A dropped session cannot be continued, so the next line starts a new one.
-            if self._service.has_session(response.session_id):
-                session_id = response.session_id
-            else:
-                session_id = None
+        session_ids: list[str] = []
+        printer.ready()
+        try:
+            for line in self._stdin:
+                if prompt := line.strip():
+                    response = await self._service.ask(prompt, user_id, session_id)
+                    printer.answer(prompt, response)
+                    if response.session_id not in session_ids:
+                        session_ids.append(response.session_id)
+                    # A dropped session cannot be continued, so the next line starts a new one.
+                    if self._service.has_session(response.session_id):
+                        session_id = response.session_id
+                    else:
+                        session_id = None
+                printer.ready()
+        finally:
+            # Also on Ctrl+C, so the session ids for `audit` are not lost.
+            printer.close(session_ids)
         return 0
 
-    def _write(self, response: Response) -> None:
+
+class ResponsePrinter(Protocol):
+    """Writes the turns of a conversation to standard output."""
+
+    def ready(self) -> None:
+        """Called before the next prompt is read."""
+        ...
+
+    def answer(self, prompt: str, response: Response) -> None: ...
+
+    def close(self, session_ids: Sequence[str]) -> None:
+        """Called at the end of standard input with every session of the conversation."""
+        ...
+
+
+class JsonPrinter(ResponsePrinter):
+    """Prints the response JSON of section 9, one document per turn."""
+
+    def __init__(self, stdout: TextIO) -> None:
+        self._stdout = stdout
+
+    @override
+    def ready(self) -> None:
+        pass
+
+    @override
+    def answer(self, prompt: str, response: Response) -> None:
         self._stdout.write(response.model_dump_json(indent=2) + "\n")
         self._stdout.flush()
+
+    @override
+    def close(self, session_ids: Sequence[str]) -> None:
+        pass
+
+
+class ConversationPrinter(ResponsePrinter):
+    """Prints what the user reads: the message, the tables as aligned text, the assumptions
+    and the clarification question. Provenance and session ids stay in `--diagnostic` and the
+    audit log; the session ids are printed once, at the end, for `data-concierge audit`."""
+
+    MAX_TABLE_ROWS = 20
+    PROMPT_MARK = "> "
+
+    def __init__(self, stdout: TextIO, interactive: bool) -> None:
+        self._stdout = stdout
+        # Typed prompts are already on the screen; piped ones are echoed to show the turns.
+        self._interactive = interactive
+        self._formatter = ValueFormatter()
+
+    @override
+    def ready(self) -> None:
+        if self._interactive:
+            self._stdout.write(self.PROMPT_MARK)
+            self._stdout.flush()
+
+    @override
+    def answer(self, prompt: str, response: Response) -> None:
+        lines = [] if self._interactive else [self.PROMPT_MARK + prompt]
+        lines += ["", response.message]
+        for table in response.tables:
+            lines += ["", *self._table(table)]
+        if response.clarification:
+            lines += ["", *self._clarification(response.message, response.clarification)]
+        if response.assumptions:
+            lines += ["", "Założenia:", *(f"  - {a}" for a in response.assumptions)]
+        self._write([*lines, ""])
+
+    @override
+    def close(self, session_ids: Sequence[str]) -> None:
+        lines = [""] if self._interactive else []
+        self._write(
+            lines + [f"Przebieg rozmowy: uv run data-concierge audit {s}" for s in session_ids]
+        )
+
+    def _write(self, lines: list[str]) -> None:
+        self._stdout.write("".join(line + "\n" for line in lines))
+        self._stdout.flush()
+
+    def _clarification(self, message: str, clarification: Clarification) -> list[str]:
+        lines = [] if clarification.question == message else [clarification.question]
+        candidates = [(str(c.id), c.description) for c in clarification.candidates]
+        if candidates:
+            lines += self._grid(("id", "opis"), candidates, right_aligned=(True, False))
+        return lines
+
+    def _table(self, table: ResponseTable) -> list[str]:
+        shown = table.rows[: self.MAX_TABLE_ROWS]
+        cells = [
+            tuple(
+                self._cell(value, column) for value, column in zip(row, table.columns, strict=True)
+            )
+            for row in shown
+        ]
+        lines = [
+            f"{table.title} (wiersze: {table.row_count})",
+            *self._grid(
+                tuple(c.name for c in table.columns),
+                cells,
+                right_aligned=tuple(self._is_number(c) for c in table.columns),
+            ),
+        ]
+        if table.row_count > len(shown):
+            lines.append(f"  … pozostałe wiersze: {table.row_count - len(shown)}")
+        if table.truncated:
+            lines.append("  (wynik niepełny: obcięty limitem wierszy)")
+        return lines
+
+    def _cell(self, value: JsonScalar, column: ResponseColumn) -> str:
+        if value is None:
+            return ""
+        # The response carries no column roles; grouping only decimals keeps ids ungrouped.
+        role = ColumnRole.MEASURE if column.type.kind is ColumnKind.DECIMAL else ColumnRole.ID
+        return self._formatter.format(value, column.type, role)
+
+    @staticmethod
+    def _is_number(column: ResponseColumn) -> bool:
+        return column.type.kind in (ColumnKind.INT, ColumnKind.DECIMAL)
+
+    @staticmethod
+    def _grid(
+        header: tuple[str, ...], rows: Sequence[tuple[str, ...]], right_aligned: tuple[bool, ...]
+    ) -> list[str]:
+        widths = [max(len(text) for text in column) for column in zip(header, *rows, strict=True)]
+        return [
+            "  "
+            + "  ".join(
+                text.rjust(width) if right else text.ljust(width)
+                for text, width, right in zip(line, widths, right_aligned, strict=True)
+            ).rstrip()
+            for line in (header, *rows)
+        ]
 
 
 class AuditTrailPrinter:

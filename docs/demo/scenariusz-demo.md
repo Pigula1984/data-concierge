@@ -128,14 +128,16 @@ $env:DC_MODEL_DATA_ACCESS = "none"
 uv run data-concierge chat --user 1
 ```
 
-Wpisz kolejno (każdy wiersz zatwierdź `Enter` i poczekaj na JSON):
+Wpisz kolejno (każdy wiersz zatwierdź `Enter` i poczekaj na odpowiedź i znak `>`):
 
 ```text
 Pokaż sprzedaż klienta Mohamed Pal w 2024
 Chodzi o klienta 12698
 ```
 
-Koniec rozmowy: `Ctrl+Z`, potem `Enter`.
+Koniec rozmowy: `Ctrl+Z`, potem `Enter`. `chat` wypisuje wtedy polecenie `audit` z `session_id` rozmowy.
+
+`chat` pokazuje samą rozmowę: komentarz, tabele, założenia i pytanie z kandydatami. Pełny JSON każdej tury, z `session_id` i `provenance`, daje `uv run data-concierge chat --user 1 --diagnostic`.
 
 Oczekiwany wynik:
 
@@ -163,7 +165,7 @@ Zapasowo, gdy nie chcesz pisać na żywo (obie wiadomości w jednym poleceniu):
 "Pokaż sprzedaż klienta Mohamed Pal w 2024", "Chodzi o klienta 12698" | uv run data-concierge chat --user 1
 ```
 
-**Uwaga:** `audit` uruchamiaj po wyjściu z `chat` (`Ctrl+Z`, `Enter`), jako osobne polecenie:
+**Uwaga:** `audit` uruchamiaj po wyjściu z `chat` (`Ctrl+Z`, `Enter`), jako osobne polecenie. Gotowe polecenie z `session_id` jest w ostatnim wierszu wyjścia `chat`:
 
 ```powershell
 uv run data-concierge audit <session_id>
@@ -177,7 +179,7 @@ Wpisany wewnątrz `chat` jest zwykłym promptem: model odpowie `unsupported`.
 |-------|-------------------------|
 | Błąd konfiguracji przy starcie, brak połączenia | SQL Server nie działa: `net start MSSQLSERVER` jako administrator. |
 | Polskie znaki jako `?` albo krzaczki | Brak pierwszego wiersza z punktu 1.3 w tym oknie. |
-| `ConvertFrom-Json` zgłasza błąd | `chat` wypisuje kilka dokumentów JSON naraz. `Show-Answer` działa tylko z `ask`. |
+| `ConvertFrom-Json` zgłasza błąd | `chat` wypisuje tekst, a `chat --diagnostic` kilka dokumentów JSON naraz. `Show-Answer` działa tylko z `ask`. |
 | Tura trwa ponad 15 s | Pierwsze wywołanie po przerwie zapisuje cache. Kolejne powinny trwać 7–10 s. |
 | Status `error` z informacją o wygasłej sesji | Sesje żyją w pamięci procesu. Rozmowa wymaga jednego `chat` albo jednego serwera HTTP. |
 | Brak sieci lub API | Pokaż oczekiwane wyniki z tego pliku i przebieg z `uv run data-concierge audit <session_id>` z wcześniejszej próby. |

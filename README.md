@@ -63,7 +63,9 @@ Rozmowa: każdy wiersz standardowego wejścia to kolejna wiadomość w tej samej
 
 `uv run data-concierge chat --user 1` bez potoku czyta wiadomości z klawiatury. Koniec rozmowy to `Ctrl+Z`, potem `Enter`.
 
-Każda tura wypisuje odpowiedź JSON. Kod wyjścia `ask` to 1 przy statusie `error`.
+`chat` pokazuje samą rozmowę: komentarz, tabele (pierwsze 20 wierszy), założenia i pytanie doprecyzowujące z kandydatami. Na końcu wypisuje polecenie `audit` z `session_id` rozmowy. `chat --diagnostic` wypisuje zamiast tego pełną odpowiedź JSON każdej tury, z `session_id` i `provenance`.
+
+`ask` zawsze wypisuje odpowiedź JSON. Kod wyjścia `ask` to 1 przy statusie `error`.
 
 ### HTTP
 

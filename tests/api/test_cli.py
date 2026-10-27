@@ -1,5 +1,5 @@
-"""The command line with a stub AskService: JSON output, exit codes and the chat session;
-the audit command over the audit log of real turns."""
+"""The command line with a stub AskService: JSON output, exit codes, the chat session and
+the chat text view; the audit command over the audit log of real turns."""
 
 import io
 import json
@@ -12,13 +12,21 @@ from pydantic import JsonValue
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
-from data_concierge.api.cli import AuditTrailPrinter, CommandLine
-from data_concierge.api.schemas import Response
+from data_concierge.api.cli import AuditTrailPrinter, CommandLine, ConversationPrinter
+from data_concierge.api.schemas import (
+    Candidate,
+    Clarification,
+    ProcedureStep,
+    Response,
+    ResponseColumn,
+    ResponseTable,
+)
 from data_concierge.api.service import AskService
 from data_concierge.audit.models import AuditEvent, AuditEventKind
 from data_concierge.audit.repository import JsonlAuditLog
 from data_concierge.audit.service import AuditTrail
 from data_concierge.core.settings import Settings
+from data_concierge.core.types import ColumnKind, ColumnType
 
 pytestmark = pytest.mark.anyio
 
@@ -88,7 +96,12 @@ async def test_chat_passes_the_session_id_of_the_first_turn_to_the_next_turns() 
     service = StubAskService(ok("s1"), ok("s1"))
 
     code, output = await run(
-        service, "chat", "--user", "7", stdin="Sprzedaż klienta Mohamed Pal\n\nTen pierwszy\n"
+        service,
+        "chat",
+        "--user",
+        "7",
+        "--diagnostic",
+        stdin="Sprzedaż klienta Mohamed Pal\n\nTen pierwszy\n",
     )
 
     assert code == 0
@@ -107,6 +120,113 @@ async def test_chat_starts_a_new_session_after_its_session_was_dropped() -> None
 
     assert code == 0
     assert [session_id for _, _, session_id in service.calls] == [None, "s1", None]
+
+
+def sales_table(row_count: int) -> ResponseTable:
+    return ResponseTable(
+        handle="r2",
+        title="Sprzedaż klientów",
+        columns=(
+            ResponseColumn(name="CustomerID", type=ColumnType(kind=ColumnKind.INT)),
+            ResponseColumn(name="name", type=ColumnType(kind=ColumnKind.STRING)),
+            ResponseColumn(name="net_sales", type=ColumnType.decimal(19, 2)),
+        ),
+        rows=tuple((12698 + i, "Mohamed Pal", "91192.37") for i in range(row_count)),
+        row_count=row_count,
+        truncated=False,
+    )
+
+
+async def test_chat_prints_the_answer_without_session_ids_or_provenance() -> None:
+    answer = Response(
+        status="ok",
+        session_id="s1",
+        message="Sprzedaż netto: 91 192,37.",
+        tables=(sales_table(1),),
+        assumptions=("Okres: 2024.",),
+        provenance=(
+            ProcedureStep(
+                handle="r1", name="api.SalesOrder_List", params={}, rows=1, truncated=False
+            ),
+        ),
+    )
+
+    code, output = await run(StubAskService(answer), "chat", "--user", "7", stdin="Sprzedaż\n")
+
+    assert code == 0
+    turn, closing = output.split("Przebieg rozmowy:")
+    assert "> Sprzedaż" in turn
+    assert "Sprzedaż netto: 91 192,37." in turn
+    assert "Sprzedaż klientów (wiersze: 1)" in turn
+    assert "  - Okres: 2024." in turn
+    assert "s1" not in turn
+    assert "api.SalesOrder_List" not in turn
+    assert closing.strip() == "uv run data-concierge audit s1"
+
+
+async def test_chat_aligns_table_columns_and_groups_only_decimals() -> None:
+    answer = Response(status="ok", session_id="s1", message="Gotowe.", tables=(sales_table(2),))
+
+    _, output = await run(StubAskService(answer), "chat", "--user", "7", stdin="Sprzedaż\n")
+
+    assert "  CustomerID  name         net_sales" in output
+    assert "       12698  Mohamed Pal  91\N{NO-BREAK SPACE}192,37" in output
+    assert "       12699  Mohamed Pal" in output
+
+
+async def test_chat_shows_only_the_first_rows_of_a_long_table() -> None:
+    rows = ConversationPrinter.MAX_TABLE_ROWS + 5
+    answer = Response(status="ok", session_id="s1", message="Gotowe.", tables=(sales_table(rows),))
+
+    _, output = await run(StubAskService(answer), "chat", "--user", "7", stdin="Klienci\n")
+
+    assert str(12698 + ConversationPrinter.MAX_TABLE_ROWS - 1) in output
+    assert str(12698 + ConversationPrinter.MAX_TABLE_ROWS) not in output
+    assert "… pozostałe wiersze: 5" in output
+    assert "wynik niepełny" not in output
+
+
+async def test_chat_says_when_a_table_was_cut_by_a_row_limit() -> None:
+    table = sales_table(3).model_copy(update={"truncated": True})
+    answer = Response(status="ok", session_id="s1", message="Gotowe.", tables=(table,))
+
+    _, output = await run(StubAskService(answer), "chat", "--user", "7", stdin="Klienci\n")
+
+    assert "(wynik niepełny: obcięty limitem wierszy)" in output
+
+
+async def test_chat_prints_the_clarification_question_with_candidates() -> None:
+    question = Response(
+        status="needs_clarification",
+        session_id="s1",
+        message="Znaleziono 2 klientów o tej nazwie.",
+        clarification=Clarification(
+            question="Którego wybierasz?",
+            candidates=(
+                Candidate(id=12698, description="AW00012698, Australia, 3"),
+                Candidate(id=20550, description="AW00020550, United Kingdom, 1"),
+            ),
+        ),
+    )
+
+    _, output = await run(StubAskService(question), "chat", "--user", "7", stdin="Mohamed Pal\n")
+
+    assert "Znaleziono 2 klientów o tej nazwie." in output
+    assert "Którego wybierasz?" in output
+    assert "  12698  AW00012698, Australia, 3" in output
+    assert "  20550  AW00020550, United Kingdom, 1" in output
+
+
+async def test_chat_lists_every_session_of_the_conversation_at_the_end() -> None:
+    dropped = Response(status="error", session_id="s1", message="Nie udało się.")
+    service = StubAskService(ok("s1"), dropped, ok("s2"), drop_on_error=True)
+
+    _, output = await run(service, "chat", "--user", "7", stdin="Pierwsza\nDruga\nTrzecia\n")
+
+    assert output.splitlines()[-2:] == [
+        "Przebieg rozmowy: uv run data-concierge audit s1",
+        "Przebieg rozmowy: uv run data-concierge audit s2",
+    ]
 
 
 YEAR_2024 = {"date_from": "2024-01-01", "date_to": "2025-01-01"}
