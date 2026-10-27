@@ -3,8 +3,10 @@
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
@@ -12,6 +14,8 @@ from pydantic_ai.tools import ToolDefinition
 
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.tools import describe_result, query, retry_on_domain_error
+from data_concierge.audit.repository import JsonlAuditLog
+from data_concierge.audit.service import TurnAudit
 from data_concierge.catalog.models import Catalog
 from data_concierge.core.errors import (
     ParameterValidationError,
@@ -242,3 +246,109 @@ async def test_invalid_procedure_arguments_ask_the_model_to_correct_them(
 
     assert isinstance(part, RetryPromptPart)
     assert "date_from: missing" in str(part.content)
+
+
+@pytest.fixture
+def audit_log(tmp_path: Path) -> JsonlAuditLog:
+    return JsonlAuditLog(tmp_path / "audit.jsonl")
+
+
+@pytest.fixture
+def audited(deps: AgentDeps, audit_log: JsonlAuditLog) -> AgentDeps:
+    """The session's deps with an audit of the turn written to `audit_log`."""
+    return replace(deps, audit=TurnAudit(audit_log, deps.context, session_id="s1"))
+
+
+def executions(audit_log: JsonlAuditLog) -> list[dict[str, JsonValue]]:
+    return [event.data for event in audit_log.events("s1") if event.event == "tool_executed"]
+
+
+async def test_procedure_execution_is_audited_with_its_result_and_lineage(
+    audited: AgentDeps,
+    audit_log: JsonlAuditLog,
+    agent_tools: tuple[Tool[AgentDeps], ...],
+    scripted: Callable[..., FunctionModel],
+) -> None:
+    call = ToolCallPart(
+        "sales_order_list", {"date_from": "2024-01-01", "date_to": "2025-01-01"}, "call-1"
+    )
+
+    (part,) = await tool_results(scripted(call), audited, agent_tools)
+
+    assert isinstance(part, ToolReturnPart)
+    assert isinstance(part.content, ResultSummary)
+    (execution,) = executions(audit_log)
+    assert execution["tool"] == "sales_order_list"
+    assert execution["tool_call_id"] == "call-1"
+    assert execution["handle"] == "r1"
+    assert execution["rows"] == part.content.row_count
+    assert execution["truncated"] is False
+    assert execution["lineage"] == {
+        "step": "procedure",
+        "procedure": "api.SalesOrder_List",
+        # The injected @UserId identifies the caller, not the data, so it is left out.
+        "params": {"DateFrom": "2024-01-01", "DateTo": "2025-01-01", "CustomerID": None},
+        "truncated": False,
+    }
+    duration = execution["duration_ms"]
+    assert isinstance(duration, int)
+    assert duration >= 0
+
+
+@pytest.mark.usefixtures("orders")
+async def test_query_execution_is_audited_with_the_submitted_and_executed_sql(
+    audited: AgentDeps, audit_log: JsonlAuditLog, scripted: Callable[..., FunctionModel]
+) -> None:
+    sql = 'SELECT sum("SubTotal") AS net_sales FROM r1'
+
+    await tool_results(scripted(ToolCallPart("query", {"sql": sql})), audited)
+
+    (execution,) = executions(audit_log)
+    assert execution["tool"] == "query"
+    assert execution["handle"] == "r2"
+    assert execution["rows"] == 1
+    lineage = execution["lineage"]
+    assert isinstance(lineage, dict)
+    assert lineage["step"] == "query"
+    assert lineage["sources"] == ["r1"]
+    assert lineage["submitted_sql"] == sql
+    assert lineage["sql"]
+
+
+@pytest.mark.usefixtures("orders")
+async def test_refused_query_is_audited_with_its_error(
+    audited: AgentDeps, audit_log: JsonlAuditLog, scripted: Callable[..., FunctionModel]
+) -> None:
+    sql = "SELECT 1 FROM r1; SELECT 2 FROM r1"
+
+    (part,) = await tool_results(scripted(ToolCallPart("query", {"sql": sql})), audited)
+
+    assert isinstance(part, RetryPromptPart)
+    (execution,) = executions(audit_log)
+    assert execution["error"] == "QueryValidationError"
+    assert execution["message"] == str(part.content)
+    assert "handle" not in execution
+
+
+async def test_procedure_failure_is_audited_with_the_detail_the_model_does_not_see(
+    audited: AgentDeps, audit_log: JsonlAuditLog, scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(ToolCallPart("unconvertible_procedure", {}))
+
+    await tool_results(model, audited, [Tool(unconvertible_procedure)])
+
+    (execution,) = executions(audit_log)
+    assert execution["error"] == "ProcedureError"
+    assert execution["message"] == "api.Test: column CustomerID does not fit the catalog type int"
+    assert execution["detail"] == "Could not convert 'SENTINEL-NAME-7Q' with type str"
+
+
+@pytest.mark.usefixtures("orders")
+async def test_describe_result_is_audited_without_a_new_handle(
+    audited: AgentDeps, audit_log: JsonlAuditLog, scripted: Callable[..., FunctionModel]
+) -> None:
+    await tool_results(scripted(ToolCallPart("describe_result", {"handle": "r1"})), audited)
+
+    (execution,) = executions(audit_log)
+    assert (execution["tool"], execution["handle"]) == ("describe_result", "r1")
+    assert audited.results.handles() == ("r1",)

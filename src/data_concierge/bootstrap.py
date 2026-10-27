@@ -20,6 +20,8 @@ from data_concierge.agent.service import AgentService
 from data_concierge.api.controller import router
 from data_concierge.api.service import AskService
 from data_concierge.api.sessions import InMemorySessionRepository, Session, SessionRepository
+from data_concierge.audit.repository import AuditLog, JsonlAuditLog, NullAuditLog
+from data_concierge.audit.service import AuditService, AuditTrail
 from data_concierge.catalog.repository import (
     ProcedureMetadataRepository,
     SqlServerMetadataRepository,
@@ -112,7 +114,19 @@ class CompositionRoot:
         comments = CommentService(model, settings)
         sessions = sessions if sessions is not None else InMemorySessionRepository()
         factory = DuckDBSessionFactory(procedures, settings)
-        return cls(AskService(agent, comments, sessions, factory, exposure, today))
+        audit = AuditService(cls.audit_log(settings))
+        return cls(AskService(agent, comments, sessions, factory, exposure, today, audit))
+
+    @staticmethod
+    def audit_log(settings: Settings) -> AuditLog:
+        return (
+            JsonlAuditLog(settings.audit_log_path) if settings.audit_log_enabled else NullAuditLog()
+        )
+
+    @staticmethod
+    def audit_trail(settings: Settings) -> AuditTrail:
+        """The audit log read back; needs neither the database nor the model (KTD8)."""
+        return AuditTrail(JsonlAuditLog(settings.audit_log_path))
 
     @staticmethod
     def configured_model(settings: Settings) -> Model:

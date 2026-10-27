@@ -8,12 +8,15 @@ tool descriptions depend on the mode, so the registry sets them from the texts b
 
 import functools
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from time import perf_counter
 from typing import cast
 
+from pydantic import JsonValue
 from pydantic_ai import ModelRetry, RunContext, ToolFailed
 
 from data_concierge.agent.deps import AgentDeps
+from data_concierge.audit.service import TurnAudit
 from data_concierge.core.errors import (
     ParameterValidationError,
     ProcedureError,
@@ -49,7 +52,8 @@ INPUT_ERRORS = (ParameterValidationError, UnknownHandleError, QueryError)
 
 # module-level: a decorator wraps a tool function before Pydantic AI reads its signature.
 def retry_on_domain_error[**P, R](tool: Callable[P, R]) -> Callable[P, R]:
-    """Maps domain errors to ModelRetry (fixable input) or ToolFailed (execution failure).
+    """Maps domain errors to ModelRetry (fixable input) or ToolFailed (execution failure), and
+    records every execution in the audit log (architecture, section 8.1).
 
     ToolFailed returns the message without a request to correct the call and does not use the
     retry budget; the instructions tell the model what to do after it. The model gets only the
@@ -59,18 +63,48 @@ def retry_on_domain_error[**P, R](tool: Callable[P, R]) -> Callable[P, R]:
 
     @functools.wraps(tool)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        # Every tool takes the run context first.
+        ctx = cast(RunContext[AgentDeps], args[0])
+        started = perf_counter()
+
+        def record(outcome: Mapping[str, JsonValue]) -> None:
+            ctx.deps.audit.record(
+                "tool_executed",
+                {
+                    "tool": ctx.tool_name,
+                    "tool_call_id": ctx.tool_call_id,
+                    "duration_ms": round((perf_counter() - started) * 1000),
+                    **outcome,
+                },
+            )
+
         try:
-            return tool(*args, **kwargs)
+            result = tool(*args, **kwargs)
         except (*INPUT_ERRORS, ProcedureError) as exc:
+            record({**TurnAudit.failure(exc), "detail": exc.detail})
             if exc.detail is not None:
-                # Every tool takes the run context first.
-                context = cast(RunContext[AgentDeps], args[0]).deps.context
                 logger.warning(
-                    "tool error (correlation id %s): %s", context.correlation_id, exc.detail
+                    "tool error (correlation id %s): %s",
+                    ctx.deps.context.correlation_id,
+                    exc.detail,
                 )
             if isinstance(exc, ProcedureError):
                 raise ToolFailed(str(exc)) from exc
             raise ModelRetry(str(exc)) from exc
+        except Exception as exc:
+            record(TurnAudit.failure(exc))
+            raise
+        if isinstance(result, ResultSummary):
+            lineage = ctx.deps.results.describe(result.handle).lineage
+            record(
+                {
+                    "handle": result.handle,
+                    "rows": result.row_count,
+                    "truncated": result.truncated,
+                    "lineage": lineage.model_dump(mode="json"),
+                }
+            )
+        return result
 
     return wrapper
 

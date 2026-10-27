@@ -60,8 +60,9 @@ def ask(
     settings: Settings, agent_client: SqlServerClient, scripted: Callable[..., FunctionModel]
 ) -> Callable[..., Awaitable[Response]]:
     async def run(prompt: str, *steps: ToolCallPart) -> Response:
+        # Real customer data, which the audit log would keep.
         root = CompositionRoot.assemble(
-            settings,
+            settings.model_copy(update={"audit_log_enabled": False}),
             SqlServerMetadataRepository(agent_client),
             SqlServerProcedureRepository(agent_client),
             scripted(*steps),

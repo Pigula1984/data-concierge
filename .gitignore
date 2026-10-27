@@ -15,5 +15,8 @@ dist/
 # Local configuration with secrets
 .env
 
+# Audit log (prompts and responses with customer data)
+logs/
+
 # Evaluation run archives (uv run pytest -m eval tests/evals)
 evals/runs/

@@ -2,11 +2,12 @@
 
 import logging
 from collections.abc import Callable
-from datetime import date
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from pydantic_ai import Tool
+from pydantic import JsonValue
+from pydantic_ai import capture_run_messages
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
@@ -18,46 +19,20 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from data_concierge.agent.comment import CommentService
-from data_concierge.agent.deps import AgentDeps
-from data_concierge.agent.service import AgentService
 from data_concierge.api.service import AskService
-from data_concierge.api.sessions import InMemorySessionRepository
-from data_concierge.bootstrap import DuckDBSessionFactory
+from data_concierge.audit.models import AuditEvent
+from data_concierge.audit.repository import JsonlAuditLog
 from data_concierge.core.errors import ResultStoreError
-from data_concierge.core.settings import ModelExposure, Settings
-from data_concierge.procedures.repository import ProcedureRepository
+from data_concierge.core.settings import Settings
 from data_concierge.results.repository import DuckDBResultStore
 
 pytestmark = pytest.mark.anyio
 
-TODAY = date(2025, 4, 15)
 YEAR_2024 = {"date_from": "2024-01-01", "date_to": "2025-01-01"}
 MONTHLY_SQL = (
     "SELECT CAST(date_trunc('month', \"OrderDate\") AS DATE) AS month, "
     'sum("SubTotal") AS net_sales FROM r1 GROUP BY 1 ORDER BY month'
 )
-
-
-@pytest.fixture
-def ask_service(
-    agent_tools: tuple[Tool[AgentDeps], ...],
-    instructions: str,
-    agent_settings: Settings,
-    exposure: ModelExposure,
-    repository: ProcedureRepository,
-    scripted: Callable[..., FunctionModel],
-) -> Callable[..., AskService]:
-    """`ask_service(model, comments)`: the tools phase and the comment phase scripted apart."""
-
-    def build(model: FunctionModel, comments: FunctionModel | None = None) -> AskService:
-        agent = AgentService(model, agent_tools, instructions, agent_settings)
-        comment = CommentService(comments or scripted(), agent_settings)
-        factory = DuckDBSessionFactory(repository, agent_settings)
-        sessions = InMemorySessionRepository()
-        return AskService(agent, comment, sessions, factory, exposure, today=lambda: TODAY)
-
-    return build
 
 
 def present(status: str = "ok", **fields: object) -> ToolCallPart:
@@ -378,3 +353,279 @@ async def test_comment_phase_runs_only_for_status_ok_in_mode_minimal(
 
     assert response.status == status
     assert requests(comments) == []
+
+
+@pytest.fixture
+def audit_log(tmp_path: Path) -> JsonlAuditLog:
+    return JsonlAuditLog(tmp_path / "audit.jsonl")
+
+
+def kinds(events: tuple[AuditEvent, ...]) -> list[str]:
+    return [event.event for event in events]
+
+
+async def test_a_turn_is_framed_by_request_and_response_events(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+) -> None:
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": MONTHLY_SQL}),
+        present(tables=[{"handle": "r2", "title": "Sprzedaż po miesiącach"}]),
+    )
+
+    response = await ask_service(model, audit_log=audit_log).ask("Raport za 2024", user_id=7)
+
+    events = audit_log.events(response.session_id)
+    assert kinds(events)[0] == "request"
+    assert kinds(events)[-1] == "response"
+    assert len({event.correlation_id for event in events}) == 1
+    assert {(event.session_id, event.user_id) for event in events} == {(response.session_id, 7)}
+    request = events[0].data
+    assert request["prompt"] == "Raport za 2024"
+    assert request["current_date"] == "2025-04-15"
+    assert request["continued_session"] is False
+    assert request["model_data_access"] == "none"
+    assert request["model"] == model.model_name
+    final = events[-1].data
+    assert final["response"] == response.model_dump(mode="json")
+    assert isinstance(final["duration_ms"], int)
+
+
+async def test_the_next_turn_of_a_session_has_its_own_correlation_id(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+) -> None:
+    service = ask_service(scripted(present(), present()), audit_log=audit_log)
+
+    first = await service.ask("Pierwsze", user_id=7)
+    await service.ask("Drugie", user_id=7, session_id=first.session_id)
+
+    requests_ = [e for e in audit_log.events(first.session_id) if e.event == "request"]
+    assert [e.data["continued_session"] for e in requests_] == [False, True]
+    assert requests_[0].correlation_id != requests_[1].correlation_id
+
+
+async def test_an_expired_session_is_audited_without_agent_events(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+) -> None:
+    service = ask_service(scripted(present()), audit_log=audit_log)
+
+    await service.ask("Dalej", user_id=7, session_id="no-such-session")
+
+    events = audit_log.events("no-such-session")
+    assert kinds(events) == ["request", "response"]
+    response = events[1].data["response"]
+    assert isinstance(response, dict)
+    assert response["status"] == "error"
+
+
+async def test_a_broken_result_store_is_audited_as_a_failed_turn(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ask_service(
+        scripted(
+            ToolCallPart("sales_order_list", YEAR_2024), ToolCallPart("query", {"sql": MONTHLY_SQL})
+        ),
+        audit_log=audit_log,
+    )
+
+    def broken(self: DuckDBResultStore, sql: str) -> None:
+        raise ResultStoreError("the session's DuckDB failed internally: invalidated")
+
+    monkeypatch.setattr(DuckDBResultStore, "describe_query", broken)
+
+    failed = await service.ask("Sprzedaż po miesiącach w 2024", user_id=7)
+
+    events = audit_log.events(failed.session_id)
+    assert kinds(events)[-3:] == ["tool_executed", "turn_failed", "response"]
+    assert events[-3].data["error"] == "ResultStoreError"
+    assert events[-2].data == {
+        "error": "ResultStoreError",
+        "message": "the session's DuckDB failed internally: invalidated",
+    }
+
+
+@pytest.mark.parametrize("mode", ["minimal"])
+async def test_the_comment_phase_is_audited(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+) -> None:
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": TOTAL_SQL}),
+        present(message="Sprzedaż netto w 2024: {r2.net_sales}."),
+    )
+    comments = scripted(comment("Razem {r2.net_sales}."))
+
+    response = await ask_service(model, comments, audit_log).ask("Sprzedaż w 2024", user_id=7)
+
+    events = audit_log.events(response.session_id)
+    [phase] = [event for event in events if event.event == "comment"]
+    assert phase.data == {"comment": "Razem {r2.net_sales}."}
+    assert events[-1].data["response"] == response.model_dump(mode="json")
+
+
+@pytest.mark.parametrize("mode", ["minimal"])
+async def test_a_failed_comment_phase_is_audited_with_its_detail(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+) -> None:
+    def overloaded(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(529, "claude-haiku-5-5", {"type": "overloaded_error"})
+
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": TOTAL_SQL}),
+        present(message="Sprzedaż netto w 2024: {r2.net_sales}."),
+    )
+    service = ask_service(model, FunctionModel(overloaded), audit_log)
+
+    response = await service.ask("Sprzedaż w 2024", user_id=7)
+
+    [phase] = [e for e in audit_log.events(response.session_id) if e.event == "comment"]
+    assert set(phase.data) == {"failed"}
+    assert phase.data["failed"]
+
+
+def input_parts(event: AuditEvent) -> list[dict[str, JsonValue]]:
+    """The tool results and retry prompts of a `model_input` event."""
+    parts = event.data["parts"]
+    assert isinstance(parts, list)
+    return [part for part in parts if isinstance(part, dict)]
+
+
+def calls(event: AuditEvent) -> list[tuple[object, object]]:
+    tool_calls = event.data["tool_calls"]
+    assert isinstance(tool_calls, list)
+    return [(c["tool"], c["tool_call_id"]) for c in tool_calls if isinstance(c, dict)]
+
+
+async def test_model_steps_and_executions_are_audited_in_the_order_of_the_flow(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+) -> None:
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024, "call-1"),
+        ToolCallPart("query", {"sql": MONTHLY_SQL}, "call-2"),
+        present(tables=[{"handle": "r2", "title": "Sprzedaż po miesiącach"}]),
+    )
+
+    response = await ask_service(model, audit_log=audit_log).ask("Raport za 2024", user_id=7)
+
+    events = audit_log.events(response.session_id)
+    assert kinds(events) == [
+        "request",
+        "model_response",
+        "tool_executed",
+        "model_input",
+        "model_response",
+        "tool_executed",
+        "model_input",
+        "model_response",
+        "response",
+    ]
+    assert calls(events[1]) == [("sales_order_list", "call-1")]
+    assert (events[2].data["tool"], events[2].data["tool_call_id"]) == (
+        "sales_order_list",
+        "call-1",
+    )
+    [returned] = input_parts(events[3])
+    assert isinstance(returned, dict)
+    assert (returned["kind"], returned["tool_call_id"]) == ("tool_return", "call-1")
+    content = returned["content"]
+    assert isinstance(content, dict)
+    assert content["handle"] == "r1"
+    assert [tool for tool, _ in calls(events[7])] == ["present_result"]
+    present_args = events[7].data["tool_calls"]
+    assert isinstance(present_args, list)
+    assert isinstance(present_args[0], dict)
+    assert present_args[0]["args"] == {
+        "status": "ok",
+        "message": "Gotowe.",
+        "tables": [{"handle": "r2", "title": "Sprzedaż po miesiącach"}],
+    }
+    usage = events[1].data["usage"]
+    assert isinstance(usage, dict)
+    assert isinstance(usage["input_tokens"], int)
+    assert usage["input_tokens"] > 0
+
+
+async def test_a_turn_stopped_by_the_step_limit_keeps_its_steps_in_the_audit(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    agent_settings: Settings,
+    audit_log: JsonlAuditLog,
+) -> None:
+    steps = agent_settings.max_agent_steps
+    model = scripted(*(ToolCallPart("sales_order_list", YEAR_2024) for _ in range(steps + 2)))
+
+    response = await ask_service(model, audit_log=audit_log).ask("Raport", user_id=7)
+
+    assert response.status == "error"
+    events = audit_log.events(response.session_id)
+    assert kinds(events).count("model_response") == steps
+    assert kinds(events)[-2:] == ["turn_failed", "response"]
+    assert events[-2].data["error"] == "UsageLimitExceeded"
+
+
+async def test_capture_of_run_messages_still_sees_the_turn(
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(ToolCallPart("sales_order_list", YEAR_2024), present())
+
+    with capture_run_messages() as messages:
+        await ask_service(model).ask("Raport", user_id=7)
+
+    calls_seen = [
+        part.tool_name
+        for message in messages
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+        if isinstance(part, ToolCallPart)
+    ]
+    assert calls_seen == ["sales_order_list", "present_result"]
+
+
+async def test_a_model_provider_error_is_audited_as_a_failed_turn(
+    ask_service: Callable[..., AskService], audit_log: JsonlAuditLog
+) -> None:
+    def overloaded(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(529, "claude-haiku-5-5", {"type": "overloaded_error"})
+
+    response = await ask_service(FunctionModel(overloaded), audit_log=audit_log).ask(
+        "Raport", user_id=7
+    )
+
+    events = audit_log.events(response.session_id)
+    assert kinds(events) == ["request", "turn_failed", "response"]
+    assert events[1].data["error"] == "ModelHTTPError"
+
+
+async def test_an_event_the_log_cannot_write_does_not_fail_the_turn(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A lone surrogate is valid in a Python string but cannot be encoded as JSON text.
+    prompt = "Raport \ud800"
+
+    with caplog.at_level(logging.WARNING, logger="data_concierge.audit"):
+        response = await ask_service(scripted(present()), audit_log=audit_log).ask(
+            prompt, user_id=7
+        )
+
+    assert response.status == "ok"
+    assert any("audit event request not" in r.getMessage() for r in caplog.records)
+    assert kinds(audit_log.events(response.session_id))[-1] == "response"

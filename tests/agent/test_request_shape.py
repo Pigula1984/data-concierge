@@ -90,6 +90,7 @@ async def test_request_has_effort_cache_points_and_strict_tools(
     assert request["output_config"]["effort"] == "medium"
     assert request["max_tokens"] == 16_000
     assert request["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
+    assert request["thinking"]["display"] == "summarized"
     assert "cache_control" in request["system"][-1]
     assert "cache_control" in request["tools"][-1]
     assert tools["sales_order_list"]["strict"] is True

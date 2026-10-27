@@ -53,6 +53,15 @@ def test_settings_defaults_follow_architecture_limits(monkeypatch: pytest.Monkey
     assert settings.max_response_rows == 10_000
     assert settings.max_query_rows == 100_000
     assert settings.model_data_access == "none"
+    assert settings.audit_log_enabled is True
+    assert settings.audit_log_path == Path("logs/audit.jsonl")
+
+
+def test_audit_log_is_switched_off_by_its_own_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("DC_AUDIT_LOG_ENABLED", "false")
+
+    assert Settings(_env_file=None).audit_log_enabled is False
 
 
 @pytest.mark.parametrize(

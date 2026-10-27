@@ -57,8 +57,9 @@ def eval_root(
     eval_sessions: InMemorySessionRepository,
     eval_clock: EvalClock,
 ) -> CompositionRoot:
+    # The evaluation runs on real customer data, which the audit log would keep.
     return CompositionRoot.assemble(
-        settings,
+        settings.model_copy(update={"audit_log_enabled": False}),
         SqlServerMetadataRepository(agent_client),
         recorder,
         eval_model,
