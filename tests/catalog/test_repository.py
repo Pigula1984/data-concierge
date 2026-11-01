@@ -67,6 +67,7 @@ SENSITIVE_COLUMNS = {
     ("sales_order_list", "CustomerName"),
     ("sales_order_line_list", "CustomerName"),
     ("sales_order_line_list", "ProductName"),
+    ("customer_list", "City"),
     ("product_search", "ProductName"),
     ("product_search", "ProductNumber"),
     ("get_bill_of_materials", "ComponentDesc"),

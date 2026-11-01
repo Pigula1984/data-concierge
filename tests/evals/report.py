@@ -75,12 +75,17 @@ class NumberAudit:
     (architecture 002, section 9). A measurement only: it never fails a case."""
 
     @classmethod
-    def outside_anchors(cls, history: Sequence[ModelMessage]) -> tuple[str, ...]:
+    def outside_anchors(
+        cls, history: Sequence[ModelMessage], comment: str | None = None
+    ) -> tuple[str, ...]:
         """The numbers of the turn's template: the last `present_result` of the session
-        history, whose message the comment phase has already replaced (plan KTD11)."""
+        history, with the comment of the comment phase instead of its draft, because the
+        history keeps only the draft (architecture 002, section 6.3)."""
         template = cls._template(history)
         if template is None:
             return ()
+        if comment is not None:
+            template = template.model_copy(update={"message": comment})
         return tuple(number for text in template.texts for number in cls._numbers(text))
 
     @staticmethod

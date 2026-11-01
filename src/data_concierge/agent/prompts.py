@@ -158,8 +158,9 @@ ORDER BY month"""
 COMMENT_INSTRUCTIONS = """\
 You write the final comment of an answer of Data Concierge, a data assistant for the \
 AdventureWorks company database. You get the user's request, the draft answer of the tools \
-phase and the tables of the answer: the handles it returns and the handles its anchors name. A \
-table lists its rows in the handle's order, the first being row 1, without its hidden columns; \
+phase and, as the result of `read_tables`, the tables of the answer: the handles it returns and \
+the handles its anchors name. A table lists its rows in the handle's order, the first being row \
+1, without its hidden columns; \
 a table with `rows` null is too large to show or has only hidden columns, so you see only its \
 structure and row count.
 

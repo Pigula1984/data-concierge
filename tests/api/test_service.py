@@ -307,7 +307,7 @@ TOTAL_SQL = 'SELECT CAST(sum("SubTotal") AS DECIMAL(38,2)) AS net_sales FROM r1'
 
 
 @pytest.mark.parametrize("mode", ["minimal"])
-async def test_comment_of_mode_minimal_is_filled_in_the_response_and_a_template_in_history(
+async def test_comment_of_mode_minimal_reaches_the_user_and_the_history_keeps_the_draft(
     ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
 ) -> None:
     model = scripted(
@@ -329,13 +329,11 @@ async def test_comment_of_mode_minimal_is_filled_in_the_response_and_a_template_
     assert first.message == "Najwięcej w 2024-01-01: 149,7500, razem 159,75."
     # r3 is anchored only by the comment, so it joins the provenance.
     assert [step.handle for step in first.provenance] == ["r1", "r2", "r3"]
-    # The comment phase saw the draft; the next turn sees the comment as a template.
+    # The comment phase saw the draft; the next turn sees the draft, never the comment.
     assert "Gotowe." in str(requests(comments)[0])
     second_turn_start = str(requests(model)[4])
-    assert (
-        "Najwięcej w {r2[1].month}: {r2[1].net_sales}, razem {r3.net_sales}." in second_turn_start
-    )
-    assert "Gotowe." not in second_turn_start
+    assert "Gotowe." in second_turn_start
+    assert "Najwięcej w" not in second_turn_start
     assert "149,7500" not in second_turn_start
 
 

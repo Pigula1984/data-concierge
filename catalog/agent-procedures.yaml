@@ -2,7 +2,8 @@
 # Columns of api.* procedures are the contract the db/ scripts implement (plan U8);
 # columns of dbo.* procedures follow their current result sets in AdventureWorks2025.
 # Startup validation compares every entry with the database metadata (plan U10).
-# `sensitive: true` keeps a column's values from the model in every mode (architecture 002, 5.3).
+# `sensitive: true` keeps a column's values from the model in every mode (architecture 002, 5.3):
+# names, business identifiers and text that people outside the company can write.
 # `allowed_roles` limits a procedure to these roles; the backend checks it at every call (8.2).
 
 - procedure: api.Customer_Search
@@ -74,7 +75,7 @@
     - {name: CustomerName,  type: string, role: dimension, sensitive: true}
     - {name: CustomerType,  type: string, role: dimension, values: [individual, store]}
     - {name: AddressType,   type: string, role: dimension, hint: "Rodzaj adresu, np. Home, Main Office, Shipping"}
-    - {name: City,          type: string, role: dimension}
+    - {name: City,          type: string, role: dimension, sensitive: true}
     - {name: StateProvince, type: string, role: dimension}
     - {name: CountryRegion, type: string, role: dimension}
     - {name: Territory,     type: string, role: dimension}

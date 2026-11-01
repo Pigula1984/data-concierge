@@ -144,6 +144,25 @@ def test_the_number_audit_reads_the_last_template_of_the_history() -> None:
     assert NumberAudit.outside_anchors([ModelResponse(parts=[TextPart("...")])]) == ()
 
 
+def test_the_number_audit_reads_the_comment_instead_of_the_draft_in_the_history() -> None:
+    history: list[ModelMessage] = [template("Sprzedaż {r3.net_sales}.", "Okres: 6 500 dni.")]
+
+    audited = NumberAudit.outside_anchors(history, "Razem 43 671 889,50.")
+
+    assert audited == ("43 671 889,50", "6 500")
+
+
+def test_recording_model_gives_the_text_of_a_comment_and_nothing_after_a_tool_call() -> None:
+    model = RecordingModel(FunctionModel(lambda messages, info: template("Szkic.")))
+    assert model.comment is None
+
+    model.responses.append(template("Szkic."))
+    assert model.comment is None
+
+    model.responses.append(ModelResponse(parts=[TextPart("Komentarz.")]))
+    assert model.comment == "Komentarz."
+
+
 def test_turn_trace_counts_query_retries_of_the_last_turn() -> None:
     earlier = ModelRequest(parts=[RetryPromptPart("old", tool_name="query")])
     turn: list[ModelMessage] = [

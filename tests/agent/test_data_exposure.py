@@ -235,12 +235,51 @@ class SentinelSessions:
         )
 
 
-@pytest.mark.parametrize("mode", ["minimal"])
-async def test_in_mode_minimal_rows_reach_only_the_comment_and_sensitive_values_never(
+@pytest.fixture
+def minimal_service(
     agent_tools: tuple[Tool[AgentDeps], ...],
     instructions: str,
     agent_settings: Settings,
     exposure: ModelExposure,
+    sentinel_deps: AgentDeps,
+) -> Callable[[RecordingModel, RecordingModel], AskService]:
+    """AskService over the sentinel rows, the two phases on their recording models."""
+
+    def build(tools_model: RecordingModel, comment_model: RecordingModel) -> AskService:
+        return AskService(
+            AgentService(FunctionModel(tools_model), agent_tools, instructions, agent_settings),
+            CommentService(FunctionModel(comment_model), agent_settings),
+            InMemorySessionRepository(),
+            SentinelSessions(sentinel_deps),
+            RoleDirectory({}),
+            agent_settings.max_prompt_chars,
+            exposure,
+        )
+
+    return build
+
+
+@pytest.mark.parametrize("mode", ["minimal"])
+async def test_text_of_third_parties_reaches_the_user_but_no_phase_of_the_model(
+    minimal_service: Callable[[RecordingModel, RecordingModel], AskService],
+) -> None:
+    tools_model = RecordingModel(
+        ToolCallPart("customer_list", {"city": "Berlin"}),
+        present(tables=[{"handle": "r1", "title": "Klienci"}]),
+    )
+    comment_model = RecordingModel(TextPart("Lista ma {r1#rows} wierszy."))
+
+    response = await minimal_service(tools_model, comment_model).ask("Klienci", user_id=7)
+
+    (table,) = response.tables
+    assert any("SENTINEL-CITY-2B" in row for row in table.rows)
+    assert "SENTINEL-CITY-2B" not in tools_model.text
+    assert "SENTINEL-CITY-2B" not in comment_model.text
+
+
+@pytest.mark.parametrize("mode", ["minimal"])
+async def test_in_mode_minimal_rows_reach_only_the_comment_and_sensitive_values_never(
+    minimal_service: Callable[[RecordingModel, RecordingModel], AskService],
     sentinel_deps: AgentDeps,
 ) -> None:
     tools_model = RecordingModel(
@@ -259,15 +298,7 @@ async def test_in_mode_minimal_rows_reach_only_the_comment_and_sensitive_values_
     comment_model = RecordingModel(
         TextPart("Razem {r3.annual_total}; najwięcej {r4[1].CustomerName}: {r4[1].net_sales}.")
     )
-    service = AskService(
-        AgentService(FunctionModel(tools_model), agent_tools, instructions, agent_settings),
-        CommentService(FunctionModel(comment_model), agent_settings),
-        InMemorySessionRepository(),
-        SentinelSessions(sentinel_deps),
-        RoleDirectory({}),
-        agent_settings.max_prompt_chars,
-        exposure,
-    )
+    service = minimal_service(tools_model, comment_model)
 
     response = await service.ask("Zamówienia klientów z Berlina w 2024", user_id=7)
     await service.ask("A w 2019?", user_id=7, session_id=response.session_id)

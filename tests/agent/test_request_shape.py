@@ -12,11 +12,13 @@ from pydantic_ai.models import override_allow_model_requests
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
+from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import AgentAnswer
 from data_concierge.agent.service import AgentService
 from data_concierge.core.context import RequestContext
 from data_concierge.core.settings import Settings
+from data_concierge.results.service import ResultService
 
 pytestmark = pytest.mark.anyio
 
@@ -40,9 +42,36 @@ ANSWER = {
 }
 
 
+COMMENT_ANSWER = {**ANSWER, "content": [{"type": "text", "text": "Komentarz."}]}
+COMMENT_ANSWER["stop_reason"] = "end_turn"
+
+
 @pytest.fixture
 def requests() -> list[dict[str, Any]]:
     return []
+
+
+@pytest.fixture
+def reply() -> dict[str, Any]:
+    """What the mocked API answers; a test parametrizes `reply` to change it."""
+    return ANSWER
+
+
+@pytest.fixture
+def model(requests: list[dict[str, Any]], reply: dict[str, Any]) -> Iterator[AnthropicModel]:
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        requests.append(json.loads(request.content))
+        return httpx2.Response(200, json=reply)
+
+    # The configured model name: strict is sent only for models that support it.
+    with override_allow_model_requests(True):
+        yield AnthropicModel(
+            "claude-haiku-5-5",
+            provider=AnthropicProvider(
+                api_key="test-key",
+                http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(answer)),
+            ),
+        )
 
 
 @pytest.fixture
@@ -50,22 +79,9 @@ def service(
     agent_tools: tuple[Tool[AgentDeps], ...],
     instructions: str,
     agent_settings: Settings,
-    requests: list[dict[str, Any]],
-) -> Iterator[AgentService]:
-    def answer(request: httpx2.Request) -> httpx2.Response:
-        requests.append(json.loads(request.content))
-        return httpx2.Response(200, json=ANSWER)
-
-    # The configured model name: strict is sent only for models that support it.
-    model = AnthropicModel(
-        "claude-haiku-5-5",
-        provider=AnthropicProvider(
-            api_key="test-key",
-            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(answer)),
-        ),
-    )
-    with override_allow_model_requests(True):
-        yield AgentService(model, agent_tools, instructions, agent_settings)
+    model: AnthropicModel,
+) -> AgentService:
+    return AgentService(model, agent_tools, instructions, agent_settings)
 
 
 @pytest.mark.parametrize("mode", ["none", "minimal"])
@@ -81,6 +97,28 @@ async def test_second_turn_starts_with_the_same_bytes(
     assert len(requests) == 2
     assert start(requests[0]) == start(requests[1])
     assert len(requests[1]["messages"]) > len(requests[0]["messages"])
+
+
+@pytest.mark.parametrize("reply", [COMMENT_ANSWER])
+async def test_comment_phase_sends_a_seeded_tool_exchange_without_thinking(
+    model: AnthropicModel,
+    agent_settings: Settings,
+    results: ResultService,
+    requests: list[dict[str, Any]],
+) -> None:
+    draft = AgentAnswer(status="ok", message="Szkic.")
+
+    comment = await CommentService(model, agent_settings).write("Raport", draft, results)
+
+    assert comment == "Komentarz."
+    (request,) = requests
+    assert request["thinking"] == {"type": "disabled"}
+    assert [tool["name"] for tool in request["tools"]] == ["read_tables"]
+    first, call, result = request["messages"]
+    assert (first["role"], call["role"], result["role"]) == ("user", "assistant", "user")
+    assert call["content"][0]["type"] == "tool_use"
+    assert result["content"][0]["type"] == "tool_result"
+    assert result["content"][0]["tool_use_id"] == call["content"][0]["id"]
 
 
 async def test_tool_definitions_are_the_same_for_every_role(

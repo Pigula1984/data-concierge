@@ -61,9 +61,9 @@ async def test_case(
         seconds.append(perf_counter() - started)
         traces.append(TurnTrace.from_messages(messages))
         session = eval_sessions.get(response.session_id)
-        # An error turn leaves the history as it was, with the previous turn's template.
+        # An error turn leaves the history as it was, with the previous turn's draft.
         if response.status != "error" and session is not None:
-            numbers += NumberAudit.outside_anchors(session.history)
+            numbers += NumberAudit.outside_anchors(session.history, eval_model.comment)
     assert response is not None
 
     checker = CaseChecker(catalog)

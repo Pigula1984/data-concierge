@@ -2,7 +2,16 @@
 recording model writes the comment over a real session with sentinel rows."""
 
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelResponse, TextPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from data_concierge.agent.comment import CommentService
@@ -26,15 +35,18 @@ TOP_CUSTOMER_SQL = (
 
 
 class CommentModel:
-    """Replies with the given comments in order and keeps the text of every request."""
+    """Replies with the given comments or tool calls in order and keeps every request."""
 
-    def __init__(self, *replies: str) -> None:
+    def __init__(self, *replies: str | ToolCallPart) -> None:
         self._replies = list(replies)
         self.requests: list[str] = []
+        self.conversations: list[list[ModelMessage]] = []
 
     def __call__(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         self.requests.append(ModelMessagesTypeAdapter.dump_json(messages).decode())
-        return ModelResponse(parts=[TextPart(self._replies.pop(0))])
+        self.conversations.append(list(messages))
+        reply = self._replies.pop(0)
+        return ModelResponse(parts=[TextPart(reply) if isinstance(reply, str) else reply])
 
 
 @pytest.fixture
@@ -84,6 +96,45 @@ async def test_comment_sees_returned_and_anchored_tables_without_sensitive_colum
     assert "Najlepszy klient: {r4[1].CustomerName}" in request
     assert "SENTINEL-NAME" not in request
     assert "SENTINEL-ACCOUNT" not in request
+
+
+async def test_tables_reach_the_model_as_a_tool_result_and_not_in_the_prompt(
+    agent_settings: Settings, results: ResultService
+) -> None:
+    model = CommentModel("Gotowe.")
+
+    await CommentService(FunctionModel(model), agent_settings).write(
+        "Sprzedaż po miesiącach za 2024", draft(), results
+    )
+
+    (messages,) = model.conversations
+    parts = [part for message in messages for part in message.parts]
+    prompts = [part for part in parts if isinstance(part, UserPromptPart)]
+    returns = [part for part in parts if isinstance(part, ToolReturnPart)]
+    assert [type(message) for message in messages] == [ModelRequest, ModelResponse, ModelRequest]
+    assert len(prompts) == len(returns) == 1
+    assert "111111.1110" in str(returns[0].content)
+    assert "Sprzedaż po miesiącach za 2024" in str(prompts[0].content)
+    assert "111111.1110" not in str(prompts[0].content)
+
+
+async def test_read_tables_called_again_gives_the_same_tables(
+    agent_settings: Settings, results: ResultService
+) -> None:
+    model = CommentModel(ToolCallPart("read_tables", {}), "Gotowe.")
+
+    await CommentService(FunctionModel(model), agent_settings).write(
+        "Sprzedaż po miesiącach za 2024", draft(), results
+    )
+
+    returns = [
+        part
+        for message in model.conversations[-1]
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+    assert len(returns) == 2
+    assert returns[0].content == returns[1].content
 
 
 async def test_bad_anchor_in_the_comment_is_sent_back_for_a_fix(

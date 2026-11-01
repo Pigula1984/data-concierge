@@ -1,10 +1,9 @@
 """What the model returns at the end of a turn, and the outcome of a turn for the caller."""
 
 from dataclasses import dataclass, replace
-from typing import TypeGuard
 
 from pydantic import BaseModel, Field
-from pydantic_ai.messages import ModelMessage, ModelResponse, ModelResponsePart, ToolCallPart
+from pydantic_ai.messages import ModelMessage
 
 from data_concierge.api.schemas import AnswerStatus
 from data_concierge.results.models import Handle
@@ -79,26 +78,7 @@ class AgentTurn:
     messages: tuple[ModelMessage, ...]
 
     def with_message(self, message: str) -> AgentTurn:
-        """The turn with another `message`, in the answer and in the last `present_result` call
-        of the history, so the next turn sees the template the user read (plan KTD8)."""
-        messages = list(self.messages)
-        for index in reversed(range(len(messages))):
-            response = messages[index]
-            if isinstance(response, ModelResponse) and any(
-                self._is_answer(part) for part in response.parts
-            ):
-                parts = [self._with_message(part, message) for part in response.parts]
-                messages[index] = replace(response, parts=parts)
-                break
-        answer = self.answer.model_copy(update={"message": message})
-        return AgentTurn(answer=answer, messages=tuple(messages))
-
-    @staticmethod
-    def _is_answer(part: ModelResponsePart) -> TypeGuard[ToolCallPart]:
-        return isinstance(part, ToolCallPart) and part.tool_name == OUTPUT_TOOL
-
-    @classmethod
-    def _with_message(cls, part: ModelResponsePart, message: str) -> ModelResponsePart:
-        if cls._is_answer(part):
-            return replace(part, args={**part.args_as_dict(), "message": message})
-        return part
+        """The turn with another `message` in the answer. The history keeps the draft, so the
+        phase that reads the data cannot pass instructions to the phase with the tools
+        (architecture 002, section 6.3)."""
+        return replace(self, answer=self.answer.model_copy(update={"message": message}))

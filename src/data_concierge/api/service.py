@@ -150,8 +150,8 @@ class AskService:
         context: RequestContext,
         audit: TurnAudit,
     ) -> AgentTurn:
-        """The turn with the comment of the comment phase, in the answer and in the history;
-        when the phase fails, the turn keeps its draft."""
+        """The turn with the comment of the comment phase in the answer; when the phase
+        fails, the turn keeps its draft."""
         try:
             comment = await self._comments.write(prompt, turn.answer, session.results)
         except CommentError as exc:
