@@ -4,7 +4,6 @@ import re
 from collections.abc import Iterable
 from typing import Literal
 
-from pydantic import JsonValue
 from pydantic_ai import ModelRetry
 
 from data_concierge.audit.service import TurnAudit
@@ -23,9 +22,7 @@ class OutputPolicy:
 
     @staticmethod
     def check(texts: Iterable[str], phase: OutputPhase, audit: TurnAudit) -> None:
-        urls: list[JsonValue] = [url for text in texts for url in LINK.findall(text)]
+        urls = [url for text in texts for url in LINK.findall(text)]
         if urls:
-            audit.record("output_blocked", {"reason": "url", "phase": phase, "urls": urls})
-            raise ModelRetry(
-                f"texts for the user cannot hold links, remove: {', '.join(map(str, urls))}"
-            )
+            audit.record("output_blocked", {"reason": "url", "phase": phase, "urls": [*urls]})
+            raise ModelRetry(f"texts for the user cannot hold links, remove: {', '.join(urls)}")

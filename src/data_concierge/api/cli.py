@@ -87,16 +87,15 @@ class CommandLine:
                         response = await self._service.ask(prompt, user_id, session_id)
                     except PromptTooLongError as exc:
                         self._stderr.write(f"{exc}\n")
-                        printer.ready()
-                        continue
-                    printer.answer(prompt, response)
-                    if response.session_id not in session_ids:
-                        session_ids.append(response.session_id)
-                    # A dropped session cannot be continued, so the next line starts a new one.
-                    if self._service.has_session(response.session_id):
-                        session_id = response.session_id
                     else:
-                        session_id = None
+                        printer.answer(prompt, response)
+                        if response.session_id not in session_ids:
+                            session_ids.append(response.session_id)
+                        # A dropped session cannot be continued, so the next line starts a new one.
+                        if self._service.has_session(response.session_id):
+                            session_id = response.session_id
+                        else:
+                            session_id = None
                 printer.ready()
         finally:
             # Also on Ctrl+C, so the session ids for `audit` are not lost.
