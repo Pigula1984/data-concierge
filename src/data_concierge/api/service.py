@@ -8,6 +8,7 @@ from time import perf_counter
 from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.models import AgentTurn
+from data_concierge.agent.prompts import INSTRUCTIONS_MARKER
 from data_concierge.agent.service import AgentService
 from data_concierge.api.schemas import Response
 from data_concierge.api.sessions import Session, SessionFactory, SessionRepository
@@ -139,6 +140,9 @@ class AskService:
         if self._exposure.comment_phase and turn.answer.status == "ok":
             turn = await self._commented(turn, prompt, session, context, audit)
         response = session.assembler.assemble(turn.answer, session.id, context.correlation_id)
+        if INSTRUCTIONS_MARKER in response.model_dump_json():
+            audit.record("output_blocked", {"reason": "marker"})
+            return ResponseAssembler.refusal(session.id)
         self._sessions.save(session.with_history(turn.messages))
         return response
 
@@ -153,7 +157,7 @@ class AskService:
         """The turn with the comment of the comment phase in the answer; when the phase
         fails, the turn keeps its draft."""
         try:
-            comment = await self._comments.write(prompt, turn.answer, session.results)
+            comment = await self._comments.write(prompt, turn.answer, session.results, audit)
         except CommentError as exc:
             logger.warning(
                 "the comment phase failed (correlation id %s), the draft is used: %s",

@@ -472,6 +472,8 @@ def test_audit_prints_every_kind_of_detail(audit_log: JsonlAuditLog) -> None:
         ("comment", {"comment": "Razem {r2.net_sales}."}),
         ("comment", {"failed": "overloaded"}),
         ("session_rejected", {"owner_id": 3}),
+        ("output_blocked", {"reason": "url", "phase": "tools", "urls": ["www.example.test"]}),
+        ("output_blocked", {"reason": "marker"}),
         ("turn_failed", {"error": "UsageLimitExceeded", "message": "limit 10"}),
         (
             "response",
@@ -513,6 +515,8 @@ def test_audit_prints_every_kind_of_detail(audit_log: JsonlAuditLog) -> None:
         "comment: Razem {r2.net_sales}.",
         "failed, the draft is used: overloaded",
         "the session belongs to user 3",
+        'a link in the tools phase goes back to the model: ["www.example.test"]',
+        "the instruction marker in the response: the response is replaced",
         "UsageLimitExceeded: limit 10",
         "status needs_clarification in 42 ms",
         "message: Którego klienta?",

@@ -16,8 +16,10 @@ from pydantic_ai.models import Model
 
 from data_concierge.agent.anchors import Anchors
 from data_concierge.agent.models import AgentAnswer
+from data_concierge.agent.output import OutputPolicy
 from data_concierge.agent.prompts import COMMENT_INSTRUCTIONS
 from data_concierge.agent.service import AgentService
+from data_concierge.audit.service import TurnAudit
 from data_concierge.core.errors import CommentError
 from data_concierge.core.settings import Settings
 from data_concierge.results.models import Handle
@@ -34,10 +36,11 @@ READ_TABLES_TOOL = "read_tables"
 
 @dataclass(frozen=True, slots=True)
 class CommentDeps:
-    """The session's results and the tables of the comment, as `read_tables` gives them."""
+    """The session's results, the tables as `read_tables` gives them and the turn's audit."""
 
     results: ResultService
     tables: str
+    audit: TurnAudit
 
 
 class CommentService:
@@ -66,14 +69,16 @@ class CommentService:
         )
         self._agent.output_validator(self._check_comment)
 
-    async def write(self, prompt: str, draft: AgentAnswer, results: ResultService) -> str:
-        """The comment with anchors; raises CommentError when the model fails or its anchors
-        are still wrong after the retries."""
+    async def write(
+        self, prompt: str, draft: AgentAnswer, results: ResultService, audit: TurnAudit
+    ) -> str:
+        """The comment with anchors; raises CommentError when the model fails, or when its
+        anchors are wrong or it holds a link after the retries."""
         tables = self._tables(draft, results)
         try:
             result = await self._agent.run(
                 message_history=self._exchange(prompt, draft, tables),
-                deps=CommentDeps(results, tables),
+                deps=CommentDeps(results, tables, audit),
             )
         except AgentRunError as exc:
             raise CommentError("the comment phase failed", detail=str(exc)) from exc
@@ -86,6 +91,7 @@ class CommentService:
 
     @staticmethod
     def _check_comment(ctx: RunContext[CommentDeps], comment: str) -> str:
+        OutputPolicy.check([comment], "comment", ctx.deps.audit)
         problems = Anchors(ctx.deps.results).problems(comment)
         if problems:
             raise ModelRetry(f"fix these anchors: {'; '.join(problems)}")

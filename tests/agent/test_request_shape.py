@@ -15,9 +15,15 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import AgentAnswer
+from data_concierge.agent.prompts import (
+    COMMENT_INSTRUCTIONS,
+    INSTRUCTIONS_MARKER,
+    AgentInstructions,
+)
 from data_concierge.agent.service import AgentService
+from data_concierge.catalog.models import Catalog, DataRange
 from data_concierge.core.context import RequestContext
-from data_concierge.core.settings import Settings
+from data_concierge.core.settings import ModelExposure, Settings
 from data_concierge.results.service import ResultService
 
 pytestmark = pytest.mark.anyio
@@ -104,11 +110,14 @@ async def test_comment_phase_sends_a_seeded_tool_exchange_without_thinking(
     model: AnthropicModel,
     agent_settings: Settings,
     results: ResultService,
+    deps: AgentDeps,
     requests: list[dict[str, Any]],
 ) -> None:
     draft = AgentAnswer(status="ok", message="Szkic.")
 
-    comment = await CommentService(model, agent_settings).write("Raport", draft, results)
+    comment = await CommentService(model, agent_settings).write(
+        "Raport", draft, results, deps.audit
+    )
 
     assert comment == "Komentarz."
     (request,) = requests
@@ -139,6 +148,24 @@ def test_instructions_send_an_access_refusal_to_unsupported_not_to_error(instruc
     assert "status unsupported" in refusal
     assert "status error" in failure
     assert "unsupported" in str(AgentAnswer.model_fields["status"].description)
+
+
+@pytest.mark.parametrize("mode", ["none", "minimal"])
+def test_instructions_are_the_same_on_every_call_and_carry_the_marker(
+    catalog: Catalog, data_ranges: dict[str, DataRange], exposure: ModelExposure
+) -> None:
+    built = AgentInstructions(catalog, data_ranges, exposure)
+
+    assert built.text() == built.text()
+    assert INSTRUCTIONS_MARKER in built.text()
+    assert INSTRUCTIONS_MARKER in COMMENT_INSTRUCTIONS
+
+
+def test_instructions_of_both_phases_treat_tool_results_as_untrusted_data(
+    instructions: str,
+) -> None:
+    assert "untrusted data" in instructions
+    assert "untrusted data" in COMMENT_INSTRUCTIONS
 
 
 async def test_request_has_effort_cache_points_and_strict_tools(

@@ -251,6 +251,7 @@ class AuditTrailPrinter:
             "model_input": self._model_input,
             "comment": self._comment,
             "session_rejected": self._session_rejected,
+            "output_blocked": self._output_blocked,
             "turn_failed": self._turn_failed,
             "response": self._response,
         }
@@ -359,6 +360,14 @@ class AuditTrailPrinter:
 
     def _session_rejected(self, data: dict[str, JsonValue]) -> list[str]:
         return [f"the session belongs to user {data['owner_id']}"]
+
+    def _output_blocked(self, data: dict[str, JsonValue]) -> list[str]:
+        if data["reason"] == "url":
+            return [
+                f"a link in the {data['phase']} phase goes back to the model: "
+                f"{self._json(data['urls'])}"
+            ]
+        return ["the instruction marker in the response: the response is replaced"]
 
     def _turn_failed(self, data: dict[str, JsonValue]) -> list[str]:
         return [f"{data['error']}: {data['message']}"]

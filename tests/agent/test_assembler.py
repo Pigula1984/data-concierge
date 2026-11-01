@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 
 import pytest
 
-from data_concierge.agent.assembler import ResponseAssembler
+from data_concierge.agent.assembler import REFUSAL_MESSAGE, ResponseAssembler
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import (
     AgentAnswer,
@@ -290,6 +290,14 @@ def test_table_derived_from_a_truncated_procedure_is_marked_truncated(
     assert response.tables[0].truncated is True
     assert isinstance(response.provenance[0], ProcedureStep)
     assert response.provenance[0].truncated is True
+
+
+def test_refusal_is_unsupported_with_the_fixed_message() -> None:
+    response = ResponseAssembler.refusal("s1")
+
+    assert response.status == "unsupported"
+    assert response.session_id == "s1"
+    assert response.message == REFUSAL_MESSAGE
 
 
 def test_error_has_a_generic_message_with_the_correlation_id(

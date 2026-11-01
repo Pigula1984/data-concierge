@@ -18,6 +18,7 @@ from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import AgentAnswer, TableRef
 from data_concierge.catalog.models import Catalog
+from data_concierge.core.errors import CommentError
 from data_concierge.core.settings import ModelDataAccess, Settings
 from data_concierge.results.service import ResultService
 
@@ -75,12 +76,12 @@ def draft(message: str = "Sprzedaż po miesiącach.") -> AgentAnswer:
 
 
 async def test_comment_sees_returned_and_anchored_tables_without_sensitive_columns(
-    agent_settings: Settings, results: ResultService
+    agent_settings: Settings, results: ResultService, sentinel_deps: AgentDeps
 ) -> None:
     model = CommentModel("Najwięcej kupił {r4[1].CustomerName}: {r4[1].net_sales}.")
 
     comment = await CommentService(FunctionModel(model), agent_settings).write(
-        "Sprzedaż po miesiącach za 2024", draft(), results
+        "Sprzedaż po miesiącach za 2024", draft(), results, sentinel_deps.audit
     )
 
     assert comment == "Najwięcej kupił {r4[1].CustomerName}: {r4[1].net_sales}."
@@ -99,12 +100,12 @@ async def test_comment_sees_returned_and_anchored_tables_without_sensitive_colum
 
 
 async def test_tables_reach_the_model_as_a_tool_result_and_not_in_the_prompt(
-    agent_settings: Settings, results: ResultService
+    agent_settings: Settings, results: ResultService, sentinel_deps: AgentDeps
 ) -> None:
     model = CommentModel("Gotowe.")
 
     await CommentService(FunctionModel(model), agent_settings).write(
-        "Sprzedaż po miesiącach za 2024", draft(), results
+        "Sprzedaż po miesiącach za 2024", draft(), results, sentinel_deps.audit
     )
 
     (messages,) = model.conversations
@@ -119,12 +120,12 @@ async def test_tables_reach_the_model_as_a_tool_result_and_not_in_the_prompt(
 
 
 async def test_read_tables_called_again_gives_the_same_tables(
-    agent_settings: Settings, results: ResultService
+    agent_settings: Settings, results: ResultService, sentinel_deps: AgentDeps
 ) -> None:
     model = CommentModel(ToolCallPart("read_tables", {}), "Gotowe.")
 
     await CommentService(FunctionModel(model), agent_settings).write(
-        "Sprzedaż po miesiącach za 2024", draft(), results
+        "Sprzedaż po miesiącach za 2024", draft(), results, sentinel_deps.audit
     )
 
     returns = [
@@ -137,13 +138,36 @@ async def test_read_tables_called_again_gives_the_same_tables(
     assert returns[0].content == returns[1].content
 
 
+async def test_a_link_in_the_comment_is_sent_back_for_a_fix(
+    agent_settings: Settings, results: ResultService, sentinel_deps: AgentDeps
+) -> None:
+    model = CommentModel("Patrz https://example.test", "Bez linku.")
+
+    comment = await CommentService(FunctionModel(model), agent_settings).write(
+        "Sprzedaż po miesiącach za 2024", draft(), results, sentinel_deps.audit
+    )
+
+    assert comment == "Bez linku."
+    assert "https://example.test" in model.requests[1]
+
+
+async def test_a_link_after_all_retries_is_a_comment_error(
+    agent_settings: Settings, results: ResultService, sentinel_deps: AgentDeps
+) -> None:
+    wrong = ["Patrz https://example.test"] * (agent_settings.agent_retries + 1)
+    service = CommentService(FunctionModel(CommentModel(*wrong)), agent_settings)
+
+    with pytest.raises(CommentError):
+        await service.write("Raport", draft(), results, sentinel_deps.audit)
+
+
 async def test_bad_anchor_in_the_comment_is_sent_back_for_a_fix(
-    agent_settings: Settings, results: ResultService
+    agent_settings: Settings, results: ResultService, sentinel_deps: AgentDeps
 ) -> None:
     model = CommentModel("Suma: {r3.net_sales}.", "Najlepszy miesiąc: {r3[1].month}.")
 
     comment = await CommentService(FunctionModel(model), agent_settings).write(
-        "Sprzedaż po miesiącach za 2024", draft(), results
+        "Sprzedaż po miesiącach za 2024", draft(), results, sentinel_deps.audit
     )
 
     assert comment == "Najlepszy miesiąc: {r3[1].month}."
