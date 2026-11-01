@@ -1,6 +1,6 @@
 # Data Concierge: dostęp modelu do danych (etap 2)
 
-Status: wdrożone (etapy 2A–2D planu [`2026-10-24-1618-feat-dostep-modelu-do-danych-plan.md`](../plans/2026-10-24-1618-feat-dostep-modelu-do-danych-plan.md)), decyzje D1–D8 właściciela z 2026-10-24. Wynik ewaluacji obu trybów w sekcji 9, odejścia od projektu w sekcji 13. Wersja 1.0, data: 2026-10-25.
+Status: wdrożone (etapy 2A–2D planu [`2026-10-24-1618-feat-dostep-modelu-do-danych-plan.md`](../plans/2026-10-24-1618-feat-dostep-modelu-do-danych-plan.md)), decyzje D1–D8 właściciela z 2026-10-24. Wynik ewaluacji obu trybów w sekcji 9, odejścia od projektu w sekcji 13. Wersja 1.1, data: 2026-11-01: dodane skutki ochrony przed prompt injection (001, sekcja 8.2).
 Rozszerza [`001-architektura-data-concierge.md`](001-architektura-data-concierge.md) (v3.7), który opisuje v1. Ten dokument przejmuje sprawy, które 001 odkładał na później: odwołania zamiast liczb w komentarzu (001, sekcja 7.5), konfigurację tego, co z danych trafia do modelu (001, sekcje 11.3 i 12), oraz oznaczanie kolumn w katalogu. Kontrola liczb w komentarzu zostaje odłożona (sekcja 12).
 
 ## 1. Cel i zakres
@@ -16,7 +16,7 @@ Tryb zamknięty jest dla klientów, którzy nie chcą wysyłać danych do dostaw
 
 Zachowanie z v1, czyli podgląd do 10 wierszy (do 50 przy małym wyniku) i statystyki wszystkich kolumn po każdym narzędziu, nie zostaje trzecim trybem (decyzja D5).
 
-Poza zakresem: ochrona przed prompt injection, kontrola liczb w komentarzu, DuckDB w osobnym procesie, logi backendu (zawierają dane, ale nie opuszczają backendu) oraz model uruchamiany w chmurze klienta (Bedrock, Vertex). Ten ostatni to sprawa wdrożenia, a nie kodu: Pydantic AI zmienia dostawcę ustawieniem.
+Ochronę przed prompt injection opisuje 001, sekcja 8.2, a ten dokument podaje jej skutki dla danych (sekcje 5.2, 5.3, 6.2, 6.3, 7 i 10). Poza zakresem: kontrola liczb w komentarzu, DuckDB w osobnym procesie, logi backendu (zawierają dane, ale nie opuszczają backendu) oraz model uruchamiany w chmurze klienta (Bedrock, Vertex). Ten ostatni to sprawa wdrożenia, a nie kodu: Pydantic AI zmienia dostawcę ustawieniem.
 
 ## 2. Co model widzi w v1
 
@@ -129,7 +129,7 @@ Model nie widzi:
 ### 5.2. Dwie fazy tury
 
 1. **Faza narzędzi.** Agent z narzędziami jak w trybie zamkniętym, z podsumowaniami według sekcji 5.1. Kończy się `AgentAnswer` z kompletem pól, a `message` jest szkicem z kotwicami.
-2. **Faza komentarza.** Osobny agent Pydantic AI bez narzędzi, z własną stałą instrukcją, na tym samym modelu. Dostaje prompt użytkownika, szkic odpowiedzi (status, tytuły, założenia, komentarz) i dane tabel z sekcji 5.1, bez kolumn `sensitive`. Zwraca nowy `message` z kotwicami.
+2. **Faza komentarza.** Osobny agent Pydantic AI z własną stałą instrukcją, na tym samym modelu, bez narzędzi do danych. Dostaje prompt użytkownika i szkic odpowiedzi (status, tytuły, założenia, komentarz) jako prośbę, a dane tabel z sekcji 5.1, bez kolumn `sensitive`, jako wynik bezargumentowego narzędzia `read_tables` z zasianej wymiany. Dzięki temu tabele trafiają do modelu jako oznaczone dane z narzędzia, a nie jako tekst użytkownika, zgodnie z zaleceniami Anthropic dla treści osób trzecich. Wymiana nie dodaje rundy modelu, a agent działa z wyłączonym myśleniem, bo zasiana odpowiedź modelu nie ma bloku myślenia. Zwraca nowy `message` z kotwicami.
 
 Faza komentarza działa tylko przy statusie `ok`. Gdy zawiedzie (błąd, zła kotwica po wyczerpaniu ponowień), odpowiedź dostaje szkic z fazy narzędzi, a przypadek trafia do logu. Koszt: jedno dodatkowe wywołanie modelu na turę, z krótkim kontekstem.
 
@@ -152,19 +152,19 @@ Wartość kolumny wrażliwej nie trafia do modelu w żadnym trybie: ani w statys
 - inna kolumna tekstowa jest wrażliwa, gdy którykolwiek uchwyt źródłowy ma kolumnę wrażliwą;
 - inna kolumna liczbowa lub z datą nie jest wrażliwa.
 
-To chroni przed przypadkowym wysłaniem danych, a nie przed modelem, który celowo przekształci wartość wrażliwą (np. `length("CustomerName")`). Taki scenariusz należy do ochrony przed prompt injection, która jest poza zakresem.
+To chroni przed przypadkowym wysłaniem danych, a nie przed modelem, który celowo przekształci wartość wrażliwą (np. `length("CustomerName")`). Taki scenariusz należy do ochrony przed prompt injection, a kanały, których nie zamykamy, opisuje sekcja 10.
 
 **Znane ryzyko: alias o nazwie kolumny niewrażliwej.** Reguła patrzy na nazwę i typ kolumny wyniku, a nie na to, skąd pochodzą jej wartości. Kolumna z wartościami wrażliwymi pod nazwą kolumny niewrażliwej tego samego typu dziedziczy więc `sensitive: false`. Przykłady:
 
 ```sql
 SELECT "Territory" FROM r1 UNION ALL SELECT "CustomerName" FROM r1
-SELECT CASE WHEN "City" = 'Berlin' THEN "CustomerName" ELSE "City" END AS "City" FROM r1
+SELECT CASE WHEN "Territory" = 'Germany' THEN "CustomerName" ELSE "Territory" END AS "Territory" FROM r1
 SELECT coalesce("CustomerName", "Territory") AS "Territory" FROM r1
 ```
 
 W trybie `minimal` wartości takiej kolumny trafiłyby do modelu jako wartości wymiaru, a w fazie komentarza wszystkie jej wiersze (do `model_max_rows`), gdy uchwyt jest zwracany użytkownikowi lub użyty w kotwicy szkicu. Ta sama klasa ryzyka dotyczy pola `ids` w obu trybach: miara podana pod nazwą kolumny `id` (np. `CAST(sum("SubTotal") AS INT) AS "CustomerID"`) dziedziczy jej rolę, więc jej wartości trafiłyby do modelu jak klucze. Takie zapytanie model musi napisać sam, a typowe zestawienia (grupowanie po kolumnie źródłowej, aliasy z nowymi nazwami) dają poprawne oznaczenie. Przyjmujemy to ryzyko na etapie POC i rozwiążemy je po akceptacji podejścia (sekcja 12).
 
-Domyślnie kolumna jest widoczna, a właściciel oznacza wrażliwe (decyzja D6). Zasada oznaczania: wrażliwe są nazwy i opisy, które wskazują konkretnego klienta, produkt lub osobę, oraz identyfikatory biznesowe, których model nie potrzebuje do łączenia wyników. Wymiary potrzebne do filtrów i zestawień (kategoria, terytorium, miasto, typ klienta) zostają widoczne.
+Domyślnie kolumna jest widoczna, a właściciel oznacza wrażliwe (decyzja D6). Zasada oznaczania: wrażliwe są nazwy i opisy, które wskazują konkretnego klienta, produkt lub osobę, identyfikatory biznesowe, których model nie potrzebuje do łączenia wyników, oraz kolumny z tekstem, który mogą wpisać osoby spoza firmy, np. klient w polu miasta (ochrona przed pośrednią iniekcją, 001, sekcja 8.2). Wymiary potrzebne do filtrów i zestawień (kategoria, terytorium, typ klienta) zostają widoczne, bo są słownikami firmy.
 
 Oznaczenie katalogu `catalog/agent-procedures.yaml` (wprowadzone w etapie 2A razem z obsługą pola w kodzie):
 
@@ -176,12 +176,13 @@ Oznaczenie katalogu `catalog/agent-procedures.yaml` (wprowadzone w etapie 2A raz
 | `ProductNumber` | `product_search` | numer katalogowy wskazuje produkt, a model łączy po `ProductID` |
 | `ComponentDesc` | `get_bill_of_materials`, `get_where_used_product` | nazwa komponentu, czyli produktu |
 | `FirstName`, `LastName`, `ManagerFirstName`, `ManagerLastName` | `get_employee_managers`, `get_manager_employees` | imiona i nazwiska pracowników |
+| `City` | `customer_list` | tekst z adresu klienta, który może wpisać osoba spoza firmy; filtr po mieście idzie parametrem procedury |
 
 Bez oznaczenia zostają m.in.:
 
 - klucze techniczne (`CustomerID`, `ProductID`, `SalesOrderID`, `BusinessEntityID` i inne);
 - daty;
-- wymiary opisowe: `CustomerType`, `Territory`, `CountryRegion`, `City`, `StateProvince`, `AddressType`, `Category`, `Subcategory`, `Color`, `Size`, `OrganizationNode`, poziomy struktury;
+- wymiary opisowe: `CustomerType`, `Territory`, `CountryRegion`, `StateProvince`, `AddressType`, `Category`, `Subcategory`, `Color`, `Size`, `OrganizationNode`, poziomy struktury;
 - miary.
 
 Miary nie są wrażliwe w sensie tego pola. W trybie zamkniętym model i tak ich nie widzi, a w ograniczonym widzi je tylko w fazie komentarza (sekcja 5.1).
@@ -210,7 +211,7 @@ Kotwice działają w obu trybach. W trybie ograniczonym model widzi liczby w faz
 
 Dotyczy obu trybów, bo tekst błędu z wartością nie pomaga modelowi poprawić wywołania:
 
-- **DuckDB:** błędy parsera, wiązania i katalogu (`ParserException`, `BinderException`, `CatalogException`) cytują SQL modelu i schemat, więc wracają bez zmian. Pozostałe (np. `ConversionException`, `InvalidInputException`, `OutOfRangeException`) wracają jako nazwa klasy i ogólny opis, np. „ConversionException: a value could not be converted; use TRY_CAST or filter the column first”. Wyjątkiem są stałe teksty silnika, które nie cytują wartości, np. „More than one row returned by a subquery” (`InvalidInputException`): wracają bez zmian, bo mówią modelowi, co poprawić. Pełny tekst trafia do logu z identyfikatorem zgłoszenia.
+- **DuckDB:** błędy parsera, wiązania i katalogu (`ParserException`, `BinderException`, `CatalogException`) cytują SQL modelu i schemat, więc wracają bez zmian. Pozostałe (np. `ConversionException`, `InvalidInputException`, `OutOfRangeException`) wracają jako nazwa klasy i ogólny opis, np. „ConversionException: a value could not be converted; use TRY_CAST or filter the column first”. Wyjątkiem jest błąd podzapytania skalarnego zwracającego więcej niż jeden wiersz (`InvalidInputException`): backend rozpoznaje go po początku tekstu i odsyła własny stały komunikat, bo mówi on modelowi, co poprawić. Tekstu silnika nie przepuszcza, bo zapytanie może skleić wartość z danych ze stałym początkiem, np. `error('More than one row returned by a subquery ' || "CustomerName")`. Pełny tekst trafia do logu z identyfikatorem zgłoszenia.
 - **SQL Server:** model dostaje numer błędu i SQLSTATE bez tekstu sterownika (`core/sqlserver.py`). Pełny tekst trafia do logu.
 - **Komunikaty backendu** (kontrole `query`, limity, walidacja parametrów) nie zawierają wartości z danych i zostają bez zmian. Potwierdził to przegląd w etapie 2A.
 
@@ -218,7 +219,7 @@ Dotyczy obu trybów, bo tekst błędu z wartością nie pomaga modelowi poprawi�
 
 Historia, którą sesja zapisuje i przekazuje do kolejnej tury (`result.all_messages()` w `AgentService.run`), zawiera wyniki narzędzi w postaci podsumowań z danego trybu i argumenty `present_result` z kotwicami. Odpowiedź z podstawionymi wartościami (`Response`) nie wraca do modelu. W trybie zamkniętym historia nie zawiera więc żadnej wartości z bazy.
 
-W trybie ograniczonym faza komentarza nie dopisuje się do historii fazy narzędzi. Szablon komentarza z fazy 2 (z kotwicami, bez podstawionych wartości) zastępuje szkic w argumentach ostatniego wywołania `present_result`, żeby kolejna tura wiedziała, co użytkownik przeczytał. Gdy faza 2 zawiedzie, w historii zostaje szkic, który użytkownik dostał.
+W trybie ograniczonym faza komentarza nie dopisuje się do historii fazy narzędzi, a w historii zostaje szkic z fazy narzędzi. Komentarz z fazy 2 widzi tylko użytkownik. Faza, która czyta dane, nie może więc przekazać poleceń fazie z narzędziami (001, sekcja 8.2). Kosztem jest to, że kolejna tura nie zna treści końcowego komentarza, co może pogorszyć pytania o sam komentarz.
 
 ### 6.4. Instrukcje i opisy narzędzi
 
@@ -247,6 +248,8 @@ Przykłady zapytań w instrukcjach (raport miesięczny, jednowierszowe zapytanie
 | Wiersze pośrednich wyników `query` | do 10 lub 50 | nie | nie |
 | Tabele zwracane użytkownikowi | do 10 lub 50 | do 50, raz, bez `sensitive` | nie |
 | Wartości w komunikatach błędów | tak | nie | nie |
+| Tekst osób trzecich (`City`) | tak | nie | nie |
+| Komentarz z fazy 2 w kolejnych turach | nie dotyczy | nie | nie dotyczy |
 
 Granica z tej tabeli dotyczy dostawcy modelu, nie własnych zapisów backendu. Log audytowy (001, sekcja 8.1) zapisuje lokalnie prompt, myślenie modelu i pełne odpowiedzi z wartościami, także z kolumn `sensitive`, w obu trybach. Plik zostaje na maszynie usługi i można go wyłączyć (`DC_AUDIT_LOG_ENABLED=false`).
 
@@ -259,7 +262,7 @@ Granica z tej tabeli dotyczy dostawcy modelu, nie własnych zapisów backendu. L
 | `results` | Podsumowanie według polityki trybu (sekcje 4.1 i 5.1) w miejsce stałego podglądu i statystyk. Wrażliwość kolumn wyników `query` (sekcja 5.3). Odczyt komórki dla kotwic. Tabele dla fazy komentarza (`ResultService.excerpt`): wiersze bez kolumn `sensitive`, do `model_max_rows` wierszy, przy większych tylko struktura i `row_count`. |
 | `query` | Komunikaty błędów DuckDB bez wartości (sekcja 6.2). |
 | `agent` | Instrukcje i opisy narzędzi zależne od trybu. Kotwice (`agent/anchors.py`) i formatowanie wartości (`agent/formatting.py`), sprawdzane w walidatorze wyniku. `candidates_from` w `ClarificationRequest`, czyli pytaniu doprecyzowującym od modelu. `ResponseAssembler`: podstawienie kotwic, uchwyty kotwic w `provenance`, kandydaci z uchwytu. Faza komentarza w trybie `minimal`. |
-| `api` | Kontrakt odpowiedzi bez zmian. `AskService` uruchamia fazę komentarza po fazie narzędzi (tryb `minimal`, status `ok`) i podmienia szablon w historii (sekcja 6.3). |
+| `api` | Kontrakt odpowiedzi bez zmian. `AskService` uruchamia fazę komentarza po fazie narzędzi (tryb `minimal`, status `ok`), a w historii zostawia szkic (sekcja 6.3). |
 | `evals` | Uruchomienie w obu trybach (sekcja 9). |
 
 Polityka trybu to obiekt wartości `ModelExposure` w `core/settings.py`, zbudowany przy starcie z `model_data_access`. Kompozycja wstrzykuje go do serwisu wyników (które pola podsumowania widzi model), instrukcji i rejestru narzędzi (teksty według trybu) oraz do `AskService` (czy uruchamiać fazę komentarza). Ustawienie `model_max_rows` (domyślnie 50) zastąpiło ustawienia podglądu: rządzi polem `ids`, liczbą kandydatów i tabelami fazy komentarza.
@@ -282,7 +285,7 @@ Przypadki, w których oczekiwany wynik może się zmienić w trybie zamkniętym:
 
 Przypadek może mieć oczekiwania zależne od trybu: pole `modes` w `evals/cases.yaml` zmienia `status` albo `result` w jednym trybie, tylko dla zmian z powyższej listy. Kandydatów porównujemy po `id` w obu trybach, bo w obu przychodzą z uchwytu (D8), więc oczekiwane `id` (`candidates`) stoją w zwykłym oczekiwaniu przypadku. Tryb przebiegu wybiera zmienna `DC_MODEL_DATA_ACCESS`, a katalog przebiegu nazywa się `evals/runs/<początek>-<tryb>`.
 
-Liczby spoza kotwic liczymy w końcowym szablonie z historii sesji, czyli po podmianie z fazy komentarza (sekcja 6.3): tekst z kotwicami usuniętymi przed szukaniem liczb, bez dat, lat i liczb poniżej 100. Ta miara zastąpiła miarę v1 „liczby z komentarza spoza wyników”, która przy kotwicach zgłaszała tylko wartości wstawione przez backend. Ponowienia przez kotwice i koszt obu faz zbiera model nagrywający w ewaluacji, bo `capture_run_messages` widzi tylko pierwsze uruchomienie agenta.
+Liczby spoza kotwic liczymy w końcowym szablonie tury, czyli w tekście fazy 2, a gdy jej nie ma, w szkicu z historii sesji (sekcja 6.3): tekst z kotwicami usuniętymi przed szukaniem liczb, bez dat, lat i liczb poniżej 100. Ta miara zastąpiła miarę v1 „liczby z komentarza spoza wyników”, która przy kotwicach zgłaszała tylko wartości wstawione przez backend. Ponowienia przez kotwice i koszt obu faz zbiera model nagrywający w ewaluacji, bo `capture_run_messages` widzi tylko pierwsze uruchomienie agenta.
 
 ### 9.1. Wyniki (2026-10-25)
 
@@ -312,11 +315,13 @@ Przebiegi: `evals/runs/20261025-095500-none` i `evals/runs/20261025-184452-minim
 
 ## 10. Ryzyka szczątkowe
 
-- **Wnioskowanie z liczby wierszy.** Model, który widzi `row_count`, może się dowiadywać o wartościach zapytaniami typu `WHERE "CustomerName" LIKE 'A%'`. Wymaga to celowego działania, a nie przypadku. Wiąże się z ochroną przed prompt injection.
+- **Wnioskowanie z liczby wierszy.** Model, który widzi `row_count`, może się dowiadywać o wartościach zapytaniami typu `WHERE "CustomerName" LIKE 'A%'`. Wymaga to celowego działania, a nie przypadku. Ochrona przed prompt injection tego nie zamyka (001, sekcja 8.2).
+- **Wartość zakodowana w `ids`.** Tekst zapisany jako liczba pod aliasem kolumny `id`, np. `ascii("CustomerName") AS "CustomerID"`, trafia do modelu jak klucz (sekcja 5.3). Zamknięcie tego kanału wymaga analizy treści zapytania, więc zostaje znanym ryzykiem.
+- **Wartość zakodowana w dacie.** Min i max kolumny `time` trafiają do modelu w obu trybach, także dla kolumny wyliczonej z wartości wrażliwej, np. daty zbudowanej z `ascii("CustomerName")`. Kanał jest tego samego rodzaju co `ids` i zostaje znanym ryzykiem.
 - **Kolejność w `ids`.** Wartości kolumn `id` idą w kolejności wierszy uchwytu. Po zapytaniu z `ORDER BY` po mierze (top N) model widzi więc ranking klientów lub produktów, choć bez kwot. Wynika to z D1.
 - **Kolumny wyliczone** z wartości wrażliwych mogą przejść jako liczbowe (sekcja 5.3).
 - **Alias o nazwie kolumny niewrażliwej** (`UNION ALL`, `CASE`, `coalesce`) przenosi wartości wrażliwe do kolumny oznaczonej jako niewrażliwa (sekcja 5.3). Przyjęte na etapie POC.
-- **Wartość wpisana w komentarz zamiast kotwicy.** W trybie `minimal` faza komentarza widzi wiersze. Gdy model wpisze wartość jako tekst, a nie kotwicą, szablon z tą wartością trafia do historii (sekcja 6.3) i do kolejnych tur fazy narzędzi. Backend nie skanuje tekstu (sekcja 12), a zestaw ewaluacyjny mierzy liczby spoza kotwic (sekcja 9).
+- **Wartość wpisana w komentarz zamiast kotwicy.** W trybie `minimal` faza komentarza widzi wiersze. Gdy model wpisze wartość jako tekst, a nie kotwicą, trafia ona do użytkownika, ale nie do historii (sekcja 6.3). Backend nie skanuje tekstu pod kątem liczb (sekcja 12), a zestaw ewaluacyjny mierzy liczby spoza kotwic (sekcja 9).
 - **Prompt użytkownika** może zawierać dane (nazwisko, kwotę) i zawsze trafia do modelu.
 - **`data_range`** to dane z bazy wystawione celowo przez katalog.
 - **Jakość w trybie zamkniętym** jest niższa w komentarzu (krótszy, bez trendów), ale zestaw ewaluacyjny nie pokazał spadku trafności (sekcja 9.1). Zestaw nie sprawdza treści komentarza poza liczbami spoza kotwic.
@@ -340,8 +345,7 @@ Decyzje właściciela projektu z 2026-10-24:
 
 - **Kontrola liczb w komentarzu** (001, sekcja 7.5): skanowanie tekstu i porównanie z wynikami. Przy kotwicach zestaw ewaluacyjny mierzy liczby spoza kotwic. Kontrolę wprowadzimy, jeśli pomiar pokaże problem.
 - **Narzędzie wyszukiwania wartości** (np. `find_values(handle, column, text)`) do filtrów po wymiarach z wieloma wartościami. Dziś tę rolę pełnią procedury wyszukiwania z parametrem.
-- **Wrażliwość kolumn `query` odporna na aliasy** (sekcja 5.3), po akceptacji podejścia z POC. Możliwe kierunki: każda kolumna tekstowa wyniku czytającego kolumnę wrażliwą jest wrażliwa (prościej, ale model straci wartości wymiarów w takich zestawieniach), albo śledzenie pochodzenia kolumn z drzewa zapytania DuckDB (`json_serialize_sql`), co odchodzi od zasady, że backend nie analizuje treści zapytania (001, sekcja 7.3).
-- **Wyłączenie kolumn wolnotekstowych z kontekstu** jako ochrona przed pośrednią iniekcją (001, sekcja 12): `sensitive` daje ten sam efekt technicznie, ale cel i oznaczenie ustalimy razem z ochroną przed iniekcją.
+- **Wrażliwość kolumn `query` odporna na aliasy** (sekcja 5.3), po akceptacji podejścia z POC. Możliwe kierunki: każda kolumna tekstowa wyniku czytającego kolumnę wrażliwą jest wrażliwa (prościej, ale model straci wartości wymiarów w takich zestawieniach), śledzenie pochodzenia kolumn z drzewa zapytania DuckDB (`json_serialize_sql`), co odchodzi od zasady, że backend nie analizuje treści zapytania (001, sekcja 7.3), albo pseudonimy w DuckDB, czyli zastąpienie wartości wrażliwych w magazynie wyników i odtworzenie ich dopiero w odpowiedzi. Ten ostatni kierunek zamyka też kanały `ids` i dat (sekcja 10).
 
 ## 13. Odejścia od projektu przy wdrożeniu
 
@@ -350,9 +354,11 @@ Zmiany względem wersji 0.2 z 2026-10-24, wprowadzone do odpowiednich sekcji w t
 - **Alias o nazwie kolumny niewrażliwej** (sekcje 5.3 i 10): wrażliwość kolumny wyniku `query` dziedziczona po nazwie i typie nie wykrywa wartości wrażliwych pod aliasem kolumny niewrażliwej. Właściciel przyjął to ryzyko na etapie POC (2026-10-24), poprawka czeka na akceptację podejścia (sekcja 12).
 - **Próba kotwicy** (sekcja 6.1): tekst w nawiasach klamrowych zaczynający się od `r` i cyfry, który nie pasuje do składni (np. `{r1#count}`), jest błędem odsyłanym do modelu, żeby niewypełniony nawias nie trafił do użytkownika (decyzja właściciela z 2026-10-24).
 - **`id_column` kandydatów** (sekcja 4.3): musi być kolumną liczbową albo tekstową i nie może być wrażliwa, bo wybór użytkownika wraca do modelu jako `id`.
-- **Szablon w historii** (sekcja 6.3): rozstrzygnięte, że szablon komentarza z fazy 2 zastępuje szkic w argumentach ostatniego `present_result`.
+- **Szablon w historii** (sekcja 6.3): szablon komentarza z fazy 2 zastępował szkic w argumentach ostatniego `present_result`. Od wersji 1.1 w historii zostaje szkic, żeby faza z danymi nie mogła przekazać poleceń fazie z narzędziami (001, sekcja 8.2).
 - **Polityka trybu** (sekcja 8): obiekt wartości `ModelExposure` w `core/settings.py` zamiast osobnej klasy w module wyników. Jedno ustawienie `model_max_rows` (50) zastąpiło dwa ustawienia podglądu.
-- **Komunikaty błędów** (sekcja 6.2): stałe teksty DuckDB bez wartości z danych (podzapytanie skalarne zwróciło więcej niż jeden wiersz) wracają do modelu bez zmian.
+- **Komunikaty błędów** (sekcja 6.2): stałe teksty DuckDB bez wartości z danych (podzapytanie skalarne zwróciło więcej niż jeden wiersz) wracały do modelu bez zmian. Sonda z 2026-11-01 pokazała, że `error()` może doskleić do takiego początku wartość z danych, więc od wersji 1.1 model dostaje stały tekst backendu.
 - **Przykłady w instrukcjach** (sekcja 6.4): jeden zestaw dla obu trybów, od razu z kotwicami i `candidates_from`, zamiast wariantów dla trybu zamkniętego.
 - **Instrukcja fazy komentarza** (sekcja 5.2): dodana po ewaluacji reguła, że komentarz nie wymienia uchwytów ani ukrytych kolumn i nie mówi, czego model nie widział (sekcja 9.1).
+- **Faza komentarza** (sekcja 5.2): od wersji 1.1 tabele idą jako wynik narzędzia `read_tables`, a nie w tekście prośby, i agent działa bez myślenia.
+- **`City`** (sekcja 5.3): od wersji 1.1 kolumna wrażliwa, bo może nieść tekst osób trzecich. Kolumny tekstowe wyliczone z uchwytu z `City` też stają się wrażliwe.
 - **Ewaluacja** (sekcja 9): kandydaci porównywani po `id` w obu trybach, a nie tylko w zamkniętym; miara liczb spoza kotwic zastąpiła miarę liczb spoza wyników z v1.
