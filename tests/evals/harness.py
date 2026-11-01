@@ -4,13 +4,21 @@ a recording model."""
 from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
+from time import perf_counter
 
 from cases import Call
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, RetryPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    RetryPromptPart,
+    ToolCallPart,
+)
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 
+from data_concierge.agent.guard import GUARD_TOOL
 from data_concierge.catalog.models import CatalogEntry
 from data_concierge.procedures.models import ProcedureResult
 from data_concierge.procedures.repository import ProcedureRepository
@@ -49,6 +57,7 @@ class RecordingModel(WrapperModel):
         super().__init__(wrapped)
         self.responses: list[ModelResponse] = []
         self.anchor_retries = 0
+        self.seconds = 0.0
 
     async def request(
         self,
@@ -58,13 +67,16 @@ class RecordingModel(WrapperModel):
     ) -> ModelResponse:
         # Only the newest request: each request also resends the history before it.
         self.anchor_retries += self._anchor_retries(messages[-1])
+        started = perf_counter()
         response = await super().request(messages, model_settings, model_request_parameters)
+        self.seconds += perf_counter() - started
         self.responses.append(response)
         return response
 
     def clear(self) -> None:
         self.responses.clear()
         self.anchor_retries = 0
+        self.seconds = 0.0
 
     @property
     def comment(self) -> str | None:
@@ -90,4 +102,20 @@ class RecordingModel(WrapperModel):
             and isinstance(part.content, str)
             and part.content.startswith(ANCHOR_RETRY)
             for part in message.parts
+        )
+
+
+class RecordingGuardModel(RecordingModel):
+    """The guard's model, recorded apart, because the audit log is off in the evaluation and a
+    comparison with earlier runs could not separate its cost."""
+
+    @property
+    def blocked(self) -> int:
+        """The turns the guard stopped."""
+        return sum(
+            isinstance(part, ToolCallPart)
+            and part.tool_name == GUARD_TOOL
+            and part.args_as_dict().get("verdict") == "blocked"
+            for response in self.responses
+            for part in response.parts
         )

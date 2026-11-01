@@ -11,7 +11,12 @@ from time import perf_counter
 
 import pytest
 from cases import CaseChecker, EvalCase
-from harness import EvalClock, RecordingModel, RecordingProcedureRepository
+from harness import (
+    EvalClock,
+    RecordingGuardModel,
+    RecordingModel,
+    RecordingProcedureRepository,
+)
 from pydantic_ai import capture_run_messages
 from report import CaseOutcome, EvalReport, NumberAudit, RunArchive, TurnTrace
 
@@ -37,6 +42,7 @@ async def test_case(
     eval_clock: EvalClock,
     recorder: RecordingProcedureRepository,
     eval_model: RecordingModel,
+    eval_guard_model: RecordingGuardModel,
     eval_sessions: InMemorySessionRepository,
     eval_report: EvalReport,
     run_archive: RunArchive,
@@ -48,6 +54,7 @@ async def test_case(
     eval_clock.today = case.today
     recorder.calls.clear()
     eval_model.clear()
+    eval_guard_model.clear()
     response: Response | None = None
     traces: list[TurnTrace] = []
     seconds: list[float] = []
@@ -92,11 +99,15 @@ async def test_case(
             checker.assumptions_match(expect.assumptions, response) if expect.assumptions else None
         ),
         candidates_ok=candidates_ok,
+        no_calls_ok=checker.no_calls_match(expect, recorder.calls),
         anchor_retries=eval_model.anchor_retries,
         drafts=sum(record.getMessage().startswith(DRAFT_LOG) for record in caplog.records),
         turns=len(prompts),
-        seconds=sum(seconds),
+        seconds=sum(seconds) - eval_guard_model.seconds,
         cost=eval_model.cost,
+        guard_blocked=eval_guard_model.blocked,
+        guard_seconds=eval_guard_model.seconds,
+        guard_cost=eval_guard_model.cost,
     )
     eval_report.add(outcome)
     saved = run_archive.save_case(
@@ -121,6 +132,9 @@ async def test_case(
                 "anchor_retries": outcome.anchor_retries,
                 "drafts": outcome.drafts,
                 "cost": outcome.cost,
+                "guard_blocked": outcome.guard_blocked,
+                "guard_seconds": round(outcome.guard_seconds, 2),
+                "guard_cost": outcome.guard_cost,
             },
         },
     )

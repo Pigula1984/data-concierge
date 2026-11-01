@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 from cases import HR_USER_ID
-from harness import EvalClock, RecordingModel, RecordingProcedureRepository
+from harness import (
+    EvalClock,
+    RecordingGuardModel,
+    RecordingModel,
+    RecordingProcedureRepository,
+)
 from report import EvalReport, RunArchive
 
 from data_concierge.api.sessions import InMemorySessionRepository
@@ -45,9 +50,9 @@ def eval_model(settings: Settings) -> RecordingModel:
 
 
 @pytest.fixture(scope="session")
-def eval_guard_model(settings: Settings) -> RecordingModel:
+def eval_guard_model(settings: Settings) -> RecordingGuardModel:
     """Its own recording, so the guard's verdicts do not mix with the comment of the turn."""
-    return RecordingModel(CompositionRoot.configured_model(settings, settings.guard_model))
+    return RecordingGuardModel(CompositionRoot.configured_model(settings, settings.guard_model))
 
 
 @pytest.fixture(scope="session")
@@ -61,7 +66,7 @@ def eval_root(
     agent_client: SqlServerClient,
     recorder: RecordingProcedureRepository,
     eval_model: RecordingModel,
-    eval_guard_model: RecordingModel,
+    eval_guard_model: RecordingGuardModel,
     eval_sessions: InMemorySessionRepository,
     eval_clock: EvalClock,
 ) -> CompositionRoot:

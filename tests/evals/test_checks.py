@@ -7,9 +7,9 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from cases import CaseChecker, ExpectedCall, ResultRule
-from harness import RecordingModel
-from pydantic_ai import Agent, ModelRetry
+from cases import CaseChecker, Expectation, ExpectedCall, ResultRule
+from harness import RecordingGuardModel, RecordingModel
+from pydantic_ai import Agent, ModelRetry, ToolOutput
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -22,6 +22,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from report import CaseOutcome, EvalReport, NumberAudit, RunArchive, TurnTrace
 
+from data_concierge.agent.guard import GUARD_TOOL, GuardAnswer
 from data_concierge.agent.models import OUTPUT_TOOL
 from data_concierge.api.schemas import (
     Candidate,
@@ -163,6 +164,47 @@ def test_recording_model_gives_the_text_of_a_comment_and_nothing_after_a_tool_ca
     assert model.comment == "Komentarz."
 
 
+def test_no_calls_passes_a_case_without_procedure_calls_and_fails_one_with_a_call(
+    catalog: Catalog,
+) -> None:
+    checker = CaseChecker(catalog)
+    expected = Expectation(status=("unsupported",), no_calls=True)
+
+    assert checker.no_calls_match(expected, []) is True
+    assert checker.no_calls_match(expected, [ORDERS_CALL]) is False
+    assert checker.no_calls_match(Expectation(status=("ok",)), [ORDERS_CALL]) is None
+    assert outcome(no_calls_ok=False).failed_checks == ("no calls",)
+
+
+@pytest.mark.anyio
+async def test_recording_guard_model_counts_its_verdicts_time_and_cost_on_its_own() -> None:
+    verdicts = iter(("blocked", "allowed"))
+
+    def reply(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart(GUARD_TOOL, {"verdict": next(verdicts)})])
+
+    guard_model = RecordingGuardModel(FunctionModel(reply))
+    agent_model = RecordingModel(FunctionModel(reply))
+    guard = Agent(guard_model, output_type=ToolOutput(GuardAnswer, name=GUARD_TOOL))
+
+    await guard.run("Pierwszy")
+    await guard.run("Drugi")
+
+    assert guard_model.blocked == 1
+    assert guard_model.seconds > 0
+    assert len(guard_model.responses) == 2
+    assert agent_model.responses == []
+    guard_model.clear()
+    assert (guard_model.blocked, guard_model.seconds) == (0, 0.0)
+
+
+def test_report_gives_the_cost_of_the_guard_apart_from_the_turn() -> None:
+    report = EvalReport("none")
+    report.add(outcome("a", cost=Decimal("0.01"), guard_cost=Decimal("0.0003")))
+
+    assert "cost: $0.0003" in report.render()
+
+
 def test_turn_trace_counts_query_retries_of_the_last_turn() -> None:
     earlier = ModelRequest(parts=[RetryPromptPart("old", tool_name="query")])
     turn: list[ModelMessage] = [
@@ -189,14 +231,20 @@ def test_report_names_the_mode_counts_each_group_and_lists_failed_cases() -> Non
             drafts=1,
             seconds=5.0,
             cost=Decimal("0.01"),
+            guard_blocked=1,
+            guard_seconds=0.6,
+            guard_cost=Decimal("0.0003"),
         )
     )
 
     text = report.render()
 
     assert text.startswith("Mode: minimal")
-    assert "| listy | 2 | 1 | 1/2 | 2/2 | 2/2 | 1/1 | 0/1 | 2 | 1 | 1 | 1 | 5.0 | 0.0100 |" in text
+    assert (
+        "| listy | 2 | 1 | 1/2 | 2/2 | 2/2 | 1/1 | 0/1 | 2 | 1 | 1 | 1 | 1 | 5.0 | 0.0100 |" in text
+    )
     assert "Turns: 3, time: 15 s, cost: $0.03" in text
+    assert "Guard: 1 turns blocked, time: 1 s (0.2 s/turn), cost: unknown" in text
     assert "- b: status error, candidates" in text
     assert "- b: 1 234,56" in text
 
