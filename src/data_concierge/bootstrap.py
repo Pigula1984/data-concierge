@@ -28,6 +28,7 @@ from data_concierge.catalog.repository import (
     YamlCatalogRepository,
 )
 from data_concierge.catalog.service import CatalogService
+from data_concierge.core.context import RoleDirectory
 from data_concierge.core.settings import ModelExposure, Settings
 from data_concierge.core.sqlserver import SqlServerClient
 from data_concierge.procedures.repository import ProcedureRepository, SqlServerProcedureRepository
@@ -115,7 +116,8 @@ class CompositionRoot:
         sessions = sessions if sessions is not None else InMemorySessionRepository()
         factory = DuckDBSessionFactory(procedures, settings)
         audit = AuditService(cls.audit_log(settings))
-        return cls(AskService(agent, comments, sessions, factory, exposure, today, audit))
+        roles = RoleDirectory(settings.user_roles)
+        return cls(AskService(agent, comments, sessions, factory, roles, exposure, today, audit))
 
     @staticmethod
     def audit_log(settings: Settings) -> AuditLog:

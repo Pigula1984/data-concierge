@@ -43,6 +43,10 @@ class ProcedureTimeoutError(ProcedureError):
     """A stored procedure call exceeded its time limit."""
 
 
+class ProcedureAccessError(ProcedureError):
+    """The caller's role may not run this procedure; the backend decides, whatever the prompt."""
+
+
 class QueryError(DataConciergeError):
     """A query written by the model over result handles cannot be run; the model may fix it."""
 

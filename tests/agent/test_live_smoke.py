@@ -26,6 +26,7 @@ from data_concierge.api.service import AskService
 from data_concierge.api.sessions import InMemorySessionRepository
 from data_concierge.bootstrap import DuckDBSessionFactory
 from data_concierge.catalog.models import Catalog, DataRange
+from data_concierge.core.context import RoleDirectory
 from data_concierge.core.settings import ModelExposure, Settings
 from data_concierge.procedures.repository import ProcedureRepository
 
@@ -125,6 +126,7 @@ async def test_mode_minimal_comments_and_continues_with_the_comment_in_history(
         CommentService(model, minimal),
         sessions,
         DuckDBSessionFactory(repository, minimal),
+        RoleDirectory({}),
         ModelExposure.from_settings(minimal),
     )
 

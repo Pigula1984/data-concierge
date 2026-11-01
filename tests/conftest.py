@@ -35,7 +35,7 @@ from data_concierge.audit.service import AuditService, TurnAudit
 from data_concierge.bootstrap import DuckDBSessionFactory
 from data_concierge.catalog.models import Catalog, CatalogEntry, DataRange
 from data_concierge.catalog.repository import YamlCatalogRepository
-from data_concierge.core.context import RequestContext
+from data_concierge.core.context import RequestContext, RoleDirectory
 from data_concierge.core.settings import ModelDataAccess, ModelExposure, Settings
 from data_concierge.core.sqlserver import SqlServerClient
 from data_concierge.procedures.models import ProcedureResult
@@ -417,13 +417,14 @@ def ask_service(
     repository: FakeProcedureRepository,
     scripted: Callable[..., FunctionModel],
 ) -> Callable[..., AskService]:
-    """`ask_service(model, comments, audit_log)`: the tools phase and the comment phase scripted
-    apart, and the audit log of the turns."""
+    """`ask_service(model, comments, audit_log, roles)`: the tools phase and the comment phase
+    scripted apart, the audit log of the turns and the configured roles."""
 
     def build(
         model: FunctionModel,
         comments: FunctionModel | None = None,
         audit_log: AuditLog | None = None,
+        roles: Mapping[int, str] | None = None,
     ) -> AskService:
         agent = AgentService(model, agent_tools, instructions, agent_settings)
         comment = CommentService(comments or scripted(), agent_settings)
@@ -434,6 +435,7 @@ def ask_service(
             comment,
             sessions,
             factory,
+            RoleDirectory(roles or {}),
             exposure,
             today=lambda: ASK_TODAY,
             audit=AuditService(audit_log) if audit_log is not None else None,

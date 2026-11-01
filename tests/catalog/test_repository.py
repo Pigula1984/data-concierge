@@ -34,6 +34,14 @@ def test_minimal_catalog_loads() -> None:
     )
 
 
+def test_a_misspelled_key_of_an_entry_is_a_catalog_error(tmp_path: Path) -> None:
+    def change(entries: Entries) -> None:
+        entries[0]["allowed_role"] = ["hr"]
+
+    with pytest.raises(CatalogError, match="allowed_role"):
+        _load_variant(tmp_path, change)
+
+
 def test_sensitive_column_reaches_the_table_schema_and_defaults_to_false(
     tmp_path: Path,
 ) -> None:

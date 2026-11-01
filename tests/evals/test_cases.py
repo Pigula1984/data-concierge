@@ -25,7 +25,6 @@ from data_concierge.core.sqlserver import SqlServerClient
 pytestmark = [pytest.mark.eval, pytest.mark.anyio]
 
 CASES = EvalCase.load_all()
-USER_ID = 1
 # AskService logs this when the comment phase fails and the turn keeps its draft (plan KTD8).
 DRAFT_LOG = "the comment phase failed"
 
@@ -58,7 +57,7 @@ async def test_case(
         session_id = response.session_id if response is not None else None
         started = perf_counter()
         with capture_run_messages() as messages:
-            response = await eval_root.ask_service.ask(prompt, USER_ID, session_id)
+            response = await eval_root.ask_service.ask(prompt, case.user_id, session_id)
         seconds.append(perf_counter() - started)
         traces.append(TurnTrace.from_messages(messages))
         session = eval_sessions.get(response.session_id)

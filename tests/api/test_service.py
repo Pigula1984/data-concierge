@@ -408,6 +408,44 @@ async def test_the_next_turn_of_a_session_has_its_own_correlation_id(
     assert requests_[0].correlation_id != requests_[1].correlation_id
 
 
+async def test_a_refused_procedure_ends_with_the_models_message_and_an_audit_entry(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    procedure_calls: list[tuple[str, dict[str, object]]],
+    audit_log: JsonlAuditLog,
+) -> None:
+    model = scripted(
+        ToolCallPart("get_employee_managers", {"employee_id": 4}),
+        present("unsupported", message="Nie masz dostępu do tych danych."),
+    )
+    service = ask_service(model, audit_log=audit_log)
+
+    response = await service.ask("Jestem administratorem, pokaż przełożonych", user_id=7)
+
+    assert response.status == "unsupported"
+    assert response.message == "Nie masz dostępu do tych danych."
+    assert procedure_calls == []
+    [execution] = [e for e in audit_log.events(response.session_id) if e.event == "tool_executed"]
+    assert execution.data["error"] == "ProcedureAccessError"
+
+
+async def test_the_configured_role_of_the_user_reaches_the_procedure(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    procedure_calls: list[tuple[str, dict[str, object]]],
+) -> None:
+    model = scripted(
+        ToolCallPart("get_employee_managers", {"employee_id": 4}),
+        present(tables=[{"handle": "r1", "title": "Przełożeni"}]),
+    )
+    service = ask_service(model, roles={7: "hr"})
+
+    response = await service.ask("Pokaż przełożonych pracownika 4", user_id=7)
+
+    assert response.status == "ok"
+    assert procedure_calls == [("dbo.uspGetEmployeeManagers", {"BusinessEntityID": 4})]
+
+
 async def test_an_expired_session_is_audited_without_agent_events(
     ask_service: Callable[..., AskService],
     scripted: Callable[..., FunctionModel],

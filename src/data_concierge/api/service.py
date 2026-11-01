@@ -12,14 +12,12 @@ from data_concierge.agent.service import AgentService
 from data_concierge.api.schemas import Response
 from data_concierge.api.sessions import Session, SessionFactory, SessionRepository
 from data_concierge.audit.service import AuditService, TurnAudit
-from data_concierge.core.context import RequestContext
+from data_concierge.core.context import RequestContext, RoleDirectory
 from data_concierge.core.errors import CommentError, ResultStoreError
 from data_concierge.core.settings import DEFAULT_EXPOSURE, ModelExposure
 
 logger = logging.getLogger(__name__)
 
-# v1 does not authenticate the caller (plan, Scope Boundaries), so every caller has this role.
-CALLER_ROLE = "user"
 SESSION_EXPIRED_MESSAGE = (
     "Sesja {session_id} wygasła albo nie istnieje. Zacznij nową rozmowę bez identyfikatora sesji."
 )
@@ -41,6 +39,7 @@ class AskService:
         comments: CommentService,
         sessions: SessionRepository,
         factory: SessionFactory,
+        roles: RoleDirectory,
         exposure: ModelExposure = DEFAULT_EXPOSURE,
         today: Callable[[], date] = date.today,
         audit: AuditService | None = None,
@@ -49,6 +48,7 @@ class AskService:
         self._comments = comments
         self._sessions = sessions
         self._factory = factory
+        self._roles = roles
         self._exposure = exposure
         self._today = today
         self._audit = audit if audit is not None else AuditService.disabled()
@@ -57,7 +57,7 @@ class AskService:
         """Without `session_id` a new conversation starts; an unknown one is not continued,
         because the model would see the rest of a conversation without its beginning."""
         started = perf_counter()
-        context = RequestContext(user_id=user_id, role=CALLER_ROLE)
+        context = RequestContext(user_id=user_id, role=self._roles.role_of(user_id))
         continued = session_id is not None
         session: Session | None
         if session_id is None:

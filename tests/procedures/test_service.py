@@ -7,7 +7,7 @@ import pytest
 
 from data_concierge.catalog.models import Catalog, CatalogEntry
 from data_concierge.core.context import RequestContext
-from data_concierge.core.errors import ParameterValidationError
+from data_concierge.core.errors import ParameterValidationError, ProcedureAccessError
 from data_concierge.procedures.models import ProcedureResult
 from data_concierge.procedures.service import ProcedureService
 from data_concierge.results.models import ProcedureLineage
@@ -56,6 +56,50 @@ def orders(catalog: Catalog) -> CatalogEntry:
 
 def _order_rows() -> list[tuple[object, ...]]:
     return [ORDER_ROW]
+
+
+def test_a_role_outside_the_entry_is_refused_before_the_repository(
+    catalog: Catalog, results: ResultService
+) -> None:
+    repository = FakeProcedures([])
+    service = ProcedureService(repository, results)
+    context = RequestContext(user_id=7, role="user")
+
+    with pytest.raises(ProcedureAccessError, match="get_employee_managers"):
+        service.call(catalog.entry("dbo.uspGetEmployeeManagers"), {"employee_id": 4}, context)
+
+    assert repository.calls == []
+
+
+def test_refusal_comes_first_also_for_invalid_arguments(
+    catalog: Catalog, results: ResultService
+) -> None:
+    service = ProcedureService(FakeProcedures([]), results)
+    context = RequestContext(user_id=7, role="user")
+
+    with pytest.raises(ProcedureAccessError):
+        service.call(catalog.entry("dbo.uspGetEmployeeManagers"), {}, context)
+
+
+def test_the_allowed_role_runs_the_same_procedure(catalog: Catalog, results: ResultService) -> None:
+    repository = FakeProcedures([])
+    service = ProcedureService(repository, results)
+    context = RequestContext(user_id=7, role="hr")
+
+    summary = service.call(catalog.entry("dbo.uspGetEmployeeManagers"), {"employee_id": 4}, context)
+
+    assert summary.handle == "r1"
+    assert repository.calls == [("dbo.uspGetEmployeeManagers", {"BusinessEntityID": 4})]
+
+
+@pytest.mark.parametrize("role", ["user", "hr", "anything"])
+def test_an_entry_without_allowed_roles_runs_for_every_role(
+    orders: CatalogEntry, results: ResultService, role: str
+) -> None:
+    service = ProcedureService(FakeProcedures([]), results)
+    args = {"date_from": "2024-01-01", "date_to": "2025-01-01"}
+
+    assert service.call(orders, args, RequestContext(user_id=7, role=role)).handle == "r1"
 
 
 def test_call_passes_model_arguments_and_injected_user_id(

@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 import httpx2
@@ -12,7 +13,9 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from data_concierge.agent.deps import AgentDeps
+from data_concierge.agent.models import AgentAnswer
 from data_concierge.agent.service import AgentService
+from data_concierge.core.context import RequestContext
 from data_concierge.core.settings import Settings
 
 pytestmark = pytest.mark.anyio
@@ -78,6 +81,26 @@ async def test_second_turn_starts_with_the_same_bytes(
     assert len(requests) == 2
     assert start(requests[0]) == start(requests[1])
     assert len(requests[1]["messages"]) > len(requests[0]["messages"])
+
+
+async def test_tool_definitions_are_the_same_for_every_role(
+    service: AgentService, deps: AgentDeps, requests: list[dict[str, Any]]
+) -> None:
+    for role in ("user", "hr"):
+        context = RequestContext(user_id=7, role=role)
+        await service.run("Sprzedaż w 2024", [], replace(deps, context=context))
+
+    assert requests[0]["tools"] == requests[1]["tools"]
+    assert "get_employee_managers" in json.dumps(requests[0]["tools"])
+
+
+def test_instructions_send_an_access_refusal_to_unsupported_not_to_error(instructions: str) -> None:
+    [refusal] = [line for line in instructions.splitlines() if "access denied" in line]
+    [failure] = [line for line in instructions.splitlines() if "the data could not be" in line]
+
+    assert "status unsupported" in refusal
+    assert "status error" in failure
+    assert "unsupported" in str(AgentAnswer.model_fields["status"].description)
 
 
 async def test_request_has_effort_cache_points_and_strict_tools(

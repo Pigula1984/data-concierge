@@ -485,6 +485,7 @@
 
 - id: przelozeni-pracownika-4
   group: inne dziedziny
+  user_id: 2
   prompt: Pokaż łańcuch przełożonych pracownika o id 4
   expect:
     status: [ok]
@@ -500,6 +501,7 @@
 
 - id: podwladni-kierownika-2
   group: inne dziedziny
+  user_id: 2
   prompt: Wymień wszystkich podwładnych kierownika o id 2
   expect:
     status: [ok]

@@ -57,6 +57,19 @@ def test_settings_defaults_follow_architecture_limits(monkeypatch: pytest.Monkey
     assert settings.audit_log_path == Path("logs/audit.jsonl")
 
 
+def test_user_roles_are_read_as_json_with_numeric_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("DC_USER_ROLES", '{"7": "hr"}')
+
+    assert Settings(_env_file=None).user_roles == {7: "hr"}
+
+
+def test_nobody_has_a_role_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required(monkeypatch)
+
+    assert Settings(_env_file=None).user_roles == {}
+
+
 def test_audit_log_is_switched_off_by_its_own_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required(monkeypatch)
     monkeypatch.setenv("DC_AUDIT_LOG_ENABLED", "false")

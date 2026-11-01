@@ -19,6 +19,12 @@ def test_catalog_describes_every_read_procedure(catalog: Catalog) -> None:
     }
 
 
+def test_only_the_employee_procedures_are_limited_to_a_role(catalog: Catalog) -> None:
+    limited = {entry.tool: entry.allowed_roles for entry in catalog.entries if entry.allowed_roles}
+
+    assert limited == {"get_employee_managers": ("hr",), "get_manager_employees": ("hr",)}
+
+
 def test_tool_names_are_unique(catalog: Catalog) -> None:
     tools = [entry.tool for entry in catalog.entries]
 

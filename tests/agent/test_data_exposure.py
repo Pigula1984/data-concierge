@@ -31,6 +31,7 @@ from data_concierge.agent.service import AgentService
 from data_concierge.api.service import AskService
 from data_concierge.api.sessions import InMemorySessionRepository
 from data_concierge.api.sessions import Session as ApiSession
+from data_concierge.core.context import RoleDirectory
 from data_concierge.core.settings import ModelExposure, Settings
 from data_concierge.core.types import Column, ColumnRole
 from data_concierge.results.service import ResultService
@@ -262,6 +263,7 @@ async def test_in_mode_minimal_rows_reach_only_the_comment_and_sensitive_values_
         CommentService(FunctionModel(comment_model), agent_settings),
         InMemorySessionRepository(),
         SentinelSessions(sentinel_deps),
+        RoleDirectory({}),
         exposure,
     )
 

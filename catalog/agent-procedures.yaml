@@ -3,6 +3,7 @@
 # columns of dbo.* procedures follow their current result sets in AdventureWorks2025.
 # Startup validation compares every entry with the database metadata (plan U10).
 # `sensitive: true` keeps a column's values from the model in every mode (architecture 002, 5.3).
+# `allowed_roles` limits a procedure to these roles; the backend checks it at every call (8.2).
 
 - procedure: api.Customer_Search
   tool: customer_search
@@ -290,6 +291,7 @@
 
 - procedure: dbo.uspGetEmployeeManagers
   tool: get_employee_managers
+  allowed_roles: [hr]
   summary: Łańcuch przełożonych pracownika aż do szczytu organizacji.
   use_when:
     - pytanie o przełożonych lub ścieżkę służbową pracownika
@@ -314,6 +316,7 @@
 
 - procedure: dbo.uspGetManagerEmployees
   tool: get_manager_employees
+  allowed_roles: [hr]
   summary: Wszyscy podwładni kierownika, bezpośredni i pośredni.
   use_when:
     - pytanie o podwładnych, zespół lub strukturę pod kierownikiem

@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from data_concierge.catalog.models import CatalogEntry, InjectSource
 from data_concierge.core.context import RequestContext
-from data_concierge.core.errors import ParameterValidationError
+from data_concierge.core.errors import ParameterValidationError, ProcedureAccessError
 from data_concierge.procedures.models import ProcedureArguments
 from data_concierge.procedures.repository import ProcedureRepository
 from data_concierge.results.models import ProcedureLineage, ResultSummary, ResultTable
@@ -25,6 +25,7 @@ class ProcedureService:
     def call(
         self, entry: CatalogEntry, args: Mapping[str, object], context: RequestContext
     ) -> ResultSummary:
+        self._check_role(entry, context)
         arguments = self._validate(entry, args)
         injected = {
             param.name: self._injected(param.inject, context)
@@ -44,6 +45,11 @@ class ProcedureService:
             ResultTable(data=result.data, schema=entry.table_schema, lineage=lineage)
         )
         return self._results.summarize(handle)
+
+    @staticmethod
+    def _check_role(entry: CatalogEntry, context: RequestContext) -> None:
+        if entry.allowed_roles and context.role not in entry.allowed_roles:
+            raise ProcedureAccessError(f"access denied: this user may not use {entry.tool}")
 
     @staticmethod
     def _validate(entry: CatalogEntry, args: Mapping[str, object]) -> ProcedureArguments:

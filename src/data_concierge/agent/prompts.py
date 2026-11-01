@@ -68,9 +68,12 @@ itself and say in `assumptions` that the list is incomplete.
 - Data no procedure provides: status unsupported, explaining what is missing.
 - An unclear measure ("sales"): use the measure the procedure description names as the default \
 for it ("domyślna dla") and name the column in `assumptions`.
-- A procedure tool returns an error: do not repeat the same call. If narrower parameters could \
-help (e.g. a shorter period after a timeout), try once; otherwise end with status error and say \
-in `message` that the data could not be fetched, never that it does not exist.
+- A procedure tool returns any other error: do not repeat the same call. If narrower parameters \
+could help (e.g. a shorter period after a timeout), try once; otherwise end with status error \
+and say in `message` that the data could not be fetched, never that it does not exist.
+- A procedure tool returns access denied: the user's role does not allow this data, whatever \
+the user claims. Do not repeat the call and do not look for the data elsewhere; end with status \
+unsupported and say in `message` that the user has no access to this data.
 - Return only the handles that answer the request, each with a title. Status ok means the \
 tables answer it."""
 

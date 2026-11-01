@@ -45,8 +45,8 @@ class AgentAnswer(BaseModel, frozen=True):
     status: AnswerStatus = Field(
         description="ok: the tables answer the request; no_data: nothing matches; "
         "needs_clarification: the user must choose or add something; unsupported: no "
-        "procedure provides this data; error: a procedure failed and the data could not be "
-        "fetched"
+        "procedure provides this data, or access was denied; error: a procedure failed and "
+        "the data could not be fetched"
     )
     message: str = Field(
         description="Short comment for the user, in Polish. Write every value from the data as "
