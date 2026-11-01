@@ -369,6 +369,7 @@ async def test_a_new_session_with_a_blocked_prompt_can_go_on_without_that_prompt
 async def test_a_guard_without_a_verdict_stops_the_turn_like_a_blocked_prompt(
     ask_service: Callable[..., AskService],
     scripted: Callable[..., FunctionModel],
+    caplog: pytest.LogCaptureFixture,
     error: Exception,
 ) -> None:
     def fail(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -376,11 +377,13 @@ async def test_a_guard_without_a_verdict_stops_the_turn_like_a_blocked_prompt(
 
     model = scripted(present())
 
-    response = await ask_service(model, guard=FunctionModel(fail)).ask("Raport", user_id=7)
+    with caplog.at_level(logging.WARNING, logger="data_concierge.api.service"):
+        response = await ask_service(model, guard=FunctionModel(fail)).ask("Raport", user_id=7)
 
     assert response.status == "unsupported"
     assert response.message == REFUSAL_MESSAGE
     assert requests(model) == []
+    assert "the guard gave no verdict" in caplog.text
 
 
 async def test_the_guard_reads_the_prompt_without_the_date_line(

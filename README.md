@@ -188,5 +188,5 @@ Zasady pracy nad kodem (język, standardy, uv i ruff, cykl Compound Engineering)
 - Sesje żyją w pamięci jednego procesu i znikają przy restarcie.
 - Tylko odczyt: brak procedur zapisu.
 - Treści komentarza (np. ocen typu „duża część przychodu”) nic nie sprawdza. Ewaluacja mierzy tylko liczby wpisane poza kotwicami.
-- Ochrona przed prompt injection jest na poziomie POC (001, sekcja 8.2). Role i właściciel sesji pokazują zasadę, ale bez uwierzytelniania nie są prawdziwą granicą. Wrażliwość kolumn odporna na aliasy w zapytaniach jest odłożona (002, sekcje 10 i 12).
+- Ochrona przed prompt injection jest na poziomie POC (001, sekcja 8.2, i [raport](docs/reports/2026-11-01-ochrona-przed-prompt-injection.md)). Role i właściciel sesji pokazują zasadę, ale bez uwierzytelniania nie są prawdziwą granicą. Wrażliwość kolumn odporna na aliasy w zapytaniach jest odłożona (002, sekcje 10 i 12).
 - Log audytowy to lokalny plik bez rotacji i bez ochrony przed zmianą. CLI i serwer HTTP nie powinny pisać do tego samego pliku jednocześnie.

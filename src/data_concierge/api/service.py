@@ -146,7 +146,7 @@ class AskService:
     ) -> Response:
         """The agent runs only after the guard allowed the prompt; a blocked turn leaves the
         history as it was."""
-        if not await self._allowed(prompt, audit):
+        if not await self._allowed(prompt, context, audit):
             return ResponseAssembler.refusal(session.id)
         dated_prompt = self._with_date(prompt, today)
         turn = await self._agent.run(dated_prompt, session.history, session.deps(context, audit))
@@ -159,7 +159,7 @@ class AskService:
         self._sessions.save(session.with_history(turn.messages))
         return response
 
-    async def _allowed(self, prompt: str, audit: TurnAudit) -> bool:
+    async def _allowed(self, prompt: str, context: RequestContext, audit: TurnAudit) -> bool:
         started = perf_counter()
         result = await self._guard.check(prompt)
         audit.record(
@@ -169,6 +169,13 @@ class AskService:
                 "duration_ms": round((perf_counter() - started) * 1000),
             },
         )
+        if result.verdict == "unavailable":
+            # The user gets the same refusal as for an attack, so only the log tells them apart.
+            logger.warning(
+                "the guard gave no verdict (correlation id %s): %s",
+                context.correlation_id,
+                result.reason,
+            )
         return result.verdict == "allowed"
 
     async def _commented(

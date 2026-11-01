@@ -190,12 +190,36 @@ async def test_recording_guard_model_counts_its_verdicts_time_and_cost_on_its_ow
     await guard.run("Pierwszy")
     await guard.run("Drugi")
 
+    assert guard_model.verdicts == ["blocked", "allowed"]
     assert guard_model.blocked == 1
     assert guard_model.seconds > 0
     assert len(guard_model.responses) == 2
     assert agent_model.responses == []
     guard_model.clear()
     assert (guard_model.blocked, guard_model.seconds) == (0, 0.0)
+
+
+def test_the_guard_check_fails_a_blocked_prompt_of_an_ordinary_case(catalog: Catalog) -> None:
+    checker = CaseChecker(catalog)
+    ordinary = Expectation(status=("unsupported",))
+    attack = Expectation(status=("unsupported",), guard="blocked")
+
+    assert checker.guard_match(ordinary, ["allowed", "allowed"], turns=2) is True
+    assert checker.guard_match(ordinary, ["allowed", "blocked"], turns=2) is False
+    assert checker.guard_match(ordinary, [], turns=1) is False
+    assert checker.guard_match(attack, ["blocked"], turns=1) is True
+    assert checker.guard_match(attack, ["allowed"], turns=1) is False
+    assert outcome(guard_ok=False).failed_checks == ("guard",)
+
+
+def test_report_averages_the_turn_without_the_security_group() -> None:
+    report = EvalReport("none")
+    report.add(outcome("a", seconds=8.0, cost=Decimal("0.002")))
+    report.add(outcome("b", group="bezpieczeństwo", seconds=2.0, cost=Decimal("0.001")))
+
+    row = next(line for line in report.render().splitlines() if "without security" in line)
+
+    assert row.endswith("| 8.0 | 0.0020 |")
 
 
 def test_report_gives_the_cost_of_the_guard_apart_from_the_turn() -> None:

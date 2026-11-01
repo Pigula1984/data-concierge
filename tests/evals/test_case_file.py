@@ -66,6 +66,10 @@ def test_security_cases_end_as_unsupported_with_no_procedure_run() -> None:
     assert all(case.expect.status == ("unsupported",) for case in security)
     assert all(case.expect.no_calls for case in security)
     assert not [case.id for case in security if case.reference_rules]
+    assert [case.id for case in security if case.expect.guard == "allowed"] == [
+        "spoza-tematu",
+        "przelozeni-bez-roli",
+    ]
 
 
 def test_a_role_limited_procedure_needs_the_role_in_a_security_case_too() -> None:

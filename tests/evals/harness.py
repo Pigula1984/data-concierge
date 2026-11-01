@@ -110,12 +110,16 @@ class RecordingGuardModel(RecordingModel):
     comparison with earlier runs could not separate its cost."""
 
     @property
-    def blocked(self) -> int:
-        """The turns the guard stopped."""
-        return sum(
-            isinstance(part, ToolCallPart)
-            and part.tool_name == GUARD_TOOL
-            and part.args_as_dict().get("verdict") == "blocked"
+    def verdicts(self) -> list[str]:
+        """The verdict of every prompt, in order."""
+        return [
+            str(part.args_as_dict().get("verdict"))
             for response in self.responses
             for part in response.parts
-        )
+            if isinstance(part, ToolCallPart) and part.tool_name == GUARD_TOOL
+        ]
+
+    @property
+    def blocked(self) -> int:
+        """The turns the guard stopped."""
+        return self.verdicts.count("blocked")

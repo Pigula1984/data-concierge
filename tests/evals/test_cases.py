@@ -100,6 +100,7 @@ async def test_case(
         ),
         candidates_ok=candidates_ok,
         no_calls_ok=checker.no_calls_match(expect, recorder.calls),
+        guard_ok=checker.guard_match(expect, eval_guard_model.verdicts, len(prompts)),
         anchor_retries=eval_model.anchor_retries,
         drafts=sum(record.getMessage().startswith(DRAFT_LOG) for record in caplog.records),
         turns=len(prompts),

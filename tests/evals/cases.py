@@ -72,6 +72,8 @@ class Expectation(_CaseModel):
     candidates: tuple[CandidateId, ...] = ()
     # No procedure ran at all, e.g. the guard stopped the turn or the role was refused.
     no_calls: bool = False
+    # The verdict of the guard on every prompt of the case; `unavailable` is never expected.
+    guard: Literal["allowed", "blocked"] = "allowed"
 
     @property
     def results(self) -> tuple[ResultRule, ...]:
@@ -137,6 +139,11 @@ class CaseChecker:
     def no_calls_match(expected: Expectation, calls: Sequence[Call]) -> bool | None:
         """None when the case does not expect it."""
         return not calls if expected.no_calls else None
+
+    @staticmethod
+    def guard_match(expected: Expectation, verdicts: Sequence[str], turns: int) -> bool:
+        """A refusal of the guard and of the agent look the same in the response."""
+        return list(verdicts) == [expected.guard] * turns
 
     @staticmethod
     def assumptions_match(expected: Sequence[Sequence[str]], response: Response) -> bool:

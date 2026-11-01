@@ -31,6 +31,8 @@ NOT_AMOUNTS = re.compile(r"\d{4}-\d{2}(?:-\d{2})?|\d{1,2}\.\d{1,2}\.\d{4}|[A-Z]{
 # Years and small counts ("12 miesięcy", "3 klientów") are not counted.
 YEARS = range(1900, 2101)
 SMALL_COUNT = 100
+# Its turns end at the guard, so an average with them says nothing about an ordinary turn.
+SECURITY_GROUP = "bezpieczeństwo"
 
 
 @dataclass
@@ -126,6 +128,7 @@ class CaseOutcome:
     assumptions_ok: bool | None = None
     candidates_ok: bool | None = None
     no_calls_ok: bool | None = None
+    guard_ok: bool = True
     anchor_retries: int = 0
     # Answers that kept their draft because the comment phase failed (mode minimal).
     drafts: int = 0
@@ -149,6 +152,7 @@ class CaseOutcome:
             ("candidates", self.candidates_ok is not False),
             ("assumptions", self.assumptions_ok is not False),
             ("no calls", self.no_calls_ok is not False),
+            ("guard", self.guard_ok),
         )
         return tuple(name for name, ok in checks if not ok)
 
@@ -182,6 +186,9 @@ class EvalReport:
         for group in groups:
             lines.append(self._row(group, [o for o in self._outcomes if o.group == group]))
         lines.append(self._row("**all**", self._outcomes))
+        ordinary = [o for o in self._outcomes if o.group != SECURITY_GROUP]
+        if ordinary:
+            lines.append(self._row("**without security**", ordinary))
         lines += ["", self._totals(self._outcomes), self._guard(self._outcomes)]
         failed = [outcome for outcome in self._outcomes if not outcome.passed]
         if failed:

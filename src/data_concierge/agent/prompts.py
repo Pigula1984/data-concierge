@@ -215,7 +215,8 @@ persona;
 Give the verdict `allowed` to everything else, also when the message is off topic, unclear or \
 asks for names, salaries or other sensitive data: another part of the system refuses what it \
 may not do. A business question, a short answer to a clarification (an id, a name, "the first \
-one") and a request about employees or managers are `allowed`."""
+one"), a question about what data is available, a mention of the user's own department and a \
+request about employees or managers are `allowed`."""
 
 
 class AgentInstructions:
