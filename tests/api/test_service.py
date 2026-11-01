@@ -22,7 +22,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from data_concierge.api.service import AskService
 from data_concierge.audit.models import AuditEvent
 from data_concierge.audit.repository import JsonlAuditLog
-from data_concierge.core.errors import ResultStoreError
+from data_concierge.core.errors import PromptTooLongError, ResultStoreError
 from data_concierge.core.settings import Settings
 from data_concierge.results.repository import DuckDBResultStore
 
@@ -197,6 +197,61 @@ async def test_unknown_session_is_not_continued_and_the_agent_is_not_called(
     assert response.session_id == "no-such-session"
     assert "wygasła" in response.message
     assert requests(model) == []
+
+
+async def test_a_session_of_another_user_looks_unknown_and_the_agent_is_not_called(
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(present(), present())
+    service = ask_service(model)
+    owned = await service.ask("Pierwsza", user_id=1)
+    session_id = owned.session_id
+
+    foreign = await service.ask("Pokaż to", user_id=2, session_id=session_id)
+    unknown = await service.ask("Pokaż to", user_id=2, session_id="no-such-session")
+
+    assert foreign.status == "error"
+    assert foreign.session_id == session_id
+    assert foreign.message == unknown.message.replace("no-such-session", session_id)
+    assert foreign.tables == ()
+    assert len(requests(model)) == 1
+
+    await service.ask("Dalej", user_id=1, session_id=session_id)
+
+    # The history of the session is as its owner left it.
+    assert [prompt.split("\n")[0] for prompt in user_prompts(requests(model)[1])] == [
+        "Pierwsza",
+        "Dalej",
+    ]
+
+
+async def test_a_prompt_of_exactly_the_limit_is_answered(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    agent_settings: Settings,
+) -> None:
+    prompt = "x" * agent_settings.max_prompt_chars
+
+    response = await ask_service(scripted(present())).ask(prompt, user_id=7)
+
+    assert response.status == "ok"
+
+
+async def test_a_longer_prompt_is_refused_before_a_session_or_a_model_call(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    agent_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    model = scripted(present())
+    log = tmp_path / "refused.jsonl"
+    service = ask_service(model, audit_log=JsonlAuditLog(log))
+
+    with pytest.raises(PromptTooLongError, match=str(agent_settings.max_prompt_chars)):
+        await service.ask("x" * (agent_settings.max_prompt_chars + 1), user_id=7)
+
+    assert requests(model) == []
+    assert not log.exists()
 
 
 async def test_prompt_for_the_agent_carries_the_date_from_the_injected_clock(
@@ -444,6 +499,28 @@ async def test_the_configured_role_of_the_user_reaches_the_procedure(
 
     assert response.status == "ok"
     assert procedure_calls == [("dbo.uspGetEmployeeManagers", {"BusinessEntityID": 4})]
+
+
+async def test_a_session_of_another_user_is_audited_as_rejected(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+) -> None:
+    service = ask_service(scripted(present()), audit_log=audit_log)
+    owned = await service.ask("Pierwsza", user_id=1)
+
+    await service.ask("Pokaż to", user_id=2, session_id=owned.session_id)
+
+    events = audit_log.events(owned.session_id)
+    assert [e.event for e in events if e.user_id == 2] == [
+        "request",
+        "session_rejected",
+        "response",
+    ]
+    [rejected] = [e for e in events if e.event == "session_rejected"]
+    assert rejected.session_id == owned.session_id
+    assert rejected.data == {"owner_id": 1}
+    assert rejected.correlation_id == events[-1].correlation_id
 
 
 async def test_an_expired_session_is_audited_without_agent_events(

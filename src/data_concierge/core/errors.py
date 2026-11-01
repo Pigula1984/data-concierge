@@ -31,6 +31,10 @@ class CommentError(DataConciergeError):
     (architecture 002, section 5.2)."""
 
 
+class PromptTooLongError(DataConciergeError):
+    """The prompt is over the configured limit; its message is for the user."""
+
+
 class ParameterValidationError(DataConciergeError):
     """Procedure arguments supplied by the model are invalid."""
 

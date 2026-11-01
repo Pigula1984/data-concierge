@@ -46,7 +46,7 @@ class DuckDBSessionFactory:
         self._procedures = procedures
         self._settings = settings
 
-    def create(self) -> Session:
+    def create(self, owner_id: int) -> Session:
         settings = self._settings
         results = ResultService(
             DuckDBResultStore(max_query_rows=settings.max_query_rows),
@@ -55,6 +55,7 @@ class DuckDBSessionFactory:
         )
         return Session(
             id=str(uuid4()),
+            owner_id=owner_id,
             procedures=ProcedureService(self._procedures, results),
             queries=QueryService(results, QueryPolicy()),
             results=results,
@@ -116,8 +117,19 @@ class CompositionRoot:
         sessions = sessions if sessions is not None else InMemorySessionRepository()
         factory = DuckDBSessionFactory(procedures, settings)
         audit = AuditService(cls.audit_log(settings))
-        roles = RoleDirectory(settings.user_roles)
-        return cls(AskService(agent, comments, sessions, factory, roles, exposure, today, audit))
+        return cls(
+            AskService(
+                agent,
+                comments,
+                sessions,
+                factory,
+                RoleDirectory(settings.user_roles),
+                settings.max_prompt_chars,
+                exposure,
+                today,
+                audit,
+            )
+        )
 
     @staticmethod
     def audit_log(settings: Settings) -> AuditLog:

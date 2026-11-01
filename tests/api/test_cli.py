@@ -25,6 +25,7 @@ from data_concierge.api.service import AskService
 from data_concierge.audit.models import AuditEvent, AuditEventKind
 from data_concierge.audit.repository import JsonlAuditLog
 from data_concierge.audit.service import AuditTrail
+from data_concierge.core.errors import PromptTooLongError
 from data_concierge.core.settings import Settings
 from data_concierge.core.types import ColumnKind, ColumnType
 
@@ -34,7 +35,9 @@ pytestmark = pytest.mark.anyio
 class StubAskService(AskService):
     """Replays the given responses in order and records the calls."""
 
-    def __init__(self, *responses: Response, drop_on_error: bool = False) -> None:
+    def __init__(
+        self, *responses: Response | PromptTooLongError, drop_on_error: bool = False
+    ) -> None:
         self.responses = list(responses)
         self.drop_on_error = drop_on_error
         self.dropped: set[str] = set()
@@ -44,6 +47,8 @@ class StubAskService(AskService):
         """With `drop_on_error`, an error response drops its session, as after an engine failure."""
         self.calls.append((prompt, user_id, session_id))
         response = self.responses.pop(0)
+        if isinstance(response, PromptTooLongError):
+            raise response
         if self.drop_on_error and response.status == "error":
             self.dropped.add(response.session_id)
         return response
@@ -66,11 +71,16 @@ def documents(output: str) -> list[dict[str, object]]:
     return found
 
 
-async def run(service: AskService, *argv: str, stdin: str = "") -> tuple[int, str]:
-    stdout = io.StringIO()
-    command_line = CommandLine(service, io.StringIO(stdin), stdout)
+async def run_with_errors(service: AskService, *argv: str, stdin: str = "") -> tuple[int, str, str]:
+    stdout, stderr = io.StringIO(), io.StringIO()
+    command_line = CommandLine(service, io.StringIO(stdin), stdout, stderr)
     code = await command_line.run(CommandLine.parser().parse_args(argv))
-    return code, stdout.getvalue()
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+async def run(service: AskService, *argv: str, stdin: str = "") -> tuple[int, str]:
+    code, output, _ = await run_with_errors(service, *argv, stdin=stdin)
+    return code, output
 
 
 async def test_ask_prints_the_response_json_and_exits_with_0() -> None:
@@ -90,6 +100,29 @@ async def test_ask_with_status_error_exits_with_a_nonzero_code() -> None:
 
     assert code != 0
     assert json.loads(output)["status"] == "error"
+
+
+async def test_ask_with_a_prompt_over_the_limit_exits_with_1_and_says_why() -> None:
+    service = StubAskService(PromptTooLongError("Prośba jest za długa."))
+
+    code, output, errors = await run_with_errors(service, "ask", "x", "--user", "7")
+
+    assert code == 1
+    assert output == ""
+    assert "Prośba jest za długa." in errors
+
+
+async def test_chat_goes_on_after_a_line_over_the_limit() -> None:
+    service = StubAskService(ok("s1"), PromptTooLongError("Prośba jest za długa."), ok("s1"))
+
+    code, output, errors = await run_with_errors(
+        service, "chat", "--user", "7", "--diagnostic", stdin="Raport\nDługi wiersz\nDalej\n"
+    )
+
+    assert code == 0
+    assert "Prośba jest za długa." in errors
+    assert [session_id for _, _, session_id in service.calls] == [None, "s1", "s1"]
+    assert len(documents(output)) == 2
 
 
 async def test_chat_passes_the_session_id_of_the_first_turn_to_the_next_turns() -> None:
@@ -438,6 +471,7 @@ def test_audit_prints_every_kind_of_detail(audit_log: JsonlAuditLog) -> None:
         ),
         ("comment", {"comment": "Razem {r2.net_sales}."}),
         ("comment", {"failed": "overloaded"}),
+        ("session_rejected", {"owner_id": 3}),
         ("turn_failed", {"error": "UsageLimitExceeded", "message": "limit 10"}),
         (
             "response",
@@ -478,6 +512,7 @@ def test_audit_prints_every_kind_of_detail(audit_log: JsonlAuditLog) -> None:
         "result query [c1]: r2, 3 rows",
         "comment: Razem {r2.net_sales}.",
         "failed, the draft is used: overloaded",
+        "the session belongs to user 3",
         "UsageLimitExceeded: limit 10",
         "status needs_clarification in 42 ms",
         "message: Którego klienta?",

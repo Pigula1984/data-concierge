@@ -13,7 +13,7 @@ from data_concierge.api.schemas import Response
 from data_concierge.api.sessions import Session, SessionFactory, SessionRepository
 from data_concierge.audit.service import AuditService, TurnAudit
 from data_concierge.core.context import RequestContext, RoleDirectory
-from data_concierge.core.errors import CommentError, ResultStoreError
+from data_concierge.core.errors import CommentError, PromptTooLongError, ResultStoreError
 from data_concierge.core.settings import DEFAULT_EXPOSURE, ModelExposure
 
 logger = logging.getLogger(__name__)
@@ -21,13 +21,18 @@ logger = logging.getLogger(__name__)
 SESSION_EXPIRED_MESSAGE = (
     "Sesja {session_id} wygasła albo nie istnieje. Zacznij nową rozmowę bez identyfikatora sesji."
 )
+PROMPT_TOO_LONG_MESSAGE = (
+    "Prośba jest za długa: limit to {limit} znaków. Skróć ją i wyślij ponownie."
+)
 
 
 class AskService:
     """Runs one turn of the agent in a session and returns the response of section 9.
 
-    It never raises: any failure of the turn becomes status `error` with the correlation id,
-    and the session keeps the history from before the turn, unless its DuckDB broke. In mode
+    A prompt over the limit raises PromptTooLongError: that is input validation, before a turn
+    begins. Otherwise it never raises: any failure of the turn becomes status `error` with the
+    correlation id, and the session keeps the history from before the turn, unless its DuckDB
+    broke. In mode
     minimal a turn with status ok gets its comment from the comment phase (architecture 002,
     section 5.2). Every turn, a failed one too, leaves its events in the audit log
     (architecture, section 8.1).
@@ -40,6 +45,7 @@ class AskService:
         sessions: SessionRepository,
         factory: SessionFactory,
         roles: RoleDirectory,
+        max_prompt_chars: int,
         exposure: ModelExposure = DEFAULT_EXPOSURE,
         today: Callable[[], date] = date.today,
         audit: AuditService | None = None,
@@ -49,19 +55,23 @@ class AskService:
         self._sessions = sessions
         self._factory = factory
         self._roles = roles
+        self._max_prompt_chars = max_prompt_chars
         self._exposure = exposure
         self._today = today
         self._audit = audit if audit is not None else AuditService.disabled()
 
     async def ask(self, prompt: str, user_id: int, session_id: str | None = None) -> Response:
         """Without `session_id` a new conversation starts; an unknown one is not continued,
-        because the model would see the rest of a conversation without its beginning."""
+        because the model would see the rest of a conversation without its beginning, and the
+        session of another user looks the same as an unknown one."""
+        if len(prompt) > self._max_prompt_chars:
+            raise PromptTooLongError(PROMPT_TOO_LONG_MESSAGE.format(limit=self._max_prompt_chars))
         started = perf_counter()
         context = RequestContext(user_id=user_id, role=self._roles.role_of(user_id))
         continued = session_id is not None
         session: Session | None
         if session_id is None:
-            session = self._factory.create()
+            session = self._factory.create(user_id)
             # Saved now, so the session_id of an error response can still be continued.
             self._sessions.save(session)
             session_id = session.id
@@ -79,6 +89,9 @@ class AskService:
                 "model": self._agent.model_name,
             },
         )
+        if session is not None and session.owner_id != user_id:
+            audit.record("session_rejected", {"owner_id": session.owner_id})
+            session = None
         dated_prompt = self._with_date(prompt, today)
         response = await self._respond(dated_prompt, session, session_id, context, audit)
         audit.record(

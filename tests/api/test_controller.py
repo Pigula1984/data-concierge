@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from data_concierge.api.schemas import Response
 from data_concierge.api.service import AskService
 from data_concierge.bootstrap import CompositionRoot
+from data_concierge.core.errors import PromptTooLongError
 
 
 class StubAskService(AskService):
@@ -13,10 +14,13 @@ class StubAskService(AskService):
 
     def __init__(self, response: Response) -> None:
         self.response = response
+        self.refusal: PromptTooLongError | None = None
         self.calls: list[tuple[str, int, str | None]] = []
 
     async def ask(self, prompt: str, user_id: int, session_id: str | None = None) -> Response:
         self.calls.append((prompt, user_id, session_id))
+        if self.refusal is not None:
+            raise self.refusal
         return self.response
 
 
@@ -49,6 +53,17 @@ def test_request_without_prompt_is_rejected_with_422(
 
     assert reply.status_code == 422
     assert stub.calls == []
+
+
+def test_prompt_over_the_limit_is_rejected_with_422_and_the_reason(
+    client: TestClient, stub: StubAskService
+) -> None:
+    stub.refusal = PromptTooLongError("Prośba jest za długa.")
+
+    reply = client.post("/ask", json={"prompt": "x", "user_id": 7})
+
+    assert reply.status_code == 422
+    assert reply.json() == {"detail": "Prośba jest za długa."}
 
 
 def test_error_while_answering_is_status_error_in_a_200_response(

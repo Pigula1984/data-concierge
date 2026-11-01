@@ -127,6 +127,7 @@ async def test_mode_minimal_comments_and_continues_with_the_comment_in_history(
         sessions,
         DuckDBSessionFactory(repository, minimal),
         RoleDirectory({}),
+        minimal.max_prompt_chars,
         ModelExposure.from_settings(minimal),
     )
 

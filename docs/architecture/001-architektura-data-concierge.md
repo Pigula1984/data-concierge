@@ -599,7 +599,7 @@ Każdy wiersz pliku to jedno zdarzenie z czasem (UTC), identyfikatorem korelacji
 | `tool_executed` | dekorator narzędzi | narzędzie, `tool_call_id`, czas, uchwyt, liczba wierszy, obcięcie i pochodzenie (procedura z parametrami bez wartości wstrzykiwanych albo SQL modelu i SQL wykonany), a przy błędzie klasa, komunikat dla modelu i pełny `detail` |
 | `model_input` | capability audytu agenta (hook `before_model_request`) | wyniki narzędzi, które zobaczył model, i prośby o poprawkę |
 | `comment` | `AskService` (tryb `minimal`) | komentarz z fazy komentarza albo przyczyna porażki |
-| `session_rejected` | `AskService` | `session_id` nieznany albo należący do innego użytkownika |
+| `session_rejected` | `AskService` | próba użycia sesji innego użytkownika, z jej właścicielem |
 | `output_blocked` | `AgentService`, `CommentService`, `AskService` | powód: adres URL w tekście modelu (z fazą i adresami) albo znacznik instrukcji w odpowiedzi |
 | `turn_failed` | `AgentService`, `AskService` | rodzaj i komunikat przyczyny (limit kroków, błąd modelu, błąd magazynu wyników) |
 | `response` | `AskService` | pełna odpowiedź z wartościami, tabelami i proweniencją, czas tury |

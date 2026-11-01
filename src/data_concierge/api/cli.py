@@ -20,18 +20,21 @@ from data_concierge.api.service import AskService
 from data_concierge.audit.models import AuditEvent, AuditEventKind
 from data_concierge.audit.service import AuditTrail
 from data_concierge.bootstrap import CompositionRoot
+from data_concierge.core.errors import PromptTooLongError
 from data_concierge.core.settings import Settings
 from data_concierge.core.types import ColumnKind, ColumnRole
 from data_concierge.results.models import JsonScalar
 
 
 class CommandLine:
-    """Runs the parsed command against AskService and writes each response to `stdout`."""
+    """Runs the parsed command against AskService and writes each response to `stdout`; a
+    prompt over the limit gets its reason on `stderr`, so the JSON output stays valid."""
 
-    def __init__(self, service: AskService, stdin: TextIO, stdout: TextIO) -> None:
+    def __init__(self, service: AskService, stdin: TextIO, stdout: TextIO, stderr: TextIO) -> None:
         self._service = service
         self._stdin = stdin
         self._stdout = stdout
+        self._stderr = stderr
 
     @staticmethod
     def parser() -> argparse.ArgumentParser:
@@ -65,7 +68,11 @@ class CommandLine:
         return await self.chat(args.user, ConversationPrinter(self._stdout, self._stdin.isatty()))
 
     async def ask(self, prompt: str, user_id: int) -> int:
-        response = await self._service.ask(prompt, user_id)
+        try:
+            response = await self._service.ask(prompt, user_id)
+        except PromptTooLongError as exc:
+            self._stderr.write(f"{exc}\n")
+            return 1
         JsonPrinter(self._stdout).answer(prompt, response)
         return 1 if response.status == "error" else 0
 
@@ -76,7 +83,12 @@ class CommandLine:
         try:
             for line in self._stdin:
                 if prompt := line.strip():
-                    response = await self._service.ask(prompt, user_id, session_id)
+                    try:
+                        response = await self._service.ask(prompt, user_id, session_id)
+                    except PromptTooLongError as exc:
+                        self._stderr.write(f"{exc}\n")
+                        printer.ready()
+                        continue
                     printer.answer(prompt, response)
                     if response.session_id not in session_ids:
                         session_ids.append(response.session_id)
@@ -238,6 +250,7 @@ class AuditTrailPrinter:
             "tool_executed": self._tool_executed,
             "model_input": self._model_input,
             "comment": self._comment,
+            "session_rejected": self._session_rejected,
             "turn_failed": self._turn_failed,
             "response": self._response,
         }
@@ -254,9 +267,9 @@ class AuditTrailPrinter:
                 self._write(self._turn_header(event))
             step += 1
             first, *rest = self._details[event.event](event.data) or [""]
-            self._write(f"{step:>3}. {event.event:<15} {first}")
+            self._write(f"{step:>3}. {event.event:<16} {first}")
             for line in rest:
-                self._write(" " * 20 + line)
+                self._write(" " * 21 + line)
         return 0
 
     def _write(self, line: str) -> None:
@@ -344,6 +357,9 @@ class AuditTrailPrinter:
             return [f"failed, the draft is used: {data['failed']}"]
         return [f"comment: {data['comment']}"]
 
+    def _session_rejected(self, data: dict[str, JsonValue]) -> list[str]:
+        return [f"the session belongs to user {data['owner_id']}"]
+
     def _turn_failed(self, data: dict[str, JsonValue]) -> list[str]:
         return [f"{data['error']}: {data['message']}"]
 
@@ -370,11 +386,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = CommandLine.parser().parse_args(argv)
     logging.basicConfig(level=logging.WARNING)
     # Prompts and responses are Polish text; a redirected Windows console would use cp1250.
-    for stream in (sys.stdin, sys.stdout):
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8")
     settings = Settings()
     if args.command == "audit":
         return AuditTrailPrinter(CompositionRoot.audit_trail(settings), sys.stdout).print(args.id)
     service = CompositionRoot.from_settings(settings).ask_service
-    return asyncio.run(CommandLine(service, sys.stdin, sys.stdout).run(args))
+    return asyncio.run(CommandLine(service, sys.stdin, sys.stdout, sys.stderr).run(args))

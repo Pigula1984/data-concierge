@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     agent_retries: NonNegativeInt = 2
 
     max_agent_steps: PositiveInt = 10
+    # Longer prompts are refused before any model call, so one request cannot use up the budget.
+    max_prompt_chars: PositiveInt = 4000
     procedure_timeout_seconds: PositiveInt = 30
     # Results up to this many rows give the model their ids and clarification candidates
     # (architecture 002, sections 4.2 and 4.3).

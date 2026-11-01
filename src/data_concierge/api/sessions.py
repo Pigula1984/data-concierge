@@ -16,9 +16,11 @@ from data_concierge.results.service import ResultService
 
 @dataclass(frozen=True, slots=True)
 class Session:
-    """One conversation: its services over one DuckDB result store, and the message history."""
+    """One conversation of one user: its services over one DuckDB result store, and the
+    message history."""
 
     id: str
+    owner_id: int
     procedures: ProcedureService
     queries: QueryService
     results: ResultService
@@ -41,7 +43,7 @@ class Session:
 class SessionFactory(Protocol):
     """Creates a session with a new result store; implemented by the composition root."""
 
-    def create(self) -> Session: ...
+    def create(self, owner_id: int) -> Session: ...
 
 
 class SessionRepository(Protocol):

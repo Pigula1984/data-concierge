@@ -223,10 +223,11 @@ class SentinelSessions:
     def __init__(self, deps: AgentDeps) -> None:
         self._deps = deps
 
-    def create(self) -> ApiSession:
+    def create(self, owner_id: int) -> ApiSession:
         deps = self._deps
         return ApiSession(
             id="s1",
+            owner_id=owner_id,
             procedures=deps.procedures,
             queries=deps.queries,
             results=deps.results,
@@ -264,6 +265,7 @@ async def test_in_mode_minimal_rows_reach_only_the_comment_and_sensitive_values_
         InMemorySessionRepository(),
         SentinelSessions(sentinel_deps),
         RoleDirectory({}),
+        agent_settings.max_prompt_chars,
         exposure,
     )
 

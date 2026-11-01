@@ -436,6 +436,7 @@ def ask_service(
             sessions,
             factory,
             RoleDirectory(roles or {}),
+            agent_settings.max_prompt_chars,
             exposure,
             today=lambda: ASK_TODAY,
             audit=AuditService(audit_log) if audit_log is not None else None,

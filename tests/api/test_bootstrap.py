@@ -67,7 +67,7 @@ def test_each_session_has_its_own_result_store(
     agent_settings: Settings, repository: ProcedureRepository, catalog: Catalog
 ) -> None:
     factory = DuckDBSessionFactory(repository, agent_settings)
-    first, second = factory.create(), factory.create()
+    first, second = factory.create(owner_id=7), factory.create(owner_id=8)
 
     first.procedures.call(
         catalog.entry("api.SalesOrder_List"),
@@ -76,6 +76,7 @@ def test_each_session_has_its_own_result_store(
     )
 
     assert first.id != second.id
+    assert (first.owner_id, second.owner_id) == (7, 8)
     assert first.results.handles() == ("r1",)
     assert second.results.handles() == ()
 
@@ -95,7 +96,7 @@ def test_session_summaries_follow_the_configured_mode(
     dimension_stats: set[str],
 ) -> None:
     settings = agent_settings.model_copy(update={"model_data_access": mode})
-    session = DuckDBSessionFactory(repository, settings).create()
+    session = DuckDBSessionFactory(repository, settings).create(owner_id=7)
 
     summary = session.procedures.call(
         catalog.entry("api.SalesOrder_List"),

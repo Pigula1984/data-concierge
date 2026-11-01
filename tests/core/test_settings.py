@@ -52,6 +52,7 @@ def test_settings_defaults_follow_architecture_limits(monkeypatch: pytest.Monkey
     assert settings.model_max_rows == 50
     assert settings.max_response_rows == 10_000
     assert settings.max_query_rows == 100_000
+    assert settings.max_prompt_chars == 4000
     assert settings.model_data_access == "none"
     assert settings.audit_log_enabled is True
     assert settings.audit_log_path == Path("logs/audit.jsonl")

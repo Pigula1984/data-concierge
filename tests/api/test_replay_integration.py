@@ -78,7 +78,7 @@ def replay(
 ) -> ResultService:
     """Procedures with their parameters, then the executed SQL, in handle order, in a new
     session; every step gives the handle and the row count it recorded."""
-    session = DuckDBSessionFactory(SqlServerProcedureRepository(client), settings).create()
+    session = DuckDBSessionFactory(SqlServerProcedureRepository(client), settings).create(USER_ID)
     context = RequestContext(user_id=USER_ID, role="replay")
     for step in response.provenance:
         if isinstance(step, ProcedureStep):
