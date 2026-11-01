@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from cases import HR_USER_ID
 from harness import EvalClock, RecordingModel, RecordingProcedureRepository
 from report import EvalReport, RunArchive
 
@@ -57,9 +58,10 @@ def eval_root(
     eval_sessions: InMemorySessionRepository,
     eval_clock: EvalClock,
 ) -> CompositionRoot:
-    # The evaluation runs on real customer data, which the audit log would keep.
+    # The evaluation runs on real customer data, which the audit log would keep. The role does
+    # not depend on `.env`, so the employee cases pass on every machine.
     return CompositionRoot.assemble(
-        settings.model_copy(update={"audit_log_enabled": False}),
+        settings.model_copy(update={"audit_log_enabled": False, "user_roles": {HR_USER_ID: "hr"}}),
         SqlServerMetadataRepository(agent_client),
         recorder,
         eval_model,

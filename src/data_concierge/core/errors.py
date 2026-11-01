@@ -31,6 +31,10 @@ class CommentError(DataConciergeError):
     (architecture 002, section 5.2)."""
 
 
+class PromptTooLongError(DataConciergeError):
+    """The prompt is over the configured limit; its message is for the user."""
+
+
 class ParameterValidationError(DataConciergeError):
     """Procedure arguments supplied by the model are invalid."""
 
@@ -41,6 +45,10 @@ class ProcedureError(DataConciergeError):
 
 class ProcedureTimeoutError(ProcedureError):
     """A stored procedure call exceeded its time limit."""
+
+
+class ProcedureAccessError(ProcedureError):
+    """The caller's role may not run this procedure; the backend decides, whatever the prompt."""
 
 
 class QueryError(DataConciergeError):

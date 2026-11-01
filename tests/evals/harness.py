@@ -67,6 +67,13 @@ class RecordingModel(WrapperModel):
         self.anchor_retries = 0
 
     @property
+    def comment(self) -> str | None:
+        """The text of the comment phase, when the turn ended with one: the tools phase ends
+        with a call of `present_result`, and the history keeps only that draft."""
+        last = self.responses[-1] if self.responses else None
+        return last.text if last is not None and not last.tool_calls else None
+
+    @property
     def cost(self) -> Decimal | None:
         """The price of the responses in USD; None when the price list lacks the model."""
         try:

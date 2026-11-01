@@ -20,6 +20,7 @@ from data_concierge.results.models import Handle, ProcedureLineage, StoredResult
 from data_concierge.results.service import ResultService
 
 ERROR_MESSAGE = "Nie udało się przygotować odpowiedzi. Identyfikator zgłoszenia: {correlation_id}."
+REFUSAL_MESSAGE = "Tej prośby nie wykonam. Odpowiadam tylko na pytania o dane firmy z katalogu."
 
 
 class ResponseAssembler:
@@ -58,6 +59,11 @@ class ResponseAssembler:
             session_id=session_id,
             message=ERROR_MESSAGE.format(correlation_id=correlation_id),
         )
+
+    @staticmethod
+    def refusal(session_id: str) -> Response:
+        """A refused turn: the fixed message, without any text of the model."""
+        return Response(status="unsupported", session_id=session_id, message=REFUSAL_MESSAGE)
 
     def _clarification(self, request: ClarificationRequest | None) -> Clarification | None:
         if request is None:

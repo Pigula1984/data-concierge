@@ -4,7 +4,7 @@ queries against the local SQL Server."""
 from pathlib import Path
 
 import pytest
-from cases import CASES_PATH, EvalCase
+from cases import CASES_PATH, DEFAULT_USER_ID, HR_USER_ID, EvalCase
 from pydantic import ValidationError
 
 from data_concierge.catalog.models import Catalog
@@ -35,6 +35,27 @@ GROUPS = {
     "inne dziedziny",
     "trudne",
 }
+
+
+def test_a_case_has_the_default_user_unless_it_names_one() -> None:
+    entry = {"id": "a", "group": "listy", "prompt": "lista", "expect": {"status": ["ok"]}}
+
+    assert EvalCase.model_validate(entry).user_id == DEFAULT_USER_ID
+    assert EvalCase.model_validate({**entry, "user_id": HR_USER_ID}).user_id == HR_USER_ID
+
+
+def test_cases_of_procedures_limited_to_a_role_run_as_the_user_with_that_role(
+    catalog: Catalog,
+) -> None:
+    limited = {entry.tool for entry in catalog.entries if entry.allowed_roles}
+
+    users = {
+        case.id: case.user_id
+        for case in CASES
+        if limited & {call.tool for call in case.expect.calls}
+    }
+
+    assert users == {"przelozeni-pracownika-4": HR_USER_ID, "podwladni-kierownika-2": HR_USER_ID}
 
 
 def test_case_ids_are_unique_and_the_set_has_30_to_50_cases() -> None:

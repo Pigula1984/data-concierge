@@ -93,6 +93,9 @@ class CatalogEntry(_CatalogModel):
     # False for procedures only the backend calls, such as the data-range procedure.
     exposed: bool = True
     access: Literal["read"] = "read"
+    # Roles that may run the procedure; empty means every role. Tool descriptions leave it out,
+    # so the tools stay the same for every role.
+    allowed_roles: tuple[str, ...] = ()
     summary: str
     use_when: tuple[str, ...] = ()
     not_for: tuple[str, ...] = ()
@@ -131,6 +134,9 @@ class CatalogEntry(_CatalogModel):
                 for column in self.columns
             )
         )
+
+    def allows(self, role: str) -> bool:
+        return not self.allowed_roles or role in self.allowed_roles
 
     @property
     def model_params(self) -> tuple[ParamSpec, ...]:

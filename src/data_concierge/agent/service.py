@@ -14,6 +14,7 @@ from data_concierge.agent.anchors import Anchors
 from data_concierge.agent.audit import AuditCapability
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import OUTPUT_TOOL, AgentAnswer, AgentTurn, CandidatesFrom
+from data_concierge.agent.output import OutputPolicy
 from data_concierge.audit.service import TurnAudit
 from data_concierge.core.settings import Settings
 from data_concierge.core.types import ColumnKind
@@ -104,11 +105,12 @@ class AgentService:
         )
 
     def _check_answer(self, ctx: RunContext[AgentDeps], answer: AgentAnswer) -> AgentAnswer:
-        """Returned handles exist, a clarification request has its question, its candidates
-        come from a small handle and every anchor names a value. An error answer is not
-        checked: the user gets a generic message."""
+        """The texts hold no link, returned handles exist, a clarification request has its
+        question, its candidates come from a small handle and every anchor names a value. An
+        error answer is not checked: the user gets a generic message."""
         if answer.status == "error":
             return answer
+        OutputPolicy(ctx.deps.audit).check(answer.texts, "tools")
         available = ctx.deps.results.handles()
         unknown = [table.handle for table in answer.tables if table.handle not in available]
         if unknown:

@@ -270,6 +270,66 @@ async def test_anchors_still_wrong_after_the_retries_end_the_turn_with_an_error(
     assert turn.messages == tuple(PRIOR_TURN)
 
 
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param(
+            {"message": "Zobacz https://example.test/?q={r1[1].CustomerName}"}, id="message"
+        ),
+        pytest.param(
+            {"message": "Gotowe.", "assumptions": ["Źródło: www.example.test"]}, id="assumptions"
+        ),
+        pytest.param(
+            {
+                "message": "Gotowe.",
+                "tables": [{"handle": "r1", "title": "Patrz http://example.test"}],
+            },
+            id="title",
+        ),
+        pytest.param(
+            {
+                "status": "needs_clarification",
+                "message": "Który?",
+                "clarification": {"question": "Który? https://example.test"},
+            },
+            id="question",
+        ),
+    ],
+)
+async def test_a_link_in_any_text_goes_back_to_the_model_for_a_fix(
+    service: Callable[[FunctionModel], AgentService],
+    scripted: Callable[..., FunctionModel],
+    deps: AgentDeps,
+    fields: dict[str, object],
+) -> None:
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("present_result", {"status": "ok", **fields}),
+        present(tables=[{"handle": "r1", "title": "Zamówienia"}]),
+    )
+
+    turn = await service(model).run("Sprzedaż w 2024", [], deps)
+
+    assert turn.answer.status == "ok"
+    assert turn.answer.message == "Gotowe."
+    (retry,) = retry_prompts(turn.messages)
+    assert "example.test" in str(retry.content)
+
+
+async def test_a_link_still_there_after_the_retries_ends_the_turn_with_an_error(
+    service: Callable[[FunctionModel], AgentService],
+    scripted: Callable[..., FunctionModel],
+    deps: AgentDeps,
+) -> None:
+    wrong = present(message="Patrz https://example.test")
+    model = scripted(wrong, wrong, wrong, wrong)
+
+    turn = await service(model).run("Sprzedaż w 2024", PRIOR_TURN, deps)
+
+    assert turn.answer.status == "error"
+    assert turn.messages == tuple(PRIOR_TURN)
+
+
 async def test_text_instead_of_present_result_ends_in_error_after_the_retries(
     service: Callable[[FunctionModel], AgentService], deps: AgentDeps
 ) -> None:

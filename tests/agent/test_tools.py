@@ -17,6 +17,7 @@ from data_concierge.agent.tools import describe_result, query, retry_on_domain_e
 from data_concierge.audit.repository import JsonlAuditLog
 from data_concierge.audit.service import TurnAudit
 from data_concierge.catalog.models import Catalog
+from data_concierge.core.context import RequestContext
 from data_concierge.core.errors import (
     ParameterValidationError,
     ProcedureError,
@@ -195,6 +196,23 @@ async def test_procedure_failure_is_reported_without_using_the_retry_budget(
     assert [type(part) for part in parts] == [ToolReturnPart, ToolReturnPart]
     assert all(isinstance(p, ToolReturnPart) and p.outcome == "failed" for p in parts)
     assert "30 s time limit" in str(parts[0].content)
+
+
+async def test_a_refused_role_gets_a_failed_tool_result_and_no_procedure_runs(
+    deps: AgentDeps,
+    agent_tools: tuple[Tool[AgentDeps], ...],
+    procedure_calls: list[tuple[str, dict[str, object]]],
+    scripted: Callable[..., FunctionModel],
+) -> None:
+    refused = replace(deps, context=RequestContext(user_id=7, role="user"))
+    model = scripted(ToolCallPart("get_employee_managers", {"employee_id": 4}))
+
+    (part,) = await tool_results(model, refused, agent_tools)
+
+    assert isinstance(part, ToolReturnPart)
+    assert part.outcome == "failed"
+    assert str(part.content).startswith("access denied")
+    assert procedure_calls == []
 
 
 @retry_on_domain_error

@@ -1,8 +1,8 @@
 """Checks on the real Claude API (plan U14, KTD4): the configured model accepts the strict
 catalog tools and `effort`, writes the total of its comment as an anchor in the configured
 mode (architecture 002, section 6.1), and continues a conversation without dropping thinking
-blocks; in mode minimal also after the comment phase replaced the draft in the history (plan
-U8, KTD8).
+blocks; in mode minimal the API accepts the seeded tool exchange of the comment phase, and the
+history keeps the draft (architecture 002, sections 5.2 and 6.3).
 
 Procedures still run against the fake repository, so no SQL Server is needed.
 """
@@ -26,6 +26,7 @@ from data_concierge.api.service import AskService
 from data_concierge.api.sessions import InMemorySessionRepository
 from data_concierge.bootstrap import DuckDBSessionFactory
 from data_concierge.catalog.models import Catalog, DataRange
+from data_concierge.core.context import RoleDirectory
 from data_concierge.core.settings import ModelExposure, Settings
 from data_concierge.procedures.repository import ProcedureRepository
 
@@ -111,7 +112,7 @@ def answer_message(messages: Sequence[ModelMessage]) -> str:
     return str(calls[-1].args_as_dict()["message"])
 
 
-async def test_mode_minimal_comments_and_continues_with_the_comment_in_history(
+async def test_mode_minimal_comments_and_continues_with_the_draft_in_history(
     model: AnthropicModel,
     agent_for: Callable[[Settings], AgentService],
     settings: Settings,
@@ -125,6 +126,8 @@ async def test_mode_minimal_comments_and_continues_with_the_comment_in_history(
         CommentService(model, minimal),
         sessions,
         DuckDBSessionFactory(repository, minimal),
+        RoleDirectory({}),
+        minimal.max_prompt_chars,
         ModelExposure.from_settings(minimal),
     )
 
@@ -141,8 +144,8 @@ async def test_mode_minimal_comments_and_continues_with_the_comment_in_history(
 
     assert first.status == "ok", first
     assert first.tables
-    # The history holds the template of the comment the user read, not filled values.
-    assert Anchors(session.results).fill(template) == first.message
+    # The user reads the comment of the second phase; the history holds the draft.
+    assert Anchors(session.results).fill(template) != first.message
     assert second.status in ("ok", "no_data"), second
     warnings = [record.getMessage() for record in caplog.records]
     assert not [w for w in warnings if "comment phase failed" in w], warnings

@@ -25,6 +25,9 @@ from data_concierge.core.types import ColumnKind
 CASES_PATH = Path(__file__).parents[2] / "evals" / "cases.yaml"
 # A fixed "today", so cases that resolve relative periods or default dates are repeatable.
 DEFAULT_TODAY = date(2025, 7, 1)
+# The user of a case has no role unless it names the user the run gives the role hr.
+DEFAULT_USER_ID = 1
+HR_USER_ID = 2
 
 type Value = object
 type Call = tuple[str, Mapping[str, object]]
@@ -88,6 +91,7 @@ class EvalCase(_CaseModel):
     prompt: str
     followups: tuple[str, ...] = ()
     today: date = DEFAULT_TODAY
+    user_id: int = DEFAULT_USER_ID
     expect: Expectation
     modes: dict[ModelDataAccess, ModeExpectation] = Field(default_factory=dict)
 

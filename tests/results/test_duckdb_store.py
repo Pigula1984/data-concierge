@@ -174,12 +174,40 @@ def test_errors_that_may_quote_data_reach_the_model_as_class_and_hint(
     assert SENTINEL in raised.value.detail
 
 
-def test_scalar_subquery_with_several_rows_reaches_the_model_unchanged() -> None:
+def test_scalar_subquery_with_several_rows_gets_a_fixed_backend_message() -> None:
     store = DuckDBResultStore()
     store.put(_name_table())
 
-    with pytest.raises(QueryExecutionError, match="More than one row returned by a subquery"):
+    with pytest.raises(QueryExecutionError) as raised:
         store.query('SELECT (SELECT "Name" FROM r1 UNION ALL SELECT "Name" FROM r1) AS name')
+
+    assert str(raised.value).startswith("More than one row returned by a subquery")
+    assert raised.value.detail is not None
+    assert "More than one row returned by a subquery" in raised.value.detail
+
+
+def test_a_value_glued_to_the_engine_text_stays_out_of_the_model_message() -> None:
+    store = DuckDBResultStore()
+    store.put(_name_table())
+
+    with pytest.raises(QueryExecutionError) as raised:
+        store.query(
+            """SELECT error('More than one row returned by a subquery ' || "Name") FROM r1"""
+        )
+
+    assert SENTINEL not in str(raised.value)
+    assert raised.value.detail is not None
+    assert SENTINEL in raised.value.detail
+
+
+def test_error_function_without_the_engine_text_gets_the_general_hint() -> None:
+    store = DuckDBResultStore()
+    store.put(_name_table())
+
+    with pytest.raises(QueryExecutionError, match=r"^InvalidInputException: ") as raised:
+        store.query('SELECT error("Name") FROM r1')
+
+    assert SENTINEL not in str(raised.value)
 
 
 def test_binder_error_reaches_the_model_unchanged_without_detail() -> None:

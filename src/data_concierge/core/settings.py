@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     catalog_path: Path = Path("catalog/agent-procedures.yaml")
 
+    # Roles by user id, as JSON in the environment; a user outside the map has the default role.
+    user_roles: dict[int, str] = Field(default_factory=dict)
+
     # The audit log of every turn (architecture 8.1). A separate switch, because an empty
     # path in `.env` counts as missing and falls back to the default.
     audit_log_enabled: bool = True
@@ -48,6 +51,8 @@ class Settings(BaseSettings):
     agent_retries: NonNegativeInt = 2
 
     max_agent_steps: PositiveInt = 10
+    # Longer prompts are refused before any model call, so one request cannot use up the budget.
+    max_prompt_chars: PositiveInt = 4000
     procedure_timeout_seconds: PositiveInt = 30
     # Results up to this many rows give the model their ids and clarification candidates
     # (architecture 002, sections 4.2 and 4.3).
