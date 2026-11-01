@@ -130,7 +130,7 @@ async def test_an_error_built_from_a_sensitive_column_stays_out_of_the_traffic(
 
     await ask_service(model).ask("Klienci z Berlina", user_id=7)
 
-    assert "More than one row" in traffic(model)
+    assert "make the subquery return one row" in traffic(model)
     assert NAME not in traffic(model)
 
 

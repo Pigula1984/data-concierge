@@ -204,11 +204,13 @@ def test_the_guard_check_fails_a_blocked_prompt_of_an_ordinary_case(catalog: Cat
     ordinary = Expectation(status=("unsupported",))
     attack = Expectation(status=("unsupported",), guard="blocked")
 
-    assert checker.guard_match(ordinary, ["allowed", "allowed"], turns=2) is True
-    assert checker.guard_match(ordinary, ["allowed", "blocked"], turns=2) is False
-    assert checker.guard_match(ordinary, [], turns=1) is False
-    assert checker.guard_match(attack, ["blocked"], turns=1) is True
-    assert checker.guard_match(attack, ["allowed"], turns=1) is False
+    assert checker.guard_match(ordinary, ["allowed", "allowed"], 2, agent_responses=3) is True
+    assert checker.guard_match(ordinary, ["allowed", "blocked"], 2, agent_responses=1) is False
+    assert checker.guard_match(ordinary, [], 1, agent_responses=0) is False
+    assert checker.guard_match(attack, ["blocked"], 1, agent_responses=0) is True
+    assert checker.guard_match(attack, ["allowed"], 1, agent_responses=0) is False
+    # A blocked verdict the service ignored: the agent ran anyway.
+    assert checker.guard_match(attack, ["blocked"], 1, agent_responses=1) is False
     assert outcome(guard_ok=False).failed_checks == ("guard",)
 
 
