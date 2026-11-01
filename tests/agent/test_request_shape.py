@@ -147,7 +147,7 @@ def test_instructions_send_an_access_refusal_to_unsupported_not_to_error(instruc
 
     assert "status unsupported" in refusal
     assert "status error" in failure
-    assert "unsupported" in str(AgentAnswer.model_fields["status"].description)
+    assert "access was denied" in str(AgentAnswer.model_fields["status"].description)
 
 
 @pytest.mark.parametrize("mode", ["none", "minimal"])

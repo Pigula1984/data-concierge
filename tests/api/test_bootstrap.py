@@ -16,7 +16,7 @@ from data_concierge.bootstrap import CompositionRoot, DuckDBSessionFactory
 from data_concierge.catalog.models import Catalog, DataRange, ProcedureMetadata
 from data_concierge.catalog.service import CatalogService
 from data_concierge.core.context import RequestContext
-from data_concierge.core.errors import ConfigurationError
+from data_concierge.core.errors import ConfigurationError, PromptTooLongError
 from data_concierge.core.settings import Settings
 from data_concierge.procedures.repository import ProcedureRepository
 
@@ -106,6 +106,32 @@ def test_session_summaries_follow_the_configured_mode(
 
     # CustomerName is a sensitive dimension, so neither mode shows it.
     assert set(summary.stats) == dimension_stats
+
+
+@pytest.mark.anyio
+async def test_assembled_service_uses_the_configured_roles_and_prompt_limit(
+    agent_settings: Settings,
+    repository: ProcedureRepository,
+    scripted: Callable[..., FunctionModel],
+    procedure_calls: list[tuple[str, dict[str, object]]],
+    data_ranges: dict[str, DataRange],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The catalog check needs SQL Server; the wiring under test starts after it.
+    monkeypatch.setattr(CatalogService, "validate", lambda self: None)
+    monkeypatch.setattr(CatalogService, "load_data_ranges", lambda self: data_ranges)
+    settings = agent_settings.model_copy(update={"user_roles": {7: "hr"}, "max_prompt_chars": 20})
+    call = ToolCallPart("get_employee_managers", {"employee_id": 4})
+    present = ToolCallPart("present_result", {"status": "ok", "message": "Gotowe."})
+    model = scripted(call, present, call, present)
+    root = CompositionRoot.assemble(settings, MissingProcedures(), repository, model)
+
+    await root.ask_service.ask("Przełożeni", user_id=7)
+    await root.ask_service.ask("Przełożeni", user_id=8)
+
+    assert len(procedure_calls) == 1
+    with pytest.raises(PromptTooLongError):
+        await root.ask_service.ask("x" * 21, user_id=7)
 
 
 def test_audit_log_writes_to_the_configured_file_when_enabled(

@@ -110,7 +110,7 @@ class AgentService:
         error answer is not checked: the user gets a generic message."""
         if answer.status == "error":
             return answer
-        OutputPolicy.check(answer.texts, "tools", ctx.deps.audit)
+        OutputPolicy(ctx.deps.audit).check(answer.texts, "tools")
         available = ctx.deps.results.handles()
         unknown = [table.handle for table in answer.tables if table.handle not in available]
         if unknown:

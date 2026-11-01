@@ -22,11 +22,17 @@ AUDIT = TurnAudit(NullAuditLog(), CONTEXT, "s1")
         "ftp://example.test/plik",
         "HTTPS://EXAMPLE.TEST",
         "Zobacz www.example.test",
+        "_https://example.test",
+        "1https://example.test",
+        "ąhttps://example.test",
+        "_www.example.test",
+        "1www.example.test",
+        "{r2.scheme}://example.test/?q={r1[1].CustomerName}",
     ],
 )
 def test_a_link_goes_back_to_the_model(text: str) -> None:
     with pytest.raises(ModelRetry, match=r"(?i)example"):
-        OutputPolicy.check(["Bez linku.", text], "tools", AUDIT)
+        OutputPolicy(AUDIT).check(["Bez linku.", text], "tools")
 
 
 @pytest.mark.parametrize(
@@ -40,7 +46,7 @@ def test_a_link_goes_back_to_the_model(text: str) -> None:
     ],
 )
 def test_plain_text_and_anchors_pass(text: str) -> None:
-    OutputPolicy.check([text], "tools", AUDIT)
+    OutputPolicy(AUDIT).check([text], "tools")
 
 
 def test_a_rejected_link_is_audited_with_its_phase(tmp_path: Path) -> None:
@@ -48,7 +54,7 @@ def test_a_rejected_link_is_audited_with_its_phase(tmp_path: Path) -> None:
     audit = TurnAudit(log, CONTEXT, "s1")
 
     with pytest.raises(ModelRetry):
-        OutputPolicy.check(["https://example.test"], "comment", audit)
+        OutputPolicy(audit).check(["https://example.test"], "comment")
 
     [event] = log.events("s1")
     assert event.event == "output_blocked"

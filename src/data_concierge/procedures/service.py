@@ -48,7 +48,7 @@ class ProcedureService:
 
     @staticmethod
     def _check_role(entry: CatalogEntry, context: RequestContext) -> None:
-        if entry.allowed_roles and context.role not in entry.allowed_roles:
+        if not entry.allows(context.role):
             raise ProcedureAccessError(f"access denied: this user may not use {entry.tool}")
 
     @staticmethod

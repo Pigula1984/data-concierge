@@ -7,6 +7,7 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -148,7 +149,25 @@ async def test_a_link_in_the_comment_is_sent_back_for_a_fix(
     )
 
     assert comment == "Bez linku."
-    assert "https://example.test" in model.requests[1]
+    retries = [
+        part
+        for message in model.conversations[1]
+        for part in message.parts
+        if isinstance(part, RetryPromptPart)
+    ]
+    assert "https://example.test" in str(retries[0].content)
+
+
+async def test_a_model_that_keeps_calling_read_tables_stops_at_the_step_limit(
+    agent_settings: Settings, results: ResultService, sentinel_deps: AgentDeps
+) -> None:
+    model = CommentModel(*[ToolCallPart("read_tables", {})] * 60)
+    service = CommentService(FunctionModel(model), agent_settings)
+
+    with pytest.raises(CommentError):
+        await service.write("Raport", draft(), results, sentinel_deps.audit)
+
+    assert len(model.requests) == agent_settings.max_agent_steps
 
 
 async def test_a_link_after_all_retries_is_a_comment_error(

@@ -13,6 +13,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models import Model
+from pydantic_ai.usage import UsageLimits
 
 from data_concierge.agent.anchors import Anchors
 from data_concierge.agent.models import AgentAnswer
@@ -66,6 +67,7 @@ class CommentService:
             model_settings=AgentService.model_settings(settings),
         )
         self._agent.output_validator(self._check_comment)
+        self._limits = UsageLimits(request_limit=settings.max_agent_steps)
 
     async def write(
         self, prompt: str, draft: AgentAnswer, results: ResultService, audit: TurnAudit
@@ -77,6 +79,7 @@ class CommentService:
             result = await self._agent.run(
                 message_history=self._exchange(prompt, draft, tables),
                 deps=CommentDeps(results, tables, audit),
+                usage_limits=self._limits,
             )
         except AgentRunError as exc:
             raise CommentError("the comment phase failed", detail=str(exc)) from exc
@@ -89,7 +92,7 @@ class CommentService:
 
     @staticmethod
     def _check_comment(ctx: RunContext[CommentDeps], comment: str) -> str:
-        OutputPolicy.check([comment], "comment", ctx.deps.audit)
+        OutputPolicy(ctx.deps.audit).check([comment], "comment")
         problems = Anchors(ctx.deps.results).problems(comment)
         if problems:
             raise ModelRetry(f"fix these anchors: {'; '.join(problems)}")

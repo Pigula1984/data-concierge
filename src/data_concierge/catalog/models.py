@@ -135,6 +135,9 @@ class CatalogEntry(_CatalogModel):
             )
         )
 
+    def allows(self, role: str) -> bool:
+        return not self.allowed_roles or role in self.allowed_roles
+
     @property
     def model_params(self) -> tuple[ParamSpec, ...]:
         """Parameters the model supplies; injected ones are filled in by the backend."""
