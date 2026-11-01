@@ -25,6 +25,7 @@ from pydantic_ai.tools import ToolDefinition
 
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
+from data_concierge.agent.guard import GUARD_TOOL, PromptGuard
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
@@ -409,6 +410,16 @@ ASK_TODAY = date(2025, 4, 15)
 
 
 @pytest.fixture
+def guard_model() -> FunctionModel:
+    """A guard that allows every prompt."""
+
+    def allow(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart(GUARD_TOOL, {"verdict": "allowed"})])
+
+    return FunctionModel(allow)
+
+
+@pytest.fixture
 def ask_service(
     agent_tools: tuple[Tool[AgentDeps], ...],
     instructions: str,
@@ -416,15 +427,18 @@ def ask_service(
     exposure: ModelExposure,
     repository: FakeProcedureRepository,
     scripted: Callable[..., FunctionModel],
+    guard_model: FunctionModel,
 ) -> Callable[..., AskService]:
-    """`ask_service(model, comments, audit_log, roles)`: the tools phase and the comment phase
-    scripted apart, the audit log of the turns and the configured roles."""
+    """`ask_service(model, comments, audit_log, roles, guard)`: the tools phase and the comment
+    phase scripted apart, the audit log of the turns, the configured roles and the guard's
+    model, which allows every prompt unless a test passes its own."""
 
     def build(
         model: FunctionModel,
         comments: FunctionModel | None = None,
         audit_log: AuditLog | None = None,
         roles: Mapping[int, str] | None = None,
+        guard: FunctionModel | None = None,
     ) -> AskService:
         agent = AgentService(model, agent_tools, instructions, agent_settings)
         comment = CommentService(comments or scripted(), agent_settings)
@@ -433,6 +447,7 @@ def ask_service(
         return AskService(
             agent,
             comment,
+            PromptGuard(guard or guard_model, agent_settings),
             sessions,
             factory,
             RoleDirectory(roles or {}),

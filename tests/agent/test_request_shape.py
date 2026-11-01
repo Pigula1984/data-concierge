@@ -14,6 +14,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
+from data_concierge.agent.guard import GUARD_TOOL, PromptGuard
 from data_concierge.agent.models import AgentAnswer
 from data_concierge.agent.prompts import (
     COMMENT_INSTRUCTIONS,
@@ -50,6 +51,19 @@ ANSWER = {
 
 COMMENT_ANSWER = {**ANSWER, "content": [{"type": "text", "text": "Komentarz."}]}
 COMMENT_ANSWER["stop_reason"] = "end_turn"
+
+
+GUARD_ANSWER = {
+    **ANSWER,
+    "content": [
+        {
+            "type": "tool_use",
+            "id": "toolu_2",
+            "name": "give_verdict",
+            "input": {"verdict": "allowed"},
+        }
+    ],
+}
 
 
 @pytest.fixture
@@ -128,6 +142,19 @@ async def test_comment_phase_sends_a_seeded_tool_exchange_with_thinking_on(
     assert call["content"][0]["type"] == "tool_use"
     assert result["content"][0]["type"] == "tool_result"
     assert result["content"][0]["tool_use_id"] == call["content"][0]["id"]
+
+
+@pytest.mark.parametrize("reply", [GUARD_ANSWER])
+async def test_guard_sends_low_effort_without_thinking_and_no_other_tool(
+    model: AnthropicModel, agent_settings: Settings, requests: list[dict[str, Any]]
+) -> None:
+    result = await PromptGuard(model, agent_settings).check("Raport")
+
+    assert result.verdict == "allowed"
+    (request,) = requests
+    assert request["output_config"]["effort"] == "low"
+    assert request["thinking"] == {"type": "disabled"}
+    assert [tool["name"] for tool in request["tools"]] == [GUARD_TOOL]
 
 
 async def test_tool_definitions_are_the_same_for_every_role(

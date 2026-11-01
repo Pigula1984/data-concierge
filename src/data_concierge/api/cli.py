@@ -249,6 +249,7 @@ class AuditTrailPrinter:
             "tool_executed": self._tool_executed,
             "model_input": self._model_input,
             "comment": self._comment,
+            "guard": self._guard,
             "session_rejected": self._session_rejected,
             "output_blocked": self._output_blocked,
             "turn_failed": self._turn_failed,
@@ -356,6 +357,10 @@ class AuditTrailPrinter:
         if "failed" in data:
             return [f"failed, the draft is used: {data['failed']}"]
         return [f"comment: {data['comment']}"]
+
+    def _guard(self, data: dict[str, JsonValue]) -> list[str]:
+        reason = f": {data['reason']}" if "reason" in data else ""
+        return [f"{data['verdict']} in {data['duration_ms']} ms{reason}"]
 
     def _session_rejected(self, data: dict[str, JsonValue]) -> list[str]:
         return [f"the session belongs to user {data['owner_id']}"]

@@ -32,6 +32,7 @@ W `.env` uzupełnij co najmniej:
 | `DC_SQL_TRUST_SERVER_CERTIFICATE` | `true` dla instancji lokalnej z certyfikatem samopodpisanym |
 | `ANTHROPIC_API_KEY` | klucz Anthropic |
 | `DC_MODEL_DATA_ACCESS` | `none` (domyślnie) albo `minimal`, zobacz [Tryby dostępu modelu do danych](#tryby-dostępu-modelu-do-danych) |
+| `DC_GUARD_MODEL` | model strażnika, który ocenia każdy prompt przed agentem, domyślnie Haiku |
 | `DC_USER_ROLES` | role użytkowników jako JSON, np. `{"7": "hr"}`; bez wpisu rola to `user`, a procedury pracownicze wymagają roli `hr` |
 | `DC_MAX_PROMPT_CHARS` | limit długości promptu, domyślnie 4000 znaków |
 

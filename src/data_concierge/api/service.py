@@ -7,6 +7,7 @@ from time import perf_counter
 
 from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.comment import CommentService
+from data_concierge.agent.guard import PromptGuard
 from data_concierge.agent.models import AgentTurn
 from data_concierge.agent.prompts import INSTRUCTIONS_MARKER
 from data_concierge.agent.service import AgentService
@@ -43,6 +44,7 @@ class AskService:
         self,
         agent: AgentService,
         comments: CommentService,
+        guard: PromptGuard,
         sessions: SessionRepository,
         factory: SessionFactory,
         roles: RoleDirectory,
@@ -53,6 +55,7 @@ class AskService:
     ) -> None:
         self._agent = agent
         self._comments = comments
+        self._guard = guard
         self._sessions = sessions
         self._factory = factory
         self._roles = roles
@@ -93,8 +96,7 @@ class AskService:
         if session is not None and session.owner_id != user_id:
             audit.record("session_rejected", {"owner_id": session.owner_id})
             session = None
-        dated_prompt = self._with_date(prompt, today)
-        response = await self._respond(dated_prompt, session, session_id, context, audit)
+        response = await self._respond(prompt, today, session, session_id, context, audit)
         audit.record(
             "response",
             {
@@ -110,7 +112,8 @@ class AskService:
 
     async def _respond(
         self,
-        dated_prompt: str,
+        prompt: str,
+        today: date,
         session: Session | None,
         session_id: str,
         context: RequestContext,
@@ -123,7 +126,7 @@ class AskService:
                 message=SESSION_EXPIRED_MESSAGE.format(session_id=session_id),
             )
         try:
-            return await self._turn(session, dated_prompt, context, audit)
+            return await self._turn(session, prompt, today, context, audit)
         except ResultStoreError as exc:
             logger.exception("result store failed (correlation id %s)", context.correlation_id)
             audit.record("turn_failed", TurnAudit.failure(exc))
@@ -134,17 +137,39 @@ class AskService:
         return ResponseAssembler.failure(session.id, context.correlation_id)
 
     async def _turn(
-        self, session: Session, prompt: str, context: RequestContext, audit: TurnAudit
+        self,
+        session: Session,
+        prompt: str,
+        today: date,
+        context: RequestContext,
+        audit: TurnAudit,
     ) -> Response:
-        turn = await self._agent.run(prompt, session.history, session.deps(context, audit))
+        """The agent runs only after the guard allowed the prompt; a blocked turn leaves the
+        history as it was."""
+        if not await self._allowed(prompt, audit):
+            return ResponseAssembler.refusal(session.id)
+        dated_prompt = self._with_date(prompt, today)
+        turn = await self._agent.run(dated_prompt, session.history, session.deps(context, audit))
         if self._exposure.comment_phase and turn.answer.status == "ok":
-            turn = await self._commented(turn, prompt, session, context, audit)
+            turn = await self._commented(turn, dated_prompt, session, context, audit)
         response = session.assembler.assemble(turn.answer, session.id, context.correlation_id)
         if INSTRUCTIONS_MARKER in response.model_dump_json():
             audit.record("output_blocked", {"reason": "marker"})
             return ResponseAssembler.refusal(session.id)
         self._sessions.save(session.with_history(turn.messages))
         return response
+
+    async def _allowed(self, prompt: str, audit: TurnAudit) -> bool:
+        started = perf_counter()
+        result = await self._guard.check(prompt)
+        audit.record(
+            "guard",
+            {
+                **result.model_dump(exclude_none=True),
+                "duration_ms": round((perf_counter() - started) * 1000),
+            },
+        )
+        return result.verdict == "allowed"
 
     async def _commented(
         self,

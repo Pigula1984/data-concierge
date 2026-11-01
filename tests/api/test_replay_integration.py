@@ -57,7 +57,10 @@ def present(handle: str) -> ToolCallPart:
 
 @pytest.fixture
 def ask(
-    settings: Settings, agent_client: SqlServerClient, scripted: Callable[..., FunctionModel]
+    settings: Settings,
+    agent_client: SqlServerClient,
+    scripted: Callable[..., FunctionModel],
+    guard_model: FunctionModel,
 ) -> Callable[..., Awaitable[Response]]:
     async def run(prompt: str, *steps: ToolCallPart) -> Response:
         # Real customer data, which the audit log would keep.
@@ -66,6 +69,7 @@ def ask(
             SqlServerMetadataRepository(agent_client),
             SqlServerProcedureRepository(agent_client),
             scripted(*steps),
+            guard_model,
             today=lambda: date(2025, 4, 15),
         )
         return await root.ask_service.ask(prompt, user_id=USER_ID)

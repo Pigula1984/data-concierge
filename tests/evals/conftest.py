@@ -41,7 +41,13 @@ def recorder(agent_client: SqlServerClient) -> RecordingProcedureRepository:
 def eval_model(settings: Settings) -> RecordingModel:
     if settings.anthropic_api_key is None:
         pytest.skip("ANTHROPIC_API_KEY is not set")
-    return RecordingModel(CompositionRoot.configured_model(settings))
+    return RecordingModel(CompositionRoot.configured_model(settings, settings.model))
+
+
+@pytest.fixture(scope="session")
+def eval_guard_model(settings: Settings) -> RecordingModel:
+    """Its own recording, so the guard's verdicts do not mix with the comment of the turn."""
+    return RecordingModel(CompositionRoot.configured_model(settings, settings.guard_model))
 
 
 @pytest.fixture(scope="session")
@@ -55,6 +61,7 @@ def eval_root(
     agent_client: SqlServerClient,
     recorder: RecordingProcedureRepository,
     eval_model: RecordingModel,
+    eval_guard_model: RecordingModel,
     eval_sessions: InMemorySessionRepository,
     eval_clock: EvalClock,
 ) -> CompositionRoot:
@@ -65,6 +72,7 @@ def eval_root(
         SqlServerMetadataRepository(agent_client),
         recorder,
         eval_model,
+        eval_guard_model,
         today=eval_clock,
         sessions=eval_sessions,
     )

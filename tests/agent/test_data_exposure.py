@@ -26,6 +26,7 @@ from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.formatting import ValueFormatter
+from data_concierge.agent.guard import PromptGuard
 from data_concierge.agent.models import AgentTurn
 from data_concierge.agent.service import AgentService
 from data_concierge.api.service import AskService
@@ -242,6 +243,7 @@ def minimal_service(
     agent_settings: Settings,
     exposure: ModelExposure,
     sentinel_deps: AgentDeps,
+    guard_model: FunctionModel,
 ) -> Callable[[RecordingModel, RecordingModel], AskService]:
     """AskService over the sentinel rows, the two phases on their recording models."""
 
@@ -249,6 +251,7 @@ def minimal_service(
         return AskService(
             AgentService(FunctionModel(tools_model), agent_tools, instructions, agent_settings),
             CommentService(FunctionModel(comment_model), agent_settings),
+            PromptGuard(guard_model, agent_settings),
             InMemorySessionRepository(),
             SentinelSessions(sentinel_deps),
             RoleDirectory({}),
