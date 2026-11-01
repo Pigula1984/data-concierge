@@ -74,6 +74,23 @@ def test_system_views_show_only_the_session_itself(
     assert results.export(summary.handle, max_rows=10).rows == (("r1",), ("r2",), ("r3",))
 
 
+@pytest.mark.usefixtures("sales")
+def test_error_function_cannot_carry_a_sensitive_value_to_the_model(
+    queries: QueryService,
+) -> None:
+    sql = (
+        "SELECT error('More than one row returned by a subquery ' || \"CustomerName\") AS leak "
+        "FROM r2"
+    )
+
+    with pytest.raises(QueryError) as raised:
+        queries.run(sql)
+
+    assert "Customer 1" not in str(raised.value)
+    assert raised.value.detail is not None
+    assert "Customer 1" in raised.value.detail
+
+
 def _assert_orders_intact(queries: QueryService, results: ResultService) -> None:
     count = queries.run("SELECT count(*) AS order_count FROM r1").handle
     assert results.export(count, max_rows=1).rows == ((30,),)

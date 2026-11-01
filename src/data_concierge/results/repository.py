@@ -39,8 +39,14 @@ ENGINE_FAILURES = (duckdb.FatalException, duckdb.InternalException)
 # Errors that quote only the model's SQL and the schema, so their text helps the model and
 # reaches it; any other error may quote a value from the data (architecture 002, section 6.2).
 VERBATIM_ERRORS = (duckdb.ParserException, duckdb.BinderException, duckdb.CatalogException)
-# Fixed engine texts of other errors that quote no value, so they also reach the model.
-VERBATIM_MESSAGES = ("Invalid Input Error: More than one row returned by a subquery",)
+# Other errors recognized by the start of their text. The model gets the backend's own text,
+# because a query can glue a value from the data to the same start with error().
+_FIXED_MESSAGES = {
+    "Invalid Input Error: More than one row returned by a subquery": (
+        "More than one row returned by a subquery; make the subquery return one row, e.g. with "
+        "LIMIT 1 or an aggregate"
+    ),
+}
 _ERROR_HINTS: dict[type[duckdb.Error], str] = {
     duckdb.ConversionException: (
         "a value could not be converted; use TRY_CAST or filter the column first"
@@ -302,11 +308,15 @@ class DuckDBResultStore:
 
     @classmethod
     def _query_error[E: QueryError](cls, error_type: type[E], exc: duckdb.Error) -> E:
-        """The error for the model: a verbatim error shortened, any other as its class and a
-        hint, with the full text in `detail`."""
+        """The error for the model: a verbatim error shortened, a known one as the backend's
+        fixed text, any other as its class and a hint; the last two keep the full text in
+        `detail`."""
         text = str(exc)
-        if isinstance(exc, VERBATIM_ERRORS) or text.startswith(VERBATIM_MESSAGES):
+        if isinstance(exc, VERBATIM_ERRORS):
             return error_type(cls._brief(text))
+        for start, message in _FIXED_MESSAGES.items():
+            if text.startswith(start):
+                return error_type(message, detail=text)
         hint = next(
             (hint for kind, hint in _ERROR_HINTS.items() if isinstance(exc, kind)),
             _DEFAULT_ERROR_HINT,
