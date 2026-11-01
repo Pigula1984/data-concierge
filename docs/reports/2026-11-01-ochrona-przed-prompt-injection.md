@@ -45,7 +45,7 @@ Nazwy pochodzą z oryginałów: [OWASP Top 10 for LLM Applications 2025](https:/
 | Niebezpieczne wyjście | Link w tekście modelu wraca do modelu, a teksty dla użytkownika to zwykły tekst | Sprawdzamy szablon przed podstawieniem kotwic, więc wartość z danych nie jest cenzurowana. |
 | Nadmierne zużycie | `DC_MAX_PROMPT_CHARS` przed strażnikiem i limit żądań fazy komentarza | Za długi prompt nie kosztuje wywołania modelu, a pętla narzędzia nie wychodzi poza limit kroków. |
 
-Każda kontrola zostawia ślad w logu audytowym: werdykt strażnika (`guard`), odmowa roli (`tool_executed`), odrzucona sesja (`session_rejected`) oraz link i znacznik (`output_blocked`).
+Kontrole zostawiają ślad w logu audytowym: werdykt strażnika (`guard`), odmowa roli (`tool_executed`), odrzucona sesja (`session_rejected`) oraz link i znacznik (`output_blocked`). Wyjątkiem jest za długi prompt, który backend odrzuca przed utworzeniem tury, więc nie ma on zdarzenia w logu.
 
 ## Wyniki
 
@@ -66,7 +66,7 @@ Sześć zablokowanych tur to dokładnie przypadki przejęcia celu, wycieku instr
 
 Plan zakładał wyłączone myślenie w fazie komentarza, bo zasiana odpowiedź modelu nie ma bloku myślenia. Próba na żywo pokazała, że API przyjmuje taką wymianę także z myśleniem. Przebieg z wyłączonym myśleniem przeszedł 37/37, ale w 8 z 28 odpowiedzi `ok` model wypisał do komentarza swoje rozumowanie, np. uchwyty i to, czego nie widział, a raz angielską analizę szkicu.
 
-Ewaluacja tego nie oblała, bo nie czyta treści komentarza. Wyszło to dopiero w ręcznym przeglądzie, który plan wymienił jako odpowiedź na ryzyko. Przy zmianach fazy komentarza trzeba czytać komentarze, a nie tylko wynik zestawu. Późniejszy przebieg pokazał jeden komentarz w kształcie JSON, więc instrukcja zabrania teraz tej postaci, a końcowy przebieg nie ma już takiego komentarza. Ma za to 2 komentarze z 28 odpowiedzi `ok`, które podają, że nazwy są „ukryte w tabeli”, choć użytkownik widzi całą tabelę. Instrukcja zabrania takich zdań, a w trzech wcześniejszych przebiegach z myśleniem ich nie było, więc to zmienność modelu i zostaje ryzykiem jakości, a nie bezpieczeństwa.
+Ewaluacja tego nie oblała, bo nie czyta treści komentarza. Wyszło to dopiero w ręcznym przeglądzie, który plan wymienił jako odpowiedź na ryzyko. Przy zmianach fazy komentarza trzeba czytać komentarze, a nie tylko wynik zestawu. Późniejszy przebieg pokazał jeden komentarz w kształcie JSON, więc instrukcja zabrania teraz tej postaci, a końcowy przebieg nie ma już takiego komentarza. Ma za to 2 komentarze z 28 odpowiedzi `ok`, które podają, że nazwy są „ukryte w tabeli”, choć użytkownik widzi całą tabelę. Instrukcja zabrania takich zdań, a w dwóch wcześniejszych pełnych przebiegach z myśleniem i ukrytym `City` ich nie było. Traktujemy to jako zmienność modelu i ryzyko jakości, a nie bezpieczeństwa, ale użytkownik czyta wtedy nieprawdziwe zdanie.
 
 ## Ryzyka szczątkowe
 
