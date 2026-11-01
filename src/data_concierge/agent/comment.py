@@ -51,13 +51,11 @@ class CommentService:
     without their sensitive columns; its comment's anchors are checked like the draft's.
 
     The tables arrive as a tool result from a seeded exchange, marked for the model as data
-    and not as the user's words; the seed adds no model round. That model turn has no thinking
-    block, which the API requires when thinking is on, so this agent runs without thinking.
+    and not as the user's words; the seed adds no model round. Thinking stays on: without it
+    the model writes its reasoning into the comment, e.g. handles and what it was not shown.
     """
 
     def __init__(self, model: Model | str, settings: Settings) -> None:
-        model_settings = AgentService.model_settings(settings)
-        model_settings["anthropic_thinking"] = {"type": "disabled"}
         self._agent = Agent(
             model,
             deps_type=CommentDeps,
@@ -65,7 +63,7 @@ class CommentService:
             instructions=COMMENT_INSTRUCTIONS,
             tools=[Tool(self._read_tables, name=READ_TABLES_TOOL)],
             retries=settings.agent_retries,
-            model_settings=model_settings,
+            model_settings=AgentService.model_settings(settings),
         )
         self._agent.output_validator(self._check_comment)
 

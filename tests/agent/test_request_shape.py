@@ -106,7 +106,7 @@ async def test_second_turn_starts_with_the_same_bytes(
 
 
 @pytest.mark.parametrize("reply", [COMMENT_ANSWER])
-async def test_comment_phase_sends_a_seeded_tool_exchange_without_thinking(
+async def test_comment_phase_sends_a_seeded_tool_exchange_with_thinking_on(
     model: AnthropicModel,
     agent_settings: Settings,
     results: ResultService,
@@ -121,7 +121,7 @@ async def test_comment_phase_sends_a_seeded_tool_exchange_without_thinking(
 
     assert comment == "Komentarz."
     (request,) = requests
-    assert request["thinking"] == {"type": "disabled"}
+    assert request["thinking"]["type"] == "adaptive"
     assert [tool["name"] for tool in request["tools"]] == ["read_tables"]
     first, call, result = request["messages"]
     assert (first["role"], call["role"], result["role"]) == ("user", "assistant", "user")
