@@ -315,6 +315,7 @@ async def test_audit_prints_one_turn_step_by_step(
     steps = [line.split()[1] for line in lines if line[:3].strip().isdigit()]
     assert steps == [
         "request",
+        "guard",
         "model_response",
         "tool_executed",
         "model_input",
@@ -471,6 +472,8 @@ def test_audit_prints_every_kind_of_detail(audit_log: JsonlAuditLog) -> None:
         ),
         ("comment", {"comment": "Razem {r2.net_sales}."}),
         ("comment", {"failed": "overloaded"}),
+        ("guard", {"verdict": "blocked", "duration_ms": 310}),
+        ("guard", {"verdict": "unavailable", "reason": "overloaded", "duration_ms": 12}),
         ("session_rejected", {"owner_id": 3}),
         ("output_blocked", {"reason": "url", "phase": "tools", "urls": ["www.example.test"]}),
         ("output_blocked", {"reason": "marker"}),
@@ -514,6 +517,8 @@ def test_audit_prints_every_kind_of_detail(audit_log: JsonlAuditLog) -> None:
         "result query [c1]: r2, 3 rows",
         "comment: Razem {r2.net_sales}.",
         "failed, the draft is used: overloaded",
+        "blocked in 310 ms",
+        "unavailable in 12 ms: overloaded",
         "the session belongs to user 3",
         'a link in the tools phase goes back to the model: ["www.example.test"]',
         "the instruction marker in the response: the response is replaced",

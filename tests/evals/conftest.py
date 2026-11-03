@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 from cases import HR_USER_ID
-from harness import EvalClock, RecordingModel, RecordingProcedureRepository
+from harness import (
+    EvalClock,
+    RecordingGuardModel,
+    RecordingModel,
+    RecordingProcedureRepository,
+)
 from report import EvalReport, RunArchive
 
 from data_concierge.api.sessions import InMemorySessionRepository
@@ -41,7 +46,13 @@ def recorder(agent_client: SqlServerClient) -> RecordingProcedureRepository:
 def eval_model(settings: Settings) -> RecordingModel:
     if settings.anthropic_api_key is None:
         pytest.skip("ANTHROPIC_API_KEY is not set")
-    return RecordingModel(CompositionRoot.configured_model(settings))
+    return RecordingModel(CompositionRoot.configured_model(settings, settings.model))
+
+
+@pytest.fixture(scope="session")
+def eval_guard_model(settings: Settings) -> RecordingGuardModel:
+    """Its own recording, so the guard's verdicts do not mix with the comment of the turn."""
+    return RecordingGuardModel(CompositionRoot.configured_model(settings, settings.guard_model))
 
 
 @pytest.fixture(scope="session")
@@ -55,6 +66,7 @@ def eval_root(
     agent_client: SqlServerClient,
     recorder: RecordingProcedureRepository,
     eval_model: RecordingModel,
+    eval_guard_model: RecordingGuardModel,
     eval_sessions: InMemorySessionRepository,
     eval_clock: EvalClock,
 ) -> CompositionRoot:
@@ -65,6 +77,7 @@ def eval_root(
         SqlServerMetadataRepository(agent_client),
         recorder,
         eval_model,
+        eval_guard_model,
         today=eval_clock,
         sessions=eval_sessions,
     )

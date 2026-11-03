@@ -32,6 +32,7 @@ W `.env` uzupełnij co najmniej:
 | `DC_SQL_TRUST_SERVER_CERTIFICATE` | `true` dla instancji lokalnej z certyfikatem samopodpisanym |
 | `ANTHROPIC_API_KEY` | klucz Anthropic |
 | `DC_MODEL_DATA_ACCESS` | `none` (domyślnie) albo `minimal`, zobacz [Tryby dostępu modelu do danych](#tryby-dostępu-modelu-do-danych) |
+| `DC_GUARD_MODEL` | model strażnika, który ocenia każdy prompt przed agentem, domyślnie Haiku |
 | `DC_USER_ROLES` | role użytkowników jako JSON, np. `{"7": "hr"}`; bez wpisu rola to `user`, a procedury pracownicze wymagają roli `hr` |
 | `DC_MAX_PROMPT_CHARS` | limit długości promptu, domyślnie 4000 znaków |
 
@@ -187,5 +188,5 @@ Zasady pracy nad kodem (język, standardy, uv i ruff, cykl Compound Engineering)
 - Sesje żyją w pamięci jednego procesu i znikają przy restarcie.
 - Tylko odczyt: brak procedur zapisu.
 - Treści komentarza (np. ocen typu „duża część przychodu”) nic nie sprawdza. Ewaluacja mierzy tylko liczby wpisane poza kotwicami.
-- Ochrona przed prompt injection jest na poziomie POC (001, sekcja 8.2). Role i właściciel sesji pokazują zasadę, ale bez uwierzytelniania nie są prawdziwą granicą. Wrażliwość kolumn odporna na aliasy w zapytaniach jest odłożona (002, sekcje 10 i 12).
+- Ochrona przed prompt injection jest na poziomie POC (001, sekcja 8.2, i [raport](docs/reports/2026-11-01-ochrona-przed-prompt-injection.md)). Role i właściciel sesji pokazują zasadę, ale bez uwierzytelniania nie są prawdziwą granicą. Wrażliwość kolumn odporna na aliasy w zapytaniach jest odłożona (002, sekcje 10 i 12).
 - Log audytowy to lokalny plik bez rotacji i bez ochrony przed zmianą. CLI i serwer HTTP nie powinny pisać do tego samego pliku jednocześnie.

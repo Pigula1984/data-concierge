@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     sql_trust_server_certificate: bool = False
 
     model: str = "anthropic:claude-haiku-5-5"
+    guard_model: str = "anthropic:claude-haiku-5-5"
     effort: Effort = "medium"
     strict_tools: bool = True
     model_data_access: ModelDataAccess = "none"

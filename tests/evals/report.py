@@ -31,6 +31,8 @@ NOT_AMOUNTS = re.compile(r"\d{4}-\d{2}(?:-\d{2})?|\d{1,2}\.\d{1,2}\.\d{4}|[A-Z]{
 # Years and small counts ("12 miesięcy", "3 klientów") are not counted.
 YEARS = range(1900, 2101)
 SMALL_COUNT = 100
+# Its turns end at the guard, so an average with them says nothing about an ordinary turn.
+SECURITY_GROUP = "bezpieczeństwo"
 
 
 @dataclass
@@ -125,13 +127,19 @@ class CaseOutcome:
     numbers_outside_anchors: tuple[str, ...]
     assumptions_ok: bool | None = None
     candidates_ok: bool | None = None
+    no_calls_ok: bool | None = None
+    guard_ok: bool = True
     anchor_retries: int = 0
     # Answers that kept their draft because the comment phase failed (mode minimal).
     drafts: int = 0
     turns: int = 1
+    # The turn without the guard, comparable with runs from before it.
     seconds: float = 0.0
-    # In USD, both phases; None when the price list lacks the model.
+    # In USD, both phases without the guard; None when the price list lacks the model.
     cost: Decimal | None = None
+    guard_blocked: int = 0
+    guard_seconds: float = 0.0
+    guard_cost: Decimal | None = None
 
     @property
     def failed_checks(self) -> tuple[str, ...]:
@@ -143,6 +151,8 @@ class CaseOutcome:
             ("result", self.result_ok is not False),
             ("candidates", self.candidates_ok is not False),
             ("assumptions", self.assumptions_ok is not False),
+            ("no calls", self.no_calls_ok is not False),
+            ("guard", self.guard_ok),
         )
         return tuple(name for name, ok in checks if not ok)
 
@@ -169,14 +179,17 @@ class EvalReport:
             f"Mode: {self._mode}",
             "",
             "| group | cases | passed | status | procedure | params | result | candidates "
-            "| query retries | anchor retries | numbers outside anchors | drafts | s/turn "
-            "| $/turn |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "| query retries | anchor retries | numbers outside anchors | drafts | blocked "
+            "| s/turn | $/turn |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for group in groups:
             lines.append(self._row(group, [o for o in self._outcomes if o.group == group]))
         lines.append(self._row("**all**", self._outcomes))
-        lines += ["", self._totals(self._outcomes)]
+        ordinary = [o for o in self._outcomes if o.group != SECURITY_GROUP]
+        if ordinary:
+            lines.append(self._row("**without security**", ordinary))
+        lines += ["", self._totals(self._outcomes), self._guard(self._outcomes)]
         failed = [outcome for outcome in self._outcomes if not outcome.passed]
         if failed:
             lines += ["", "Failed cases:"]
@@ -207,6 +220,7 @@ class EvalReport:
             f"| {sum(o.anchor_retries for o in outcomes)} "
             f"| {sum(len(o.numbers_outside_anchors) for o in outcomes)} "
             f"| {sum(o.drafts for o in outcomes)} "
+            f"| {sum(o.guard_blocked for o in outcomes)} "
             f"| {sum(o.seconds for o in outcomes) / turns:.1f} "
             f"| {'-' if cost is None else f'{cost / turns:.4f}'} |"
         )
@@ -220,9 +234,22 @@ class EvalReport:
             f"{'unknown' if cost is None else f'${cost:.2f}'}"
         )
 
+    @classmethod
+    def _guard(cls, outcomes: Sequence[CaseOutcome]) -> str:
+        seconds = sum(o.guard_seconds for o in outcomes)
+        cost = cls._sum([o.guard_cost for o in outcomes])
+        return (
+            f"Guard: {sum(o.guard_blocked for o in outcomes)} turns blocked, time: "
+            f"{seconds:.0f} s ({seconds / sum(o.turns for o in outcomes):.1f} s/turn), cost: "
+            f"{'unknown' if cost is None else f'${cost:.4f}'}"
+        )
+
+    @classmethod
+    def _cost(cls, outcomes: Sequence[CaseOutcome]) -> Decimal | None:
+        return cls._sum([o.cost for o in outcomes])
+
     @staticmethod
-    def _cost(outcomes: Sequence[CaseOutcome]) -> Decimal | None:
-        costs = [o.cost for o in outcomes]
+    def _sum(costs: Sequence[Decimal | None]) -> Decimal | None:
         return None if None in costs else sum((c for c in costs if c is not None), Decimal(0))
 
     @classmethod

@@ -11,6 +11,7 @@ type AuditEventKind = Literal[
     "tool_executed",
     "model_input",
     "comment",
+    "guard",
     "session_rejected",
     "output_blocked",
     "turn_failed",

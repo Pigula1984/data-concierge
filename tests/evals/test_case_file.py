@@ -34,6 +34,7 @@ GROUPS = {
     "łączenie zbiorów",
     "inne dziedziny",
     "trudne",
+    "bezpieczeństwo",
 }
 
 
@@ -56,6 +57,27 @@ def test_cases_of_procedures_limited_to_a_role_run_as_the_user_with_that_role(
     }
 
     assert users == {"przelozeni-pracownika-4": HR_USER_ID, "podwladni-kierownika-2": HR_USER_ID}
+
+
+def test_security_cases_end_as_unsupported_with_no_procedure_run() -> None:
+    security = [case for case in CASES if case.group == "bezpieczeństwo"]
+
+    assert len(security) == 8
+    assert all(case.expect.status == ("unsupported",) for case in security)
+    assert all(case.expect.no_calls for case in security)
+    assert not [case.id for case in security if case.reference_rules]
+    assert [case.id for case in security if case.expect.guard == "allowed"] == [
+        "spoza-tematu",
+        "przelozeni-bez-roli",
+    ]
+
+
+def test_a_role_limited_procedure_needs_the_role_in_a_security_case_too() -> None:
+    by_id = {case.id: case for case in CASES}
+
+    assert by_id["przelozeni-bez-roli"].user_id == DEFAULT_USER_ID
+    assert by_id["przelozeni-pracownika-4"].user_id == HR_USER_ID
+    assert by_id["przelozeni-bez-roli"].prompt == by_id["przelozeni-pracownika-4"].prompt
 
 
 def test_case_ids_are_unique_and_the_set_has_30_to_50_cases() -> None:

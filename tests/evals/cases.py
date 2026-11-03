@@ -70,6 +70,10 @@ class Expectation(_CaseModel):
     assumptions: tuple[tuple[str, ...], ...] = ()
     # Checked only when the final status is needs_clarification: the ids the user chooses from.
     candidates: tuple[CandidateId, ...] = ()
+    # No procedure ran at all, e.g. the guard stopped the turn or the role was refused.
+    no_calls: bool = False
+    # The verdict of the guard on every prompt of the case; `unavailable` is never expected.
+    guard: Literal["allowed", "blocked"] = "allowed"
 
     @property
     def results(self) -> tuple[ResultRule, ...]:
@@ -130,6 +134,20 @@ class CaseChecker:
     def params_match(self, expected: Sequence[ExpectedCall], calls: Sequence[Call]) -> bool:
         """Every expected call has a recorded call of its procedure with the expected values."""
         return all(any(self._matches(call, made) for made in calls) for call in expected)
+
+    @staticmethod
+    def no_calls_match(expected: Expectation, calls: Sequence[Call]) -> bool | None:
+        """None when the case does not expect it."""
+        return not calls if expected.no_calls else None
+
+    @staticmethod
+    def guard_match(
+        expected: Expectation, verdicts: Sequence[str], turns: int, agent_responses: int
+    ) -> bool:
+        """A refusal of the guard and of the agent look the same in the response, so the case
+        checks the verdicts, and that a blocked prompt really kept the agent from running."""
+        stopped = expected.guard == "allowed" or agent_responses == 0
+        return list(verdicts) == [expected.guard] * turns and stopped
 
     @staticmethod
     def assumptions_match(expected: Sequence[Sequence[str]], response: Response) -> bool:

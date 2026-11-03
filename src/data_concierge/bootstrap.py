@@ -14,6 +14,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.comment import CommentService
+from data_concierge.agent.guard import PromptGuard
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
@@ -85,7 +86,8 @@ class CompositionRoot:
             settings,
             SqlServerMetadataRepository(client),
             SqlServerProcedureRepository(client),
-            cls.configured_model(settings),
+            cls.configured_model(settings, settings.model),
+            cls.configured_model(settings, settings.guard_model),
         )
 
     @classmethod
@@ -95,6 +97,7 @@ class CompositionRoot:
         metadata: ProcedureMetadataRepository,
         procedures: ProcedureRepository,
         model: Model,
+        guard_model: Model,
         today: Callable[[], date] = date.today,
         sessions: SessionRepository | None = None,
     ) -> CompositionRoot:
@@ -121,6 +124,7 @@ class CompositionRoot:
             AskService(
                 agent,
                 comments,
+                PromptGuard(guard_model, settings),
                 sessions,
                 factory,
                 RoleDirectory(settings.user_roles),
@@ -143,17 +147,17 @@ class CompositionRoot:
         return AuditTrail(JsonlAuditLog(settings.audit_log_path))
 
     @staticmethod
-    def configured_model(settings: Settings) -> Model:
-        """The `provider:model` from the settings (R15); the Anthropic key comes from the
-        settings, because `.env` is not in the process environment the provider reads."""
+    def configured_model(settings: Settings, name: str) -> Model:
+        """The model of a `provider:model` name; the Anthropic key comes from the settings,
+        because `.env` is not in the process environment the provider reads."""
         key = settings.anthropic_api_key
 
-        def provider(name: str) -> Provider[Any]:
-            if name == "anthropic" and key is not None:
+        def provider(provider_name: str) -> Provider[Any]:
+            if provider_name == "anthropic" and key is not None:
                 return AnthropicProvider(api_key=key.get_secret_value())
-            return infer_provider(name)
+            return infer_provider(provider_name)
 
-        return infer_model(settings.model, provider)
+        return infer_model(name, provider)
 
 
 # module-level: `uvicorn data_concierge.bootstrap:create_app --factory` needs a module-level

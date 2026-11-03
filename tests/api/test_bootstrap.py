@@ -35,11 +35,12 @@ def test_catalog_that_does_not_match_the_database_stops_the_start(
     agent_settings: Settings,
     repository: ProcedureRepository,
     scripted: Callable[..., FunctionModel],
+    guard_model: FunctionModel,
 ) -> None:
     metadata = MissingProcedures()
 
     with pytest.raises(ConfigurationError, match=r"api\.SalesOrder_List: the procedure does not"):
-        CompositionRoot.assemble(agent_settings, metadata, repository, scripted())
+        CompositionRoot.assemble(agent_settings, metadata, repository, scripted(), guard_model)
 
 
 def test_configured_anthropic_model_gets_the_key_from_the_settings(
@@ -49,7 +50,7 @@ def test_configured_anthropic_model_gets_the_key_from_the_settings(
         update={"model": "anthropic:claude-sonnet-5-5", "anthropic_api_key": SecretStr("sk-test")}
     )
 
-    model = CompositionRoot.configured_model(settings)
+    model = CompositionRoot.configured_model(settings, settings.model)
 
     assert isinstance(model, AnthropicModel)
     assert model.model_name == "claude-sonnet-5-5"
@@ -57,10 +58,12 @@ def test_configured_anthropic_model_gets_the_key_from_the_settings(
     assert model.client.api_key == "sk-test"
 
 
-def test_model_comes_from_the_model_setting(agent_settings: Settings) -> None:
-    settings = agent_settings.model_copy(update={"model": "test"})
+def test_model_comes_from_the_given_name(agent_settings: Settings) -> None:
+    assert isinstance(CompositionRoot.configured_model(agent_settings, "test"), TestModel)
 
-    assert isinstance(CompositionRoot.configured_model(settings), TestModel)
+
+def test_the_guard_runs_on_haiku_by_default(agent_settings: Settings) -> None:
+    assert agent_settings.guard_model == "anthropic:claude-haiku-5-5"
 
 
 def test_each_session_has_its_own_result_store(
@@ -115,6 +118,7 @@ async def test_assembled_service_uses_the_configured_roles_and_prompt_limit(
     scripted: Callable[..., FunctionModel],
     procedure_calls: list[tuple[str, dict[str, object]]],
     data_ranges: dict[str, DataRange],
+    guard_model: FunctionModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The catalog check needs SQL Server; the wiring under test starts after it.
@@ -124,7 +128,7 @@ async def test_assembled_service_uses_the_configured_roles_and_prompt_limit(
     call = ToolCallPart("get_employee_managers", {"employee_id": 4})
     present = ToolCallPart("present_result", {"status": "ok", "message": "Gotowe."})
     model = scripted(call, present, call, present)
-    root = CompositionRoot.assemble(settings, MissingProcedures(), repository, model)
+    root = CompositionRoot.assemble(settings, MissingProcedures(), repository, model, guard_model)
 
     await root.ask_service.ask("Przełożeni", user_id=7)
     await root.ask_service.ask("Przełożeni", user_id=8)
@@ -159,6 +163,7 @@ async def test_assembled_service_writes_turns_to_the_audit_log_only_when_enabled
     repository: ProcedureRepository,
     scripted: Callable[..., FunctionModel],
     data_ranges: dict[str, DataRange],
+    guard_model: FunctionModel,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     enabled: bool,
@@ -171,7 +176,9 @@ async def test_assembled_service_writes_turns_to_the_audit_log_only_when_enabled
         update={"audit_log_enabled": enabled, "audit_log_path": path}
     )
     present = ToolCallPart("present_result", {"status": "ok", "message": "Gotowe."})
-    root = CompositionRoot.assemble(settings, MissingProcedures(), repository, scripted(present))
+    root = CompositionRoot.assemble(
+        settings, MissingProcedures(), repository, scripted(present), guard_model
+    )
 
     response = await root.ask_service.ask("Raport", user_id=7)
 
