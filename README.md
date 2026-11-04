@@ -141,14 +141,17 @@ uv run data-concierge audit <session_id>
 | Zdarzenie | Co zawiera |
 |-----------|------------|
 | `request` | prompt, data doklejona przez backend, nowa czy kontynuowana sesja, tryb, model |
+| `guard` | werdykt strażnika (`allowed`, `blocked`, `unavailable` z przyczyną) i czas jego wywołania |
+| `session_rejected` | próba użycia sesji innego użytkownika, z jej właścicielem |
 | `model_response` | myślenie modelu, tekst, wywołania narzędzi z argumentami (także końcowe `present_result`), tokeny |
 | `tool_executed` | co backend wykonał: procedura z parametrami albo SQL zapytania, czas, uchwyt, liczba wierszy, a przy błędzie pełny opis, którego model nie widzi |
 | `model_input` | co backend odesłał modelowi: podsumowania wyników i prośby o poprawkę |
 | `comment` | wynik fazy komentarza w trybie `minimal` |
+| `output_blocked` | odpowiedź zatrzymana przez backend: adres URL w tekście modelu albo znacznik instrukcji |
 | `turn_failed` | przyczyna przerwania tury (limit kroków, błąd modelu, błąd magazynu wyników) |
 | `response` | pełna odpowiedź dla użytkownika i czas tury |
 
-Polecenie `audit` czyta tylko plik, nie łączy się z bazą ani z modelem. Szczegóły: 001, sekcja 8.1.
+Polecenie `audit` czyta tylko plik, nie łączy się z bazą ani z modelem. Szczegóły: 001, sekcja 8.1, i [opis działania logu](docs/reports/2026-11-04-log-audytowy.md).
 
 ## Testy i ewaluacja
 
@@ -189,4 +192,4 @@ Zasady pracy nad kodem (język, standardy, uv i ruff, cykl Compound Engineering)
 - Tylko odczyt: brak procedur zapisu.
 - Treści komentarza (np. ocen typu „duża część przychodu”) nic nie sprawdza. Ewaluacja mierzy tylko liczby wpisane poza kotwicami.
 - Ochrona przed prompt injection jest na poziomie POC (001, sekcja 8.2, i [raport](docs/reports/2026-11-01-ochrona-przed-prompt-injection.md)). Role i właściciel sesji pokazują zasadę, ale bez uwierzytelniania nie są prawdziwą granicą. Wrażliwość kolumn odporna na aliasy w zapytaniach jest odłożona (002, sekcje 10 i 12).
-- Log audytowy to lokalny plik bez rotacji i bez ochrony przed zmianą. CLI i serwer HTTP nie powinny pisać do tego samego pliku jednocześnie.
+- Log audytowy to lokalny plik bez rotacji i bez ochrony przed zmianą ([jak działa](docs/reports/2026-11-04-log-audytowy.md)). CLI i serwer HTTP nie powinny pisać do tego samego pliku jednocześnie.
