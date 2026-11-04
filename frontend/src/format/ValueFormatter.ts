@@ -2,7 +2,7 @@ import type { CellValue } from "../api/ApiClient";
 import type { ColumnType } from "./ColumnType";
 
 // The Polish digit group separator; a no-break space keeps the number on one line.
-const GROUP_SEPARATOR = " ";
+const GROUP_SEPARATOR = "\u00a0";
 const MIN_GROUPED_DIGITS = 5;
 
 /**

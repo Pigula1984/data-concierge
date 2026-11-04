@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ColumnType } from "./ColumnType";
 import { ValueFormatter } from "./ValueFormatter";
 
-const NBSP = " ";
+const NBSP = "\u00a0";
 const formatter = new ValueFormatter();
 
 // The same rules as `data-concierge chat` (ValueFormatter and ConversationPrinter in Python).
