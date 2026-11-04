@@ -35,8 +35,9 @@ export function AnswerView({ response, canChoose, onChoose, onNewConversation }:
       ))}
       {response.assumptions.length > 0 && (
         <ul className="assumptions" aria-label="Założenia">
-          {response.assumptions.map((assumption) => (
-            <li key={assumption}>{assumption}</li>
+          {response.assumptions.map((assumption, index) => (
+            // The same assumption may repeat; the list never reorders.
+            <li key={index}>{assumption}</li>
           ))}
         </ul>
       )}

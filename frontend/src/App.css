@@ -14,11 +14,6 @@ body {
   padding: 16px;
 }
 
-.app-header h1 {
-  font-size: 1.4rem;
-  margin: 0 0 12px;
-}
-
 .result-table {
   margin: 12px 0;
 }
@@ -55,6 +50,7 @@ body {
 }
 
 .app-header h1 {
+  font-size: 1.4rem;
   margin: 0;
 }
 
