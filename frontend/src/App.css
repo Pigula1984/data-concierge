@@ -1,0 +1,20 @@
+:root {
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  color: #1f2328;
+  background: #f6f8fa;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.app-header h1 {
+  font-size: 1.4rem;
+  margin: 0 0 12px;
+}
