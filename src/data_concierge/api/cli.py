@@ -1,7 +1,8 @@
 """Command line entry point: `data-concierge ask` for one turn, printed as the response JSON of
 section 9, and `data-concierge chat` for a conversation read from standard input, printed as
 text the user reads, or as the response JSON of every turn with `--diagnostic`.
-`data-concierge audit` prints a turn or a conversation from the audit log (section 8.1)."""
+`data-concierge audit` prints a turn or a conversation from the audit log (section 8.1).
+`data-concierge openapi` writes the OpenAPI schema the frontend types are generated from."""
 
 import argparse
 import asyncio
@@ -10,8 +11,10 @@ import json
 import logging
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Protocol, TextIO, override
 
+from fastapi import FastAPI
 from pydantic import JsonValue
 
 from data_concierge.agent.formatting import ValueFormatter
@@ -58,6 +61,10 @@ class CommandLine:
             "audit", help="print a turn or a conversation from the audit log, step by step"
         )
         audit.add_argument("id", help="correlation id of a turn or session id of a conversation")
+        openapi = commands.add_parser(
+            "openapi", help="write the OpenAPI schema of the HTTP API (no database needed)"
+        )
+        openapi.add_argument("--output", type=Path, required=True, help="JSON file to write")
         return parser
 
     async def run(self, args: argparse.Namespace) -> int:
@@ -394,6 +401,22 @@ class AuditTrailPrinter:
         return lines
 
 
+class OpenApiExport:
+    """Writes the OpenAPI schema of the HTTP API, the contract the frontend's types are
+    generated from; needs neither the settings, the database nor the model."""
+
+    def __init__(self, app: FastAPI) -> None:
+        self._app = app
+
+    def write(self, path: Path) -> int:
+        schema = json.dumps(self._app.openapi(), ensure_ascii=False, indent=2)
+        # The frontend writes it under node_modules/.cache, which a fresh `npm ci` lacks.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # LF on every platform, so regenerating the types gives the same file.
+        path.write_text(schema + "\n", encoding="utf-8", newline="\n")
+        return 0
+
+
 # module-level: the console script entry point declared in pyproject.toml.
 def main(argv: Sequence[str] | None = None) -> int:
     args = CommandLine.parser().parse_args(argv)
@@ -402,6 +425,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8")
+    if args.command == "openapi":
+        return OpenApiExport(CompositionRoot.api_app()).write(args.output)
     settings = Settings()
     if args.command == "audit":
         return AuditTrailPrinter(CompositionRoot.audit_trail(settings), sys.stdout).print(args.id)

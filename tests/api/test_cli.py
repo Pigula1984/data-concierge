@@ -12,7 +12,7 @@ from pydantic import JsonValue
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
-from data_concierge.api.cli import AuditTrailPrinter, CommandLine, ConversationPrinter
+from data_concierge.api.cli import AuditTrailPrinter, CommandLine, ConversationPrinter, main
 from data_concierge.api.schemas import (
     Candidate,
     Clarification,
@@ -25,6 +25,7 @@ from data_concierge.api.service import AskService
 from data_concierge.audit.models import AuditEvent, AuditEventKind
 from data_concierge.audit.repository import JsonlAuditLog
 from data_concierge.audit.service import AuditTrail
+from data_concierge.bootstrap import CompositionRoot
 from data_concierge.core.errors import PromptTooLongError
 from data_concierge.core.settings import Settings
 from data_concierge.core.types import ColumnKind, ColumnType
@@ -529,3 +530,37 @@ def test_audit_prints_every_kind_of_detail(audit_log: JsonlAuditLog) -> None:
         "question: Którego klienta wybierasz?",
     ]:
         assert line in output, line
+
+
+def test_openapi_writes_the_api_contract_without_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No .env in the working directory and no connection settings in the environment.
+    monkeypatch.chdir(tmp_path)
+    for name in ("DC_SQL_SERVER", "DC_SQL_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    output = tmp_path / "openapi.json"
+
+    code = main(["openapi", "--output", str(output)])
+
+    schema = json.loads(output.read_text(encoding="utf-8"))
+    assert code == 0
+    assert set(schema["paths"]) == {"/ask", "/health"}
+    assert {"Response", "ResponseTable", "AskRequest"} <= set(schema["components"]["schemas"])
+    assert b"\r\n" not in output.read_bytes()
+
+
+def test_openapi_describes_the_same_routes_as_the_served_app(tmp_path: Path) -> None:
+    output = tmp_path / "openapi.json"
+    main(["openapi", "--output", str(output)])
+
+    served = CompositionRoot(StubAskService(ok())).http_app().openapi()
+
+    assert json.loads(output.read_text(encoding="utf-8")) == served
+
+
+def test_openapi_creates_the_output_folder(tmp_path: Path) -> None:
+    output = tmp_path / "cache" / "openapi.json"
+
+    assert main(["openapi", "--output", str(output)]) == 0
+    assert output.is_file()

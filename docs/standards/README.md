@@ -7,6 +7,7 @@ Zasady pisania kodu w Data Concierge. Obowiązują w całym kodzie produkcyjnym 
 | [python-czysty-kod.md](python-czysty-kod.md) | Python obiektowo: czysty kod, DRY, SOLID, typowanie, błędy, testy |
 | [wzorce-projektowe.md](wzorce-projektowe.md) | Wzorce projektowe przydatne w tym projekcie, z przypisaniem do komponentów |
 | [architektura-warstwowa.md](architektura-warstwowa.md) | Modułowość i warstwy controller → service → repository |
+| [typescript-react.md](typescript-react.md) | Frontend w `frontend/`: TypeScript i React, typy z OpenAPI, tekst bez HTML, bramki npm |
 
 Projekt samego systemu (komponenty, przepływy, kontrakty) jest w [`docs/architecture/`](../architecture/). Te dokumenty opisują, **jak** go implementujemy.
 
