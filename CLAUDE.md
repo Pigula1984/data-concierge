@@ -54,3 +54,12 @@ Zależności idą tylko w jedną stronę: controller → service → repository.
 - Zależności dodajemy przez `uv add <pakiet>`, narzędzia deweloperskie przez `uv add --dev <pakiet>`, usuwamy przez `uv remove`.
 - Środowisko: `uv sync`. Polecenia uruchamiamy przez `uv run <polecenie>` (np. `uv run pytest`).
 - Nie używamy `pip install` ani ręcznie tworzonych virtualenvów. `pyproject.toml` i `uv.lock` trafiają do repozytorium.
+
+## Frontend: TypeScript i React
+
+Interfejs w przeglądarce leży w `frontend/` (React, TypeScript, Vite, AG Grid). Zasady: [`docs/standards/typescript-react.md`](docs/standards/typescript-react.md), architektura: [`docs/architecture/003-interfejs-uzytkownika.md`](docs/architecture/003-interfejs-uzytkownika.md).
+
+- Polecenia uruchamiamy w `frontend/`: `npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm run test`, `npm run build`. Kod przed commitem przechodzi wszystkie.
+- Wersje paczek przypinamy dokładnie (bez `^`), a `package-lock.json` trafia do repozytorium.
+- Typy kontraktu backendu generujemy z OpenAPI (`npm run api:types`), nie piszemy ich ręcznie. Po zmianie `Response` albo `AskRequest` w Pythonie uruchamiamy `npm run api:check`.
+- Teksty z backendu i dane pokazujemy wyłącznie jako tekst, bez `dangerouslySetInnerHTML`.

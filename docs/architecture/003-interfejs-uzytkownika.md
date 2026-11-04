@@ -1,6 +1,6 @@
 # Data Concierge: interfejs użytkownika (etap 3)
 
-Status: **projekt, decyzje podjęte** (sekcja 11), przed planem wdrożenia. Data: 2026-11-04. Przy wdrożeniu [`001-architektura-data-concierge.md`](001-architektura-data-concierge.md) dostanie odwołania w sekcjach 1, 4, 9 i 12, a ten dokument uzupełnienia z implementacji.
+Status: **krok 3A wdrożony** według planu [`2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md`](../plans/2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md); kroki 3B i 3C to projekt. Data: 2026-11-04. [`001-architektura-data-concierge.md`](001-architektura-data-concierge.md) odsyła tu w sekcjach 1, 4 i 12. Odejścia od pierwotnego projektu i ustalenia z implementacji są w sekcji 13.
 
 ## 1. Cel i zakres
 
@@ -115,12 +115,12 @@ Niezależnie od frameworka najtrwalszą częścią etapu 3 jest kontrakt backend
 
 - **Wiadomość użytkownika** idzie do `POST /ask` z `session_id` z poprzedniej odpowiedzi. Pierwsza wiadomość idzie bez niego. Strona robi to samo co pętla `data-concierge chat`: wysyła tylko nowy prompt, a nie całą rozmowę. Wiadomości na ekranie to widok dla użytkownika z podstawionymi wartościami. Nie wracają do backendu, więc klient nie przechowuje wersji z kotwicami i nie decyduje, co zobaczy model. Z tego powodu odpada też protokół `useChat` (sekcja 4.1), w którym klient przy każdym żądaniu odsyła całą historię.
 - **Odpowiedź:** `message`, pod nim tabele, potem `assumptions` jako lista, przy statusie `needs_clarification` pytanie i przyciski kandydatów. Status `no_data`, `unsupported` i `error` dostaje inny kolor ramki. Wszystko jako tekst w JSX, bez `dangerouslySetInnerHTML`.
-- **Kandydaci:** przycisk pokazuje opis, a wysyła prompt z samym identyfikatorem, np. `CustomerID 12698` (ograniczenie 6). Postać tego tekstu trzeba sprawdzić na zestawie ewaluacyjnym: dziś odpowiedź na pytanie doprecyzowujące pisze człowiek.
+- **Kandydaci:** przycisk pokazuje opis, a wysyła prompt z samym identyfikatorem: `Wybieram 12698.` (ograniczenie 6). Sprawdzone na żywo 2026-11-04 na przykładzie P2: model kontynuuje rozmowę ze wskazanym klientem. Przypadki ewaluacyjne dla tego promptu dochodzą w 3B.
 - **Oczekiwanie:** wskaźnik z licznikiem sekund od wysłania i zablokowane pole do czasu odpowiedzi.
 - **Proweniencja:** zwinięta sekcja „Jak policzono” pod odpowiedzią: procedury z parametrami i SQL. Przydaje się na demo i kosztuje mało.
-- **Tożsamość:** brak uwierzytelniania, więc strona ma pole `user_id` (z domyślną wartością z konfiguracji). Zmiana `user_id` zaczyna nową rozmowę, bo sesja ma właściciela. Na demo pozwala pokazać rolę `hr`.
+- **Tożsamość:** brak uwierzytelniania, więc strona ma pole `user_id` (domyślnie 1, zapamiętane w `localStorage`; niecałkowita wartość blokuje wysyłanie). Zmiana `user_id` zaczyna nową rozmowę, bo sesja ma właściciela. Na demo pozwala pokazać rolę `hr`.
 - **Wygasła sesja:** po restarcie procesu backend zwraca `error` z informacją o wygasłej sesji. Strona pokazuje przycisk „Nowa rozmowa”, który czyści `session_id`.
-- **Stan strony:** `session_id` i `user_id` w `sessionStorage` jako wygoda (odświeżenie karty nie gubi rozmowy, dopóki proces żyje). Historii wiadomości strona nie musi odtwarzać po odświeżeniu.
+- **Stan strony:** rozmowa żyje w pamięci strony, więc odświeżenie zaczyna nową rozmowę. Zachowanie samego `session_id` po odświeżeniu dałoby modelowi historię, której użytkownik już nie widzi.
 
 ## 6. Siatka z danymi (3A)
 
@@ -128,12 +128,12 @@ Niezależnie od frameworka najtrwalszą częścią etapu 3 jest kontrakt backend
 |-----------|-------------|
 | Do 10 000 wierszy | Wirtualizacja wierszy: renderowane są tylko widoczne wiersze. Ma ją AG Grid Community (MIT) [U1], a przy TanStack Table daje ją TanStack Virtual. Małe tabele (np. do 15 wierszy) bez stałej wysokości, żeby nie było pustego miejsca. |
 | Kwoty jako tekst | Formatowanie i sortowanie według `columns[].type`. Wartość zostaje tekstem, a liczba służy tylko do porównania przy sortowaniu. |
-| Polskie formatowanie | `Intl.NumberFormat('pl-PL')`: separator tysięcy od pięciu cyfr i przecinek dziesiętny, czyli te same zasady co kotwice (002, sekcja 6.1). Skala z typu kolumny. Do sprawdzenia: przekazanie tekstu do `format()` bez utraty precyzji w używanych przeglądarkach; w razie problemów formatowanie własne na tekście. |
-| `truncated` | Pasek nad tabelą: „Pokazano 10 000 z N wierszy”. |
+| Polskie formatowanie | Klasa `ValueFormatter` przeniesiona z Pythona (`data-concierge chat`): przecinek dziesiętny, grupy cyfr od pięciu cyfr tylko dla `decimal` (odpowiedź nie niesie ról kolumn, więc `int` może być identyfikatorem), skala z tekstu kwoty. Działa na tekście, więc nie traci precyzji; `Intl.NumberFormat` nie jest potrzebny. Tekst sortuje się w polskiej kolejności (`Intl.Collator('pl')`). |
+| `truncated` | Pasek nad tabelą: „Pokazano 10000 z N wierszy”, gdy limit odpowiedzi obciął wiersze, albo „Wynik niepełny”, gdy obcięta była procedura źródłowa. |
 | Eksport | Pobranie CSV z siatki (wbudowane w AG Grid Community; przy TanStack Table kilka linii własnego kodu). Opcjonalne. |
-| Wartości jako tekst | Komórki renderowane jako tekst, nie HTML. Do sprawdzenia przy wyborze biblioteki: zachowanie domyślnego renderera komórek z `<` w danych. |
+| Wartości jako tekst | Domyślny renderer komórek AG Grid wstawia tekst: test sprawdza, że `<img src=x onerror=…>` w komórce zostaje tekstem. |
 
-**Siatka po stronie serwera** (stronicowanie po uchwycie sesji przez nowy endpoint) odpada na start. 10 000 wierszy to kilka MB JSON, a nowy endpoint potrzebowałby kontroli właściciela sesji i własnych limitów. Wraca, gdy limit odpowiedzi wzrośnie.
+**Siatka po stronie serwera** (stronicowanie po uchwycie sesji przez nowy endpoint) odpada na start. 10 000 wierszy to kilkaset KB JSON (455 KB dla zamówień z 2024), a nowy endpoint potrzebowałby kontroli właściciela sesji i własnych limitów. Wraca, gdy limit odpowiedzi wzrośnie.
 
 **AG Grid React czy TanStack Table (D5):** oba na licencji MIT. AG Grid Community to gotowa siatka z sortowaniem, filtrami, zmianą szerokości kolumn i eksportem CSV, ale jest ciężka, a grupowanie, pivot i model wierszy po stronie serwera są w płatnej wersji Enterprise [U1]. TanStack Table to logika tabeli bez wyglądu: pełna kontrola nad renderowaniem (łatwo zagwarantować zwykły tekst) i mały rozmiar, za to więcej własnego kodu (wygląd, wirtualizacja przez TanStack Virtual, eksport). **Decyzja (D5, 2026-11-04): AG Grid React (Community)**, bo na start daje najwięcej bez pisania kodu. Siatka siedzi w jednym komponencie (`ResultGrid`), więc przejście na TanStack Table, gdyby przyszły system komponentów produkcyjnego frontendu tego wymagał, dotyczy tylko jego. Tabulator (rozważany w wariancie A [U2]) odpada, bo przy React obie powyższe biblioteki są naturalniejsze.
 
@@ -160,13 +160,17 @@ class ChartRequest(BaseModel, frozen=True):
     kind: ChartKind = Field(description="...")  # when to use which kind, in the description
     x: str = Field(description="Column on the x axis, or the category of a pie")
     y: tuple[str, ...] = Field(description="Numeric columns to draw; one for a pie")
-    series: str | None = Field(default=None, description="Column that splits the data into series (long format)")
+    series: str | None = Field(
+        default=None, description="Column that splits the data into series (long format)"
+    )
     title: str = Field(description="Chart title for the user, in Polish; data values by anchor")
 
 
 class AgentAnswer(BaseModel, frozen=True):
     ...
-    chart: ChartRequest | None = Field(default=None, description="Only when the user asks for a chart")
+    chart: ChartRequest | None = Field(
+        default=None, description="Only when the user asks for a chart"
+    )
 ```
 
 `Response` dostaje odpowiadające pole `chart` (rodzaj, uchwyt, kolumny, tytuł z podstawionymi kotwicami). Dane wykresu interfejs bierze z tabeli o tym samym uchwycie w `tables`, więc nic nie jest wysyłane dwa razy.
@@ -238,20 +242,20 @@ Format strumienia jest otwarty i do wyboru w planie 3C:
 | Zagrożenie | Kontrola |
 |------------|----------|
 | HTML lub skrypt w danych albo w tekście modelu | Tekst w JSX i formattery bez HTML. Zakaz `dangerouslySetInnerHTML` (reguła ESLint). |
-| Skrypty z zewnątrz | Biblioteki w zbudowanych plikach, bez CDN. Nagłówek `Content-Security-Policy` z `script-src 'self'` (styl inline może być potrzebny dla siatki i wykresów; do sprawdzenia). |
+| Skrypty z zewnątrz | Biblioteki w zbudowanych plikach, bez CDN. Nagłówek `Content-Security-Policy` ze `script-src 'self'` na odpowiedziach frontendu (nie na `/docs` i `/redoc` FastAPI, które ładują skrypty z CDN). Styl inline jest dozwolony (`style-src 'unsafe-inline'`), bo AG Grid wstrzykuje style motywu. |
 | Łańcuch dostaw npm | `package-lock.json` w repozytorium, `npm ci` przy budowaniu, `npm audit` w przeglądzie zależności, możliwie mało paczek. |
 | Wysłanie danych wrażliwych do modelu przez interfejs | Przycisk kandydata wysyła `id`, nie opis (ograniczenie 6). |
 | Podszycie się pod innego użytkownika | Bez uwierzytelniania pole `user_id` jest jawne, tak jak w CLI i HTTP dziś (001, sekcja 8.2, poza zakresem POC). |
 | Współbieżny zapis logu | Strona działa w procesie uvicorna z `POST /ask`. Nie uruchamiać jednocześnie `data-concierge chat` na tym samym pliku logu. |
 
-## 10. Zmiany w kodzie według modułów (szkic)
+## 10. Zmiany w kodzie według modułów
 
 | Moduł | 3A | 3B |
 |-------|----|----|
 | `frontend/` (nowy, TypeScript) | Projekt Vite + React: `ApiClient`, typy z OpenAPI, okno czatu, siatka, formatowanie kwot, testy Vitest | `ChartOptionsBuilder`, `ChartView`, przełącznik rodzaju |
 | `web` (nowy, Python) | Cienki kontroler serwujący zbudowane pliki z `frontend/dist` pod `/` | — |
 | `bootstrap` | `http_app()` montuje moduł `web` | — |
-| `api` | Bez zmian kontraktu. Ewentualnie nagłówek CSP | `ResponseChart` w `Response` |
+| `api` | Bez zmian kontraktu. Polecenie `data-concierge openapi` zapisuje schemat API bez bazy i modelu | `ResponseChart` w `Response` |
 | `agent` | — | `ChartRequest` w `AgentAnswer`, tytuł w `texts`, kontrola w `ResponseAssembler`, instrukcje o wyborze wykresu, wykres w szkicu dla fazy komentarza |
 | `audit` | — | Zdarzenie `response` zapisuje wykres razem z odpowiedzią, bez zmian w kodzie |
 | testy | Test endpointu `/` i plików statycznych | Testy kontroli specyfikacji, przypadki w zestawie ewaluacyjnym |
@@ -280,4 +284,14 @@ Zmiana schematu `present_result` zmienia raz stały początek rozmowy i cache pr
 - [U7] Apache ECharts 6.0 (sierpień 2025), 6.1.0 jako najnowsza stabilna według trackera wydań: https://releasealert.dev/github/apache/echarts. Wersję do przypięcia potwierdzić w planie.
 - Pydantic AI 2.55.0, sprawdzone w zainstalowanym pakiecie: `pydantic_ai.ui` ma `_web` (`create_web_app`, HTML z `cdn.jsdelivr.net/npm/@pydantic/ai-chat-ui`), `vercel_ai` i `ag_ui`.
 
-Nie zweryfikowane w tym rozpoznaniu: Chainlit, dokładne zachowanie tooltipów ECharts i rendererów komórek AG Grid z HTML w danych, `Intl.NumberFormat.format` z tekstem w przeglądarkach, aktualne wersje i licencje paczek npm stosu C (React, Vite, AG Grid React, TanStack Table, `openapi-typescript`, `echarts-for-react`). To pierwsze sprawdzenia w planie.
+Nie zweryfikowane: Chainlit i escapowanie w tooltipach ECharts (do sprawdzenia w 3B). Wersje i licencje paczek npm stosu C sprawdzone w rejestrze npm 2026-11-04 (plan 3A, KTD3).
+
+## 13. Uzupełnienia z implementacji kroku 3A (2026-11-04)
+
+- **Odświeżenie strony zaczyna nową rozmowę** zamiast zachowywać `session_id` w `sessionStorage` (sekcja 5): użytkownik nie widziałby wcześniejszych wiadomości, które model ma w historii.
+- **Prompt kandydata:** `Wybieram {id}.`, sprawdzony na żywo na przykładzie P2.
+- **CSP tylko na odpowiedziach frontendu**, ze `style-src 'unsafe-inline'` dla stylów motywu AG Grid (sekcja 9).
+- **Wersje:** TypeScript 5.9, bo `typescript-eslint` i `openapi-typescript` nie wspierają jeszcze 7.0; jsdom 29, bo 30 wymaga Node 24.15. Wszystkie wersje przypięte dokładnie w `frontend/package.json`.
+- **Rozmiar paczki:** AG Grid z `AllCommunityModule` daje ok. 1,4 MB JS (ok. 410 KB po gzip). Zawężenie modułów do sortowania, filtrów i modelu wierszy po stronie klienta to optymalizacja na później.
+- **Teksty AG Grid** (menu filtrów, podpowiedzi) są po angielsku. Polska lokalizacja siatki to osobna paczka i sprawa na później.
+- **`frontend/dist` i `node_modules` są poza gitem.** Po klonie interfejs trzeba zbudować (`npm ci`, `npm run build`); bez tego `/` podpowiada polecenia.
