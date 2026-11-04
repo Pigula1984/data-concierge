@@ -557,3 +557,10 @@ def test_openapi_describes_the_same_routes_as_the_served_app(tmp_path: Path) -> 
     served = CompositionRoot(StubAskService(ok())).http_app().openapi()
 
     assert json.loads(output.read_text(encoding="utf-8")) == served
+
+
+def test_openapi_creates_the_output_folder(tmp_path: Path) -> None:
+    output = tmp_path / "cache" / "openapi.json"
+
+    assert main(["openapi", "--output", str(output)]) == 0
+    assert output.is_file()

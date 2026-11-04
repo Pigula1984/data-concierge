@@ -410,6 +410,8 @@ class OpenApiExport:
 
     def write(self, path: Path) -> int:
         schema = json.dumps(self._app.openapi(), ensure_ascii=False, indent=2)
+        # The frontend writes it under node_modules/.cache, which a fresh `npm ci` lacks.
+        path.parent.mkdir(parents=True, exist_ok=True)
         # LF on every platform, so regenerating the types gives the same file.
         path.write_text(schema + "\n", encoding="utf-8", newline="\n")
         return 0
