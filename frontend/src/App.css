@@ -18,3 +18,29 @@ body {
   font-size: 1.4rem;
   margin: 0 0 12px;
 }
+
+.result-table {
+  margin: 12px 0;
+}
+
+.result-title {
+  font-size: 1rem;
+  margin: 0 0 6px;
+}
+
+.result-note {
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border-left: 3px solid #bf8700;
+  background: #fff8c5;
+  font-size: 0.9rem;
+}
+
+.result-empty {
+  color: #59636e;
+  font-style: italic;
+}
+
+.result-grid--scroll {
+  height: 420px;
+}
