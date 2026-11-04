@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # A query result above this is dropped and the model asked to aggregate (section 7.4).
     max_query_rows: PositiveInt = 100_000
 
+    # The built browser app (`npm run build` in frontend/), served under `/` by the HTTP app.
+    web_dist_path: Path = Path("frontend/dist")
+
 
 class ModelExposure(BaseModel, frozen=True):
     """What the model sees of the data in the process's mode (architecture 002, sections 4-5).
