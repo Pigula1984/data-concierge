@@ -14,7 +14,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "api:types": "uv run data-concierge openapi --output node_modules/.cache/openapi.json && openapi-typescript node_modules/.cache/openapi.json --output src/api/schema.d.ts",
+    "api:check": "npm run api:types && git diff --exit-code -- src/api/schema.d.ts"
   },
   "dependencies": {
     "ag-grid-community": "36.3.0",

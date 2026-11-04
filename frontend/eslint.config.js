@@ -5,7 +5,8 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  { ignores: ["dist/"] },
+  // The contract types are generated from the backend OpenAPI schema (npm run api:types).
+  { ignores: ["dist/", "src/api/schema.d.ts"] },
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   reactHooks.configs.flat.recommended,
