@@ -17,7 +17,7 @@ export class GridColumns {
     this.formatter = formatter;
   }
 
-  definitions(columns: readonly ResponseColumn[]): ColDef<GridRow>[] {
+  definitions(columns: readonly ResponseColumn[]): ColDef<GridRow, CellValue>[] {
     return columns.map((column, index) => this.definition(column, index));
   }
 
@@ -27,14 +27,14 @@ export class GridColumns {
     );
   }
 
-  private definition(column: ResponseColumn, index: number): ColDef<GridRow> {
+  private definition(column: ResponseColumn, index: number): ColDef<GridRow, CellValue> {
     const type = ColumnType.parse(column.type);
     const field = GridColumns.field(index);
     return {
       headerName: column.name,
       field,
-      valueFormatter: (params) => this.formatter.format(params.value as CellValue, type),
-      comparator: (left: CellValue, right: CellValue) => this.formatter.compare(left, right, type),
+      valueFormatter: (params) => this.formatter.format(params.value ?? null, type),
+      comparator: (left, right) => this.formatter.compare(left ?? null, right ?? null, type),
       filter: type.isNumber ? "agNumberColumnFilter" : "agTextColumnFilter",
       // Decimals arrive as text; the number filter compares numbers.
       filterValueGetter: type.isNumber

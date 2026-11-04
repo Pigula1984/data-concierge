@@ -294,4 +294,5 @@ Nie zweryfikowane: Chainlit i escapowanie w tooltipach ECharts (do sprawdzenia w
 - **Wersje:** TypeScript 5.9, bo `typescript-eslint` i `openapi-typescript` nie wspierają jeszcze 7.0; jsdom 29, bo 30 wymaga Node 24.15. Wszystkie wersje przypięte dokładnie w `frontend/package.json`.
 - **Rozmiar paczki:** AG Grid z `AllCommunityModule` daje ok. 1,4 MB JS (ok. 410 KB po gzip). Zawężenie modułów do sortowania, filtrów i modelu wierszy po stronie klienta to optymalizacja na później.
 - **Teksty AG Grid** (menu filtrów, podpowiedzi) są po angielsku. Polska lokalizacja siatki to osobna paczka i sprawa na później.
+- **Montowanie pod `/`:** przy zbudowanym interfejsie zapytanie złą metodą albo z końcowym ukośnikiem (np. `GET /ask`, `GET /health/`) dostaje 404 z plików statycznych zamiast 405 albo przekierowania FastAPI. Poprawne wywołania API działają bez zmian, więc przyjmujemy to w POC.
 - **`frontend/dist` i `node_modules` są poza gitem.** Po klonie interfejs trzeba zbudować (`npm ci`, `npm run build`); bez tego `/` podpowiada polecenia.

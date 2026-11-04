@@ -11,6 +11,15 @@ async function send(text: string) {
   await user.click(screen.getByRole("button", { name: "Wyślij" }));
 }
 
+/** The nearest ancestor matching the selector; a missing one fails the test with its name. */
+function enclosing(element: HTMLElement, selector: string): HTMLElement {
+  const found = element.closest(selector);
+  if (!(found instanceof HTMLElement)) {
+    throw new Error(`no ${selector} around the element`);
+  }
+  return found;
+}
+
 describe("ChatView", () => {
   it("sends the first prompt without a session and the next one with it", async () => {
     const client = new ScriptedClient(
@@ -83,9 +92,9 @@ describe("ChatView", () => {
 
     await send("Raport");
 
-    const article = (await screen.findByText("Brak zamówień.")).closest("article");
+    const article = enclosing(await screen.findByText("Brak zamówień."), "article");
     expect(article).toHaveClass("answer--no_data");
-    expect(within(article as HTMLElement).getByText("Brak danych")).toBeInTheDocument();
+    expect(within(article).getByText("Brak danych")).toBeInTheDocument();
   });
 
   it("shows HTML in a message as text", async () => {
@@ -175,16 +184,14 @@ describe("ChatView", () => {
     await send("Raport");
 
     const summary = await screen.findByText("Jak policzono");
-    const details = summary.closest("details");
+    const details = enclosing(summary, "details");
     expect(details).not.toHaveAttribute("open");
 
     await userEvent.click(summary);
 
     expect(details).toHaveAttribute("open");
-    expect(within(details as HTMLElement).getByText(/api\.SalesOrder_List/)).toBeVisible();
-    expect(
-      within(details as HTMLElement).getByText("SELECT month FROM r1 ORDER BY month"),
-    ).toBeVisible();
+    expect(within(details).getByText(/api\.SalesOrder_List/)).toBeVisible();
+    expect(within(details).getByText("SELECT month FROM r1 ORDER BY month")).toBeVisible();
   });
 
   it("offers a new conversation after an error and starts it without the session", async () => {
@@ -199,10 +206,8 @@ describe("ChatView", () => {
     await screen.findByText("Gotowe.");
     await send("Dalej");
 
-    const article = (await screen.findByText("Sesja s1 wygasła.")).closest("article");
-    await userEvent.click(
-      within(article as HTMLElement).getByRole("button", { name: "Nowa rozmowa" }),
-    );
+    const article = enclosing(await screen.findByText("Sesja s1 wygasła."), "article");
+    await userEvent.click(within(article).getByRole("button", { name: "Nowa rozmowa" }));
 
     expect(screen.queryByText("Gotowe.")).toBeNull();
     await send("Raport");
@@ -258,5 +263,59 @@ describe("ChatView", () => {
     await screen.findByText("Gotowe.");
 
     expect(client.requests[0]?.prompt).toBe("Raport\nza 2024");
+  });
+
+  it("keeps the candidates usable when choosing one fails, so the choice can be retried", async () => {
+    const question = answer({
+      status: "needs_clarification",
+      message: "Którego klienta?",
+      clarification: { question: "Którego?", candidates: [{ id: 12698, description: "Anna" }] },
+    });
+    const client = new ScriptedClient(
+      { kind: "response", response: question },
+      { kind: "failed", message: "Brak połączenia." },
+      { kind: "response", response: answer({ message: "Sprzedaż klienta." }) },
+    );
+    render(<ChatView client={client} userId={7} />);
+    await send("Sprzedaż Anny");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Anna" }));
+    await screen.findByText("Brak połączenia.");
+
+    const candidate = screen.getByRole("button", { name: "Anna" });
+    expect(candidate).toBeEnabled();
+    await userEvent.click(candidate);
+    await screen.findByText("Sprzedaż klienta.");
+    expect(client.requests.map((request) => request.prompt)).toEqual([
+      "Sprzedaż Anny",
+      "Wybieram 12698.",
+      "Wybieram 12698.",
+    ]);
+  });
+
+  it("does not start a new conversation while a turn runs", async () => {
+    const pending = new PendingReply();
+    const client = new ScriptedClient(
+      { kind: "response", response: answer({ status: "error", message: "Błąd tury." }) },
+      pending.promise,
+      { kind: "response", response: answer({ session_id: "s2", message: "Dalej." }) },
+    );
+    render(<ChatView client={client} userId={7} />);
+    await send("Raport");
+    const article = enclosing(await screen.findByText("Błąd tury."), "article");
+
+    await send("Jeszcze raz");
+    const newConversation = within(article).getByRole("button", { name: "Nowa rozmowa" });
+    expect(newConversation).toBeDisabled();
+    await act(async () => {
+      pending.resolve({ kind: "response", response: answer({ message: "Udało się." }) });
+      await pending.promise;
+    });
+
+    expect(screen.getByText("Błąd tury.")).toBeInTheDocument();
+    expect(screen.getByText("Udało się.")).toBeInTheDocument();
+    await send("Dalej");
+    await screen.findByText("Dalej.");
+    expect(client.requests[2]?.session_id).toBe("s1");
   });
 });

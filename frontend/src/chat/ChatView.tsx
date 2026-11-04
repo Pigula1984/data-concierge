@@ -8,7 +8,8 @@ const CANDIDATE_PROMPT = new CandidatePrompt();
 
 export function ChatView({ client, userId }: { client: TurnClient; userId: number }) {
   const { entries, pending, send, reset } = useConversation(client, userId);
-  const lastId = entries.at(-1)?.id;
+  // Only a newer answer locks the candidates; a failed or refused turn leaves them to retry.
+  const lastAnswerId = entries.findLast((entry) => entry.kind === "answer")?.id;
 
   return (
     <section className="chat">
@@ -37,7 +38,8 @@ export function ChatView({ client, userId }: { client: TurnClient; userId: numbe
                 <AnswerView
                   key={entry.id}
                   response={entry.response}
-                  canChoose={entry.id === lastId && !pending}
+                  canChoose={entry.id === lastAnswerId && !pending}
+                  pending={pending}
                   onChoose={(candidate) => {
                     void send(CANDIDATE_PROMPT.forCandidate(candidate));
                   }}

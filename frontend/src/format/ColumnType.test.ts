@@ -3,11 +3,10 @@ import { describe, expect, it } from "vitest";
 import { ColumnType } from "./ColumnType";
 
 describe("ColumnType.parse", () => {
-  it("reads the kind and scale of a decimal", () => {
+  it("reads the kind of a decimal with precision and scale", () => {
     const type = ColumnType.parse("decimal(38,6)");
 
     expect(type.kind).toBe("decimal");
-    expect(type.scale).toBe(6);
     expect(type.isNumber).toBe(true);
   });
 

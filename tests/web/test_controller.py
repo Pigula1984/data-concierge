@@ -92,7 +92,19 @@ def test_frontend_responses_carry_the_content_security_policy(dist: Path, path: 
     reply = client_for(dist).get(path)
 
     assert reply.headers["content-security-policy"] == CONTENT_SECURITY_POLICY
-    assert "script-src 'self'" in CONTENT_SECURITY_POLICY
+
+
+def test_the_policy_allows_only_own_scripts_and_inline_styles() -> None:
+    directives = dict(
+        part.strip().split(" ", 1) for part in CONTENT_SECURITY_POLICY.split(";") if part.strip()
+    )
+
+    assert directives["script-src"] == "'self'"
+    assert directives["object-src"] == "'none'"
+    assert directives["frame-ancestors"] == "'none'"
+    assert directives["base-uri"] == "'none'"
+    unsafe = {name for name, sources in directives.items() if "'unsafe-" in sources}
+    assert unsafe == {"style-src"}
 
 
 def test_the_build_hint_carries_the_content_security_policy(tmp_path: Path) -> None:

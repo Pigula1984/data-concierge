@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CellValue, ResponseTable } from "../api/ApiClient";
 import { ValueFormatter } from "../format/ValueFormatter";
-import { GridColumns } from "./GridColumns";
+import { GridColumns, type GridRow } from "./GridColumns";
 
 const TABLE: ResponseTable = {
   handle: "r2",
@@ -49,6 +49,17 @@ describe("GridColumns", () => {
     expect([decimal?.type, integer?.type]).toEqual(["rightAligned", "rightAligned"]);
     expect([text?.filter, date?.filter]).toEqual(["agTextColumnFilter", "agTextColumnFilter"]);
     expect(text?.type).toBeUndefined();
+  });
+
+  it("filters numeric columns by number, since decimals arrive as text", () => {
+    const [decimal, , text] = columns.definitions(TABLE.columns);
+    // The grid passes the row in `data`; the rest of the parameters are unused here.
+    const filterValue = (row: GridRow) =>
+      (decimal?.filterValueGetter as (params: { data: GridRow }) => unknown)({ data: row });
+
+    expect(filterValue({ c0: "1234.5000" })).toBe(1234.5);
+    expect(filterValue({ c0: null })).toBeNull();
+    expect(text?.filterValueGetter).toBeUndefined();
   });
 
   it("sorts a decimal column by value", () => {

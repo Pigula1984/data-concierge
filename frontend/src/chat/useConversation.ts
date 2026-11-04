@@ -61,10 +61,15 @@ export function useConversation(client: TurnClient, userId: number): Conversatio
     [client, userId, pending],
   );
 
+  // A turn that is still running would write its session back after the reset, so the new
+  // conversation would continue the old one; resetting waits until the turn ends.
   const reset = useCallback(() => {
+    if (pending) {
+      return;
+    }
     sessionId.current = null;
     setEntries([]);
-  }, []);
+  }, [pending]);
 
   return { entries, pending, send, reset };
 }

@@ -15,18 +15,26 @@ interface AnswerViewProps {
   response: AskResponse;
   /** Candidates can be chosen only on the latest answer, and not while a turn runs. */
   canChoose: boolean;
+  /** A turn is running: a new conversation would race with it. */
+  pending: boolean;
   onChoose: (candidate: Candidate) => void;
   onNewConversation: () => void;
 }
 
-export function AnswerView({ response, canChoose, onChoose, onNewConversation }: AnswerViewProps) {
+export function AnswerView({
+  response,
+  canChoose,
+  pending,
+  onChoose,
+  onNewConversation,
+}: AnswerViewProps) {
   const label = STATUS_LABELS[response.status];
   return (
     <article className={`answer answer--${response.status}`}>
       {label !== null && <p className="answer-status">{label}</p>}
       <p className="answer-message">{response.message}</p>
       {response.status === "error" && (
-        <button type="button" onClick={onNewConversation}>
+        <button type="button" disabled={pending} onClick={onNewConversation}>
           Nowa rozmowa
         </button>
       )}

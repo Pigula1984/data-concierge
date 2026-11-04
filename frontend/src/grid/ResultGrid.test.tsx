@@ -35,6 +35,17 @@ describe("ResultGrid", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
+  it("shows a column name with HTML in it as text, not as an element", async () => {
+    // Column names are aliases the model writes in its query.
+    const hostile = table([["Anna"]], { columns: [{ name: HOSTILE, type: "string" }] });
+    const { container } = render(<ResultGrid table={hostile} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(HOSTILE)).toBeInTheDocument();
+    });
+    expect(container.querySelector("img")).toBeNull();
+  });
+
   it("shows the title and the formatted values", async () => {
     render(<ResultGrid table={table([["Anna", "12345.5000"]])} />);
 

@@ -11,7 +11,7 @@ Zasady dla kodu interfejsu w przeglądarce. Duch jest ten sam co w [python-czyst
 
 - **Komponenty funkcyjne z jedną odpowiedzialnością.** Komponent pokazuje jedną rzecz (`AnswerView`, `ResultGrid`, `PromptForm`) i dostaje dane przez propsy. Komponenty funkcyjne z hookami to idiom Reacta; to nie jest odejście od obiektowości, bo logika nie żyje w komponentach.
 - **Logika bez UI w klasach.** Klient API, formatowanie wartości, budowanie kolumn siatki czy treści promptu to klasy z zależnościami w konstruktorze (`ApiClient` dostaje funkcję `fetch`). Testujemy je bez renderowania.
-- **Bez luźnych funkcji pomocniczych w modułach.** Zachowanie należy do klasy, która jest właścicielem pojęcia. Hooki Reacta (`useConversation`) i komponenty są wyjątkiem, bo ich kształt narzuca biblioteka.
+- **Bez luźnych funkcji pomocniczych w modułach.** Zachowanie należy do klasy, która jest właścicielem pojęcia. Hooki Reacta (`useConversation`) i komponenty są wyjątkiem, bo ich kształt narzuca biblioteka. Tak jak w Pythonie, wyjątkiem są też testy i ich pomocniki (pliki `*.test.ts(x)` i `chat/testing.ts`).
 - **Moduły według funkcji:** `api/`, `format/`, `grid/`, `chat/`. Testy leżą obok kodu jako `*.test.ts` albo `*.test.tsx`.
 
 ## 3. Typy
