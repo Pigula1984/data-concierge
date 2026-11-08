@@ -254,6 +254,27 @@ def test_candidates_are_the_handle_rows_described_by_the_other_columns(
     assert [step.handle for step in response.provenance] == ["r1", "r2", "r3"]
 
 
+def test_candidate_description_skips_text_already_named_earlier(
+    assembler: ResponseAssembler, deps: AgentDeps, call: Callable[[str, Mapping[str, object]], str]
+) -> None:
+    # Like a product name "HL Mountain Frame - Black, 38" followed by its color and size
+    # columns, and a size that is only part of a code such as "FR-M94S-42".
+    call("customer_list", {"city": "Berlin"})
+    deps.queries.run(
+        'SELECT "CustomerID", "AccountNumber" || \' - \' || "CountryRegion" AS label, '
+        '"CountryRegion", lower("AccountNumber") AS account, '
+        '\'X-\' || "CustomerID" AS number, CAST("CustomerID" AS VARCHAR) AS size, '
+        "1 AS order_count FROM r1 ORDER BY 1"
+    )
+
+    response = assembler.assemble(clarify("r2", "CustomerID"), "s1", "c1")
+
+    assert response.clarification is not None
+    assert response.clarification.candidates[0] == Candidate(
+        id=12698, description="AW00012698 - Germany, X-12698, 12698, 1"
+    )
+
+
 def test_text_id_column_gives_text_ids(
     assembler: ResponseAssembler, call: Callable[[str, Mapping[str, object]], str]
 ) -> None:
