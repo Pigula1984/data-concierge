@@ -49,10 +49,12 @@ class TurnStream:
         user_id: int,
         session_id: str | None,
     ) -> None:
+        response: Response | None = None
         try:
             response = await self._service.ask(prompt, user_id, session_id, queue.put_nowait)
         except Exception:
             logger.exception("streamed turn failed")
-            queue.put_nowait(None)
-        else:
+        finally:
+            # Also when the task is cancelled, so the stream never waits for an end that
+            # does not come.
             queue.put_nowait(response)

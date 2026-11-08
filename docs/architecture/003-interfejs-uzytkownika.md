@@ -272,7 +272,7 @@ Zmiana schematu `present_result` zmienia raz stały początek rozmowy i cache pr
 |---|---------|--------------|
 | D1 | Technologia interfejsu | **Zdecydowane: C**, React + TypeScript + Vite w `frontend/`, typy z OpenAPI, ECharts, zbudowane pliki serwowane przez FastAPI (sekcja 4.3). |
 | D2 | Czy model pyta o rodzaj wykresu przed narysowaniem | **Zdecydowane:** rysuje od razu z uzasadnieniem w `assumptions`, a użytkownik przełącza rodzaj w interfejsie bez modelu. |
-| D3 | Streaming teraz czy później | **Zdecydowane:** krok 3C z postępem tury, po 3B. Na start wskaźnik czasu. Format strumienia (własne SSE czy AG-UI/Vercel AI) do wyboru w planie 3C (sekcja 8). |
+| D3 | Streaming teraz czy później | **Zdecydowane:** krok 3C z postępem tury, po 3B. Na start wskaźnik czasu. Format strumienia: własne zdarzenia SSE (plan 3C, sekcje 8 i 16). |
 | D4 | Serwowanie | **Zdecydowane razem z D1:** zbudowane pliki serwowane przez tę samą aplikację i domenę co `POST /ask`, bez CDN. Przy pracy lokalnej serwer Vite z proxy. |
 | D5 | Siatka | **Zdecydowane:** AG Grid React (Community), zamknięty w komponencie `ResultGrid`. TanStack Table jako ewentualna wymiana później (sekcja 6). |
 

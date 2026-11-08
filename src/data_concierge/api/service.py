@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from time import perf_counter
 
@@ -27,6 +28,16 @@ SESSION_EXPIRED_MESSAGE = (
 PROMPT_TOO_LONG_MESSAGE = (
     "Prośba jest za długa: limit to {limit} znaków. Skróć ją i wyślij ponownie."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class TurnScope:
+    """What one turn carries through its steps: the caller, the audit and the progress, built
+    once in `AskService.ask`."""
+
+    context: RequestContext
+    audit: TurnAudit
+    progress: TurnProgress
 
 
 class AskService:
@@ -89,7 +100,7 @@ class AskService:
         else:
             session = self._sessions.get(session_id)
         audit = self._audit.turn(context, session_id)
-        progress = TurnProgress(listener, context.correlation_id)
+        scope = TurnScope(context, audit, TurnProgress(listener, context.correlation_id))
         today = self._today()
         audit.record(
             "request",
@@ -104,7 +115,7 @@ class AskService:
         if session is not None and session.owner_id != user_id:
             audit.record("session_rejected", {"owner_id": session.owner_id})
             session = None
-        response = await self._respond(prompt, today, session, session_id, context, audit, progress)
+        response = await self._respond(prompt, today, session, session_id, scope)
         audit.record(
             "response",
             {
@@ -129,9 +140,7 @@ class AskService:
         today: date,
         session: Session | None,
         session_id: str,
-        context: RequestContext,
-        audit: TurnAudit,
-        progress: TurnProgress,
+        scope: TurnScope,
     ) -> Response:
         if session is None:
             return Response(
@@ -139,50 +148,48 @@ class AskService:
                 session_id=session_id,
                 message=SESSION_EXPIRED_MESSAGE.format(session_id=session_id),
             )
+        correlation_id = scope.context.correlation_id
         try:
-            return await self._turn(session, prompt, today, context, audit, progress)
+            return await self._turn(session, prompt, today, scope)
         except ResultStoreError as exc:
-            logger.exception("result store failed (correlation id %s)", context.correlation_id)
-            audit.record("turn_failed", TurnAudit.failure(exc))
+            logger.exception("result store failed (correlation id %s)", correlation_id)
+            scope.audit.record("turn_failed", TurnAudit.failure(exc))
             self._sessions.delete(session.id)
         except Exception as exc:
-            logger.exception("ask failed (correlation id %s)", context.correlation_id)
-            audit.record("turn_failed", TurnAudit.failure(exc))
-        return ResponseAssembler.failure(session.id, context.correlation_id)
+            logger.exception("ask failed (correlation id %s)", correlation_id)
+            scope.audit.record("turn_failed", TurnAudit.failure(exc))
+        return ResponseAssembler.failure(session.id, correlation_id)
 
     async def _turn(
         self,
         session: Session,
         prompt: str,
         today: date,
-        context: RequestContext,
-        audit: TurnAudit,
-        progress: TurnProgress,
+        scope: TurnScope,
     ) -> Response:
         """The agent runs only after the guard allowed the prompt; a blocked turn leaves the
         history as it was."""
-        if not await self._allowed(prompt, context, audit, progress):
+        if not await self._allowed(prompt, scope):
             return ResponseAssembler.refusal(session.id)
         dated_prompt = self._with_date(prompt, today)
-        deps = session.deps(context, audit, progress)
+        deps = session.deps(scope.context, scope.audit, scope.progress)
         turn = await self._agent.run(dated_prompt, session.history, deps)
         if self._exposure.comment_phase and turn.answer.status == "ok":
-            progress.comment()
-            turn = await self._commented(turn, dated_prompt, session, context, audit)
-        response = session.assembler.assemble(turn.answer, session.id, context.correlation_id)
+            scope.progress.comment()
+            turn = await self._commented(turn, dated_prompt, session, scope)
+        correlation_id = scope.context.correlation_id
+        response = session.assembler.assemble(turn.answer, session.id, correlation_id)
         if INSTRUCTIONS_MARKER in response.model_dump_json():
-            audit.record("output_blocked", {"reason": "marker"})
+            scope.audit.record("output_blocked", {"reason": "marker"})
             return ResponseAssembler.refusal(session.id)
         self._sessions.save(session.with_history(turn.messages))
         return response
 
-    async def _allowed(
-        self, prompt: str, context: RequestContext, audit: TurnAudit, progress: TurnProgress
-    ) -> bool:
-        progress.guard()
+    async def _allowed(self, prompt: str, scope: TurnScope) -> bool:
+        scope.progress.guard()
         started = perf_counter()
         result = await self._guard.check(prompt)
-        audit.record(
+        scope.audit.record(
             "guard",
             {
                 **result.model_dump(exclude_none=True),
@@ -193,7 +200,7 @@ class AskService:
             # The user gets the same refusal as for an attack, so only the log tells them apart.
             logger.warning(
                 "the guard gave no verdict (correlation id %s): %s",
-                context.correlation_id,
+                scope.context.correlation_id,
                 result.reason,
             )
         return result.verdict == "allowed"
@@ -203,22 +210,21 @@ class AskService:
         turn: AgentTurn,
         prompt: str,
         session: Session,
-        context: RequestContext,
-        audit: TurnAudit,
+        scope: TurnScope,
     ) -> AgentTurn:
         """The turn with the comment of the comment phase in the answer; when the phase
         fails, the turn keeps its draft."""
         try:
-            comment = await self._comments.write(prompt, turn.answer, session.results, audit)
+            comment = await self._comments.write(prompt, turn.answer, session.results, scope.audit)
         except CommentError as exc:
             logger.warning(
                 "the comment phase failed (correlation id %s), the draft is used: %s",
-                context.correlation_id,
+                scope.context.correlation_id,
                 exc.detail,
             )
-            audit.record("comment", {"failed": exc.detail})
+            scope.audit.record("comment", {"failed": exc.detail})
             return turn
-        audit.record("comment", {"comment": comment})
+        scope.audit.record("comment", {"comment": comment})
         return turn.with_message(comment)
 
     @staticmethod

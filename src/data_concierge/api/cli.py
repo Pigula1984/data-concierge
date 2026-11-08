@@ -97,7 +97,7 @@ class CommandLine:
         except PromptTooLongError as exc:
             self._stderr.write(f"{exc}\n")
             return 1
-        JsonPrinter(self._stdout).answer(prompt, response)
+        JsonPrinter(self._stdout).answer(response)
         return 1 if response.status == "error" else 0
 
     async def chat(self, user_id: int, printer: ResponsePrinter) -> int:
@@ -115,7 +115,7 @@ class CommandLine:
                     except PromptTooLongError as exc:
                         self._stderr.write(f"{exc}\n")
                     else:
-                        printer.answer(prompt, response)
+                        printer.answer(response)
                         if response.session_id not in session_ids:
                             session_ids.append(response.session_id)
                         # A dropped session cannot be continued, so the next line starts a new one.
@@ -145,7 +145,7 @@ class ResponsePrinter(Protocol):
         """A step of the turn, as it begins (architecture 003, section 8)."""
         ...
 
-    def answer(self, prompt: str, response: Response) -> None: ...
+    def answer(self, response: Response) -> None: ...
 
     def close(self, session_ids: Sequence[str]) -> None:
         """Called at the end of standard input with every session of the conversation."""
@@ -171,7 +171,7 @@ class JsonPrinter(ResponsePrinter):
         """The JSON output stays one document per turn."""
 
     @override
-    def answer(self, prompt: str, response: Response) -> None:
+    def answer(self, response: Response) -> None:
         self._stdout.write(response.model_dump_json(indent=2) + "\n")
         self._stdout.flush()
 
@@ -212,7 +212,7 @@ class ConversationPrinter(ResponsePrinter):
         self._write([self.STEP_INDENT + event.text])
 
     @override
-    def answer(self, prompt: str, response: Response) -> None:
+    def answer(self, response: Response) -> None:
         lines = ["", response.message]
         for table in response.tables:
             lines += ["", *self._table(table)]

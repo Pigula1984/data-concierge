@@ -109,6 +109,29 @@ describe("ApiClient.ask", () => {
     expect(result).toEqual({ kind: "response", response: ANSWER });
   });
 
+  it("decodes a Polish step split inside a multi-byte character", async () => {
+    const step: TurnStep = { step: "procedure", text: "Pobieram zamówienia…" };
+    const bytes = new TextEncoder().encode(events(step, ANSWER).join(""));
+    const text = new TextDecoder().decode(bytes);
+    // Cut inside the two bytes of "ó" and inside the three bytes of "…".
+    const insideO = new TextEncoder().encode(text.slice(0, text.indexOf("ó"))).length + 1;
+    const insideEllipsis = new TextEncoder().encode(text.slice(0, text.indexOf("…"))).length + 2;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, insideO));
+        controller.enqueue(bytes.slice(insideO, insideEllipsis));
+        controller.enqueue(bytes.slice(insideEllipsis));
+        controller.close();
+      },
+    });
+    const { client } = clientReplying(new Response(body, { status: 200 }));
+    const steps: TurnStep[] = [];
+
+    await client.ask({ prompt: "Raport", user_id: 7, session_id: null }, (s) => steps.push(s));
+
+    expect(steps).toEqual([step]);
+  });
+
   it("returns a failure when the stream ends without a response", async () => {
     const { client } = clientReplying(streamReply(events(GUARD)));
 

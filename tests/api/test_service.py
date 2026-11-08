@@ -1057,6 +1057,21 @@ async def test_a_failed_query_is_followed_by_an_ordinary_round(
     ]
 
 
+async def test_describing_a_handle_again_is_a_step(
+    ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
+) -> None:
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("describe_result", {"handle": "r1"}),
+        present(tables=[{"handle": "r1", "title": "Zamówienia 2024"}]),
+    )
+    events: list[ProgressEvent] = []
+
+    await ask_service(model).ask("Raport", user_id=7, listener=events.append)
+
+    assert ("describe", "Sprawdzam wynik…") in steps(events)
+
+
 async def test_procedures_called_together_are_each_a_step(
     ask_service: Callable[..., AskService], scripted: Callable[..., FunctionModel]
 ) -> None:

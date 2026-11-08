@@ -77,7 +77,7 @@ def test_the_backend_steps_have_fixed_texts(
 
 def test_a_failing_listener_does_not_fail_the_turn(caplog: pytest.LogCaptureFixture) -> None:
     def broken(event: ProgressEvent) -> None:
-        raise RuntimeError("closed")
+        raise OSError("closed")
 
     with caplog.at_level(logging.WARNING, logger="data_concierge"):
         TurnProgress(broken, "c1").guard()
@@ -85,9 +85,12 @@ def test_a_failing_listener_does_not_fail_the_turn(caplog: pytest.LogCaptureFixt
     assert "progress step guard not reported (correlation id c1): closed" in caplog.text
 
 
-def test_silent_progress_accepts_every_step() -> None:
+def test_silent_progress_accepts_every_step(caplog: pytest.LogCaptureFixture) -> None:
     progress = TurnProgress.silent()
 
-    progress.guard()
-    progress.model_round()
-    progress.procedure("Pobieram dane (api.X)…")
+    with caplog.at_level(logging.WARNING, logger="data_concierge"):
+        progress.guard()
+        progress.model_round()
+        progress.procedure("Pobieram dane (api.X)…")
+
+    assert caplog.records == []

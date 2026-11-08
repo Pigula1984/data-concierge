@@ -19,7 +19,8 @@ export function TurnProgressView({ steps }: { steps: readonly string[] }) {
   }, []);
 
   return (
-    <div className="turn-progress" role="status">
+    // Not atomic: a screen reader reads each new step and second, not the whole list again.
+    <div className="turn-progress" role="status" aria-atomic="false">
       {steps.length > 0 && (
         <ol className="turn-progress__steps">
           {steps.map((text, index) => (

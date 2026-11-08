@@ -27,8 +27,8 @@ type ProgressListener = Callable[[ProgressEvent], None]
 
 
 class TurnProgress:
-    """Created by AskService for each turn, next to its TurnAudit. Reporting never raises: a
-    listener that fails must not fail the turn it describes."""
+    """Created by AskService for each turn, next to its TurnAudit. A listener that cannot write
+    (a closed terminal) must not fail the turn it describes, so that error is only logged."""
 
     GUARD = "Sprawdzam prośbę…"
     FIRST_ROUND = "Analizuję prośbę…"
@@ -84,8 +84,8 @@ class TurnProgress:
             return
         try:
             self._listener(ProgressEvent(step=step, text=text))
-        # A listener is any callable (a stream's queue, a terminal), so nothing narrower holds.
-        except Exception as exc:  # noqa: BLE001
+        # A closed terminal or a broken pipe, like the audit log's own failures.
+        except (OSError, ValueError) as exc:
             logger.warning(
                 "progress step %s not reported (correlation id %s): %s",
                 step,

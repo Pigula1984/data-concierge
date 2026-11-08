@@ -1,6 +1,7 @@
 """TurnStream over a real AskService: the steps and the response of a turn, and a turn that
 outlives its client."""
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -10,7 +11,7 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 
-from data_concierge.agent.progress import ProgressEvent
+from data_concierge.agent.progress import ProgressEvent, ProgressListener
 from data_concierge.api.schemas import Response
 from data_concierge.api.service import AskService
 from data_concierge.api.stream import StreamItem, TurnStream
@@ -119,3 +120,32 @@ async def test_an_unknown_session_gets_only_the_error_response(
 
     assert isinstance(item, Response)
     assert item.status == "error"
+
+
+class FailingAskService(AskService):
+    """A turn that fails before it can answer, e.g. when a new session's store cannot open."""
+
+    def __init__(self) -> None:
+        pass
+
+    async def ask(
+        self,
+        prompt: str,
+        user_id: int,
+        session_id: str | None = None,
+        listener: ProgressListener | None = None,
+    ) -> Response:
+        raise RuntimeError("store unavailable")
+
+
+async def test_a_failed_turn_ends_the_stream_without_a_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stream = TurnStream(FailingAskService())
+
+    with anyio.fail_after(5), caplog.at_level(logging.ERROR, logger="data_concierge"):
+        items = await collect(stream, "Raport")
+    await finished(stream)
+
+    assert items == []
+    assert "streamed turn failed" in caplog.text

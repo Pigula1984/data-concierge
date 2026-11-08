@@ -65,7 +65,9 @@ async def ask_stream(
     stream: Annotated[TurnStream, Depends(turn_stream)],
 ) -> AsyncIterator[StreamItem]:
     """Server-sent events: each step of the turn as it begins (`step`, `text`), then the same
-    response as `POST /ask` (architecture 003, section 8)."""
+    response as `POST /ask` (architecture 003, section 8). When the turn fails unexpectedly,
+    where `POST /ask` answers 500, the stream ends without a response; a client treats that as
+    a failed turn."""
     async for item in stream.events(body.prompt, body.user_id, body.session_id):
         yield item
 
