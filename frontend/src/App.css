@@ -200,9 +200,22 @@ body {
   white-space: pre-wrap;
 }
 
-.elapsed {
+.turn-progress {
   margin: 8px 0 0;
   color: #59636e;
+}
+
+.turn-progress__steps {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.turn-progress__steps li[aria-current="step"] {
+  color: #1f2328;
+}
+
+.elapsed {
+  margin: 4px 0 0;
 }
 
 .prompt-form {

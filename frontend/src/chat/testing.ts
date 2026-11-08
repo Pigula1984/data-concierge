@@ -1,4 +1,4 @@
-import type { AskRequest, AskResponse, TurnResult } from "../api/ApiClient";
+import type { AskRequest, AskResponse, TurnResult, TurnStep } from "../api/ApiClient";
 import type { TurnClient } from "./useConversation";
 
 export function answer(overrides: Partial<AskResponse> = {}): AskResponse {
@@ -17,14 +17,17 @@ export function answer(overrides: Partial<AskResponse> = {}): AskResponse {
 /** A client that records each request and replies with the next scripted result. */
 export class ScriptedClient implements TurnClient {
   readonly requests: AskRequest[] = [];
+  /** The step listener of the last request, to report steps while its reply is pending. */
+  onStep: (step: TurnStep) => void = () => undefined;
   private readonly replies: Promise<TurnResult>[];
 
   constructor(...replies: (TurnResult | Promise<TurnResult>)[]) {
     this.replies = replies.map((reply) => Promise.resolve(reply));
   }
 
-  ask(request: AskRequest): Promise<TurnResult> {
+  ask(request: AskRequest, onStep: (step: TurnStep) => void): Promise<TurnResult> {
     this.requests.push(request);
+    this.onStep = onStep;
     return this.replies.shift() ?? Promise.reject(new Error("no scripted reply left"));
   }
 }

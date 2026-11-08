@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiClient, FAILURE_MESSAGE, type AskResponse } from "./ApiClient";
+import { ApiClient, FAILURE_MESSAGE, type AskResponse, type TurnStep } from "./ApiClient";
 
 const ANSWER: AskResponse = {
   status: "ok",
@@ -27,6 +27,31 @@ function jsonReply(status: number, body: unknown): Response {
   });
 }
 
+const GUARD: TurnStep = { step: "guard", text: "Sprawdzam prośbę…" };
+const ROUND: TurnStep = { step: "model", text: "Analizuję prośbę…" };
+
+/** A stream body that sends the given chunks of text, then fails when `failure` is given. */
+function streamReply(chunks: string[], failure?: Error): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      if (failure) {
+        controller.error(failure);
+      } else {
+        controller.close();
+      }
+    },
+  });
+  return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+
+function events(...items: unknown[]): string[] {
+  return items.map((item) => `data: ${JSON.stringify(item)}\n\n`);
+}
+
 function clientReplying(reply: Response | Error) {
   const fetchFn = vi.fn<typeof fetch>(() =>
     reply instanceof Error ? Promise.reject(reply) : Promise.resolve(reply),
@@ -35,13 +60,13 @@ function clientReplying(reply: Response | Error) {
 }
 
 describe("ApiClient.ask", () => {
-  it("posts the prompt, user and missing session as JSON to /ask", async () => {
-    const { client, fetchFn } = clientReplying(jsonReply(200, ANSWER));
+  it("posts the prompt, user and missing session as JSON to /ask/stream", async () => {
+    const { client, fetchFn } = clientReplying(streamReply(events(ANSWER)));
 
     await client.ask({ prompt: "Raport", user_id: 7, session_id: null });
 
     const [url, init] = fetchFn.mock.calls[0] ?? [];
-    expect(url).toBe("/ask");
+    expect(url).toBe("/ask/stream");
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).get("Content-Type")).toBe("application/json");
     expect(sentBody(init)).toEqual({
@@ -52,7 +77,7 @@ describe("ApiClient.ask", () => {
   });
 
   it("sends the session id it is given", async () => {
-    const { client, fetchFn } = clientReplying(jsonReply(200, ANSWER));
+    const { client, fetchFn } = clientReplying(streamReply(events(ANSWER)));
 
     await client.ask({ prompt: "Dalej", user_id: 7, session_id: "s1" });
 
@@ -62,11 +87,42 @@ describe("ApiClient.ask", () => {
 
   it("returns a response with status error as a response, not a failure", async () => {
     const error = { ...ANSWER, status: "error", message: "Sesja s1 wygasła." };
-    const { client } = clientReplying(jsonReply(200, error));
+    const { client } = clientReplying(streamReply(events(error)));
 
     const result = await client.ask({ prompt: "Dalej", user_id: 7, session_id: "s1" });
 
     expect(result).toEqual({ kind: "response", response: error });
+  });
+
+  it("passes each step to the listener as it arrives, then returns the response", async () => {
+    const [guard = "", round = "", answer = ""] = events(GUARD, ROUND, ANSWER);
+    // The stream splits an event in the middle and sends a keepalive comment between steps.
+    const chunks = [guard.slice(0, 9), guard.slice(9) + ": ping\n\n", round + answer];
+    const { client } = clientReplying(streamReply(chunks));
+    const steps: TurnStep[] = [];
+
+    const result = await client.ask({ prompt: "Raport", user_id: 7, session_id: null }, (step) =>
+      steps.push(step),
+    );
+
+    expect(steps).toEqual([GUARD, ROUND]);
+    expect(result).toEqual({ kind: "response", response: ANSWER });
+  });
+
+  it("returns a failure when the stream ends without a response", async () => {
+    const { client } = clientReplying(streamReply(events(GUARD)));
+
+    const result = await client.ask({ prompt: "Raport", user_id: 7, session_id: null });
+
+    expect(result).toEqual({ kind: "failed", message: FAILURE_MESSAGE });
+  });
+
+  it("returns a failure when the connection breaks while the turn runs", async () => {
+    const { client } = clientReplying(streamReply(events(GUARD), new TypeError("network")));
+
+    const result = await client.ask({ prompt: "Raport", user_id: 7, session_id: null });
+
+    expect(result).toEqual({ kind: "failed", message: FAILURE_MESSAGE });
   });
 
   it("returns a rejected prompt with the backend's reason on 422 with a text detail", async () => {

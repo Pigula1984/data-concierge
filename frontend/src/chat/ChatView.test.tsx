@@ -62,6 +62,51 @@ describe("ChatView", () => {
     expect(screen.getByRole("textbox", { name: "Twoja prośba" })).toBeEnabled();
   });
 
+  it("shows the steps of the running turn and drops them with the answer", async () => {
+    const pending = new PendingReply();
+    const client = new ScriptedClient(pending.promise);
+    render(<ChatView client={client} userId={7} />);
+    await send("Raport");
+
+    const orders = "Pobieram zamówienia sprzedaży (api.SalesOrder_List)…";
+    act(() => {
+      client.onStep({ step: "guard", text: "Sprawdzam prośbę…" });
+      // Procedures called together report the same step once each.
+      client.onStep({ step: "procedure", text: orders });
+      client.onStep({ step: "procedure", text: orders });
+    });
+
+    const steps = within(screen.getByRole("status")).getAllByRole("listitem");
+    expect(steps.map((step) => step.textContent)).toEqual(["Sprawdzam prośbę…", orders]);
+    expect(steps[1]).toHaveAttribute("aria-current", "step");
+
+    await act(async () => {
+      pending.resolve({ kind: "response", response: answer() });
+      await pending.promise;
+    });
+
+    expect(screen.queryByText(orders)).toBeNull();
+  });
+
+  it("starts the next turn without the steps of the previous one", async () => {
+    const first = new PendingReply();
+    const second = new PendingReply();
+    const client = new ScriptedClient(first.promise, second.promise);
+    render(<ChatView client={client} userId={7} />);
+    await send("Raport");
+    act(() => {
+      client.onStep({ step: "guard", text: "Sprawdzam prośbę…" });
+    });
+    await act(async () => {
+      first.resolve({ kind: "response", response: answer({ message: "Pierwsza." }) });
+      await first.promise;
+    });
+
+    await send("Dalej");
+
+    expect(within(screen.getByRole("status")).queryAllByRole("listitem")).toEqual([]);
+  });
+
   it("shows the message, the assumptions and the tables of an answer", async () => {
     const reply = answer({
       message: "Sprzedaż netto: 1 234,50.",
