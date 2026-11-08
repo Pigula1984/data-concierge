@@ -52,6 +52,8 @@ Przy starcie usługa sprawdza katalog `catalog/agent-procedures.yaml` z metadany
 
 ## Uruchomienie
 
+Krótki scenariusz krok po kroku (start i zatrzymanie serwera z interfejsem w przeglądarce): [`docs/uruchomienie.md`](docs/uruchomienie.md).
+
 ### Wiersz poleceń
 
 Jedno pytanie:
