@@ -69,6 +69,8 @@ export interface components {
              */
             description: string;
         };
+        /** @enum {string} */
+        ChartKind: "line" | "bar" | "stacked_bar" | "pie" | "scatter";
         /** Clarification */
         Clarification: {
             /**
@@ -161,11 +163,29 @@ export interface components {
              */
             assumptions: string[];
             clarification?: components["schemas"]["Clarification"] | null;
+            chart?: components["schemas"]["ResponseChart"] | null;
             /**
              * Provenance
              * @default []
              */
             provenance: components["schemas"]["ProvenanceStep"][];
+        };
+        /**
+         * ResponseChart
+         * @description A chart of one returned table: the page draws it from the rows of that table, so the
+         *     data is not sent twice (architecture 003, section 7.2).
+         */
+        ResponseChart: {
+            handle: components["schemas"]["Handle"];
+            kind: components["schemas"]["ChartKind"];
+            /** X */
+            x: string;
+            /** Y */
+            y: string[];
+            /** Series */
+            series?: string | null;
+            /** Title */
+            title: string;
         };
         /** ResponseColumn */
         ResponseColumn: {
