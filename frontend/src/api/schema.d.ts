@@ -21,6 +21,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ask/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask Stream
+         * @description Server-sent events: each step of the turn as it begins (`step`, `text`), then the same
+         *     response as `POST /ask` (architecture 003, section 8).
+         */
+        post: operations["ask_stream_ask_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -121,6 +142,17 @@ export interface components {
             /** Truncated */
             truncated: boolean;
         };
+        /**
+         * ProgressEvent
+         * @description One step of a turn, sent as it begins.
+         */
+        ProgressEvent: {
+            step: components["schemas"]["ProgressStep"];
+            /** Text */
+            text: string;
+        };
+        /** @enum {string} */
+        ProgressStep: "guard" | "model" | "procedure" | "query" | "describe" | "retry" | "comment";
         ProvenanceStep: components["schemas"]["ProcedureStep"] | components["schemas"]["QueryStep"];
         /**
          * QueryStep
@@ -210,6 +242,7 @@ export interface components {
             truncated: boolean;
         };
         Rows: components["schemas"]["JsonScalar"][][];
+        StreamItem: components["schemas"]["ProgressEvent"] | components["schemas"]["Response"];
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -252,6 +285,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Response"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_stream_ask_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
                 };
             };
             /** @description Validation Error */

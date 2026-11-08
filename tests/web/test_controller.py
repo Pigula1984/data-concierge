@@ -91,7 +91,7 @@ def test_without_a_build_the_root_says_how_to_build_it(tmp_path: Path) -> None:
 def test_the_build_hint_is_not_part_of_the_api_schema(tmp_path: Path) -> None:
     schema = client_for(tmp_path / "missing").get("/openapi.json").json()
 
-    assert set(schema["paths"]) == {"/ask", "/health"}
+    assert set(schema["paths"]) == {"/ask", "/ask/stream", "/health"}
 
 
 @pytest.mark.parametrize("path", ["/", "/assets/app.js"])

@@ -600,8 +600,10 @@ def test_openapi_writes_the_api_contract_without_settings(
 
     schema = json.loads(output.read_text(encoding="utf-8"))
     assert code == 0
-    assert set(schema["paths"]) == {"/ask", "/health"}
-    assert {"Response", "ResponseTable", "AskRequest"} <= set(schema["components"]["schemas"])
+    assert set(schema["paths"]) == {"/ask", "/ask/stream", "/health"}
+    assert {"Response", "ResponseTable", "AskRequest", "ProgressEvent"} <= set(
+        schema["components"]["schemas"]
+    )
     assert b"\r\n" not in output.read_bytes()
 
 
