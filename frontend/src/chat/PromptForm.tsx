@@ -5,7 +5,10 @@ interface PromptFormProps {
   onSend: (prompt: string) => Promise<boolean>;
 }
 
-/** Enter sends, Shift+Enter starts a new line; the text stays when the turn did not go through. */
+/**
+ * Enter sends, Shift+Enter starts a new line. The field empties as the prompt moves into the
+ * conversation, and gets the text back when the turn did not go through.
+ */
 export function PromptForm({ disabled, onSend }: PromptFormProps) {
   const [text, setText] = useState("");
 
@@ -13,8 +16,10 @@ export function PromptForm({ disabled, onSend }: PromptFormProps) {
     if (disabled || text.trim() === "") {
       return;
     }
-    if (await onSend(text)) {
-      setText("");
+    const sent = text;
+    setText("");
+    if (!(await onSend(sent))) {
+      setText(sent);
     }
   }
 

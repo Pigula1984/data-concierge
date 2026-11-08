@@ -60,7 +60,9 @@ describe("ResultGrid", () => {
   it("says how many rows were shown when the response cut the table", () => {
     render(<ResultGrid table={table(rowsOf(3), { row_count: 14244, truncated: true })} />);
 
-    expect(screen.getByRole("note")).toHaveTextContent("Pokazano 3 z 14244 wierszy");
+    expect(screen.getByRole("note").textContent).toBe(
+      "Pokazano 3 z 14 244 wierszy (limit odpowiedzi).",
+    );
   });
 
   it("says the result is incomplete when a source procedure was cut", () => {

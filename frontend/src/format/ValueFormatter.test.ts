@@ -29,6 +29,17 @@ describe("ValueFormatter.format", () => {
   });
 });
 
+describe("ValueFormatter.count", () => {
+  it.each([
+    [3, "3"],
+    [1755, "1755"],
+    [10000, `10${NBSP}000`],
+    [14244, `14${NBSP}244`],
+  ])("groups a row count %j in a sentence as %j", (value, expected) => {
+    expect(formatter.count(value)).toBe(expected);
+  });
+});
+
 describe("ValueFormatter.compare", () => {
   it("sorts decimals by value, not as text", () => {
     const type = ColumnType.parse("decimal(19,2)");

@@ -19,6 +19,7 @@
     "api:check": "npm run api:types && git diff --exit-code -- src/api/schema.d.ts"
   },
   "dependencies": {
+    "@ag-grid-community/locale": "36.3.0",
     "ag-grid-community": "36.3.0",
     "ag-grid-react": "36.3.0",
     "react": "19.3.1",
