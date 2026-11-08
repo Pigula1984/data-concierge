@@ -38,6 +38,7 @@ from data_concierge.query.policy import QueryPolicy
 from data_concierge.query.service import QueryService
 from data_concierge.results.repository import DuckDBResultStore
 from data_concierge.results.service import ResultService
+from data_concierge.web.controller import WebFrontend
 
 
 class DuckDBSessionFactory:
@@ -71,10 +72,19 @@ class CompositionRoot:
     def __init__(self, ask_service: AskService) -> None:
         self.ask_service = ask_service
 
-    def http_app(self) -> FastAPI:
+    @staticmethod
+    def api_app() -> FastAPI:
+        """The HTTP API routes without services; its OpenAPI schema is the contract the
+        frontend's types are generated from."""
         app = FastAPI(title="Data Concierge")
-        app.state.ask_service = self.ask_service
         app.include_router(router)
+        return app
+
+    def http_app(self, frontend: WebFrontend | None = None) -> FastAPI:
+        app = self.api_app()
+        app.state.ask_service = self.ask_service
+        if frontend is not None:
+            frontend.mount(app)
         return app
 
     @classmethod
@@ -163,4 +173,5 @@ class CompositionRoot:
 # module-level: `uvicorn data_concierge.bootstrap:create_app --factory` needs a module-level
 # callable without arguments.
 def create_app() -> FastAPI:
-    return CompositionRoot.from_settings(Settings()).http_app()
+    settings = Settings()
+    return CompositionRoot.from_settings(settings).http_app(WebFrontend(settings.web_dist_path))

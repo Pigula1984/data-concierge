@@ -1,6 +1,6 @@
 # Data Concierge: opis architektury backendu (wersja 3, happy-flow tylko do odczytu)
 
-Status: v1 wdrożona według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.10, data: 2026-11-01. Etap 2 (dostęp modelu do danych, wdrożony) opisuje [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md).
+Status: v1 wdrożona według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.11, data: 2026-11-04. Etap 2 (dostęp modelu do danych, wdrożony) opisuje [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md), a etap 3 (interfejs w przeglądarce) [`003-interfejs-uzytkownika.md`](003-interfejs-uzytkownika.md).
 Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (sekcja 14), research bibliotek z 2026-10-11, prototyp parsera DuckDB z 2026-10-12, sprawdzenie danych i metadanych w lokalnej bazie AdventureWorks2025.
 
 > **Historia zmian.**
@@ -22,10 +22,11 @@ Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (
 > **v3.9 (2026-10-26):** log audytowy tury w pliku JSONL według planu [`2026-10-26-1708-feat-log-audytowy-plan.md`](../plans/2026-10-26-1708-feat-log-audytowy-plan.md): prompt, odpowiedzi modelu z myśleniem i wywołaniami narzędzi, wykonanie procedur i zapytań, to, co backend odesłał modelowi, faza komentarza i pełna odpowiedź, związane identyfikatorem korelacji. Odczyt poleceniem `data-concierge audit`. Myślenie modelu wraca jako streszczenie (`thinking.display: summarized`), bo bez tego Haiku 5.5 zwraca puste bloki. Zmienione sekcje: 4, 7.6, 8.1 (nowa), 11.3, 12.
 > **v3.9 (uzupełnienie, 2026-10-27):** `data-concierge chat` wypisuje rozmowę jako tekst dla użytkownika (komentarz, tabele, założenia, pytanie z kandydatami), bez `session_id` i proweniencji w każdej turze. Na końcu podaje polecenie `audit` dla sesji rozmowy. Odpowiedź JSON każdej tury daje `chat --diagnostic`, a `ask` wypisuje JSON jak dotąd (sekcja 4).
 > **v3.10 (2026-11-01):** ochrona przed prompt injection na poziomie POC według planu [`2026-11-01-1541-feat-ochrona-przed-prompt-injection-plan.md`](../plans/2026-11-01-1541-feat-ochrona-przed-prompt-injection-plan.md). Backend jest granicą: role i odmowa procedur, właściciel sesji, limit długości promptu, tekst osób trzecich ukryty przed modelem, szkic zamiast komentarza w historii, kontrola adresów URL i znacznika instrukcji. Strażnik Haiku przed agentem jest dodatkową warstwą. Zmienione sekcje: 1, 4, 8.1, 8.2 (nowa), 9, 12, 13.
+> **v3.11 (2026-11-04):** interfejs w przeglądarce, krok 3A, według planu [`2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md`](../plans/2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md) i dokumentu [`003-interfejs-uzytkownika.md`](003-interfejs-uzytkownika.md): aplikacja React w `frontend/` na `POST /ask` bez zmian kontraktu, serwowana przez tę samą aplikację FastAPI pod `/` (moduł `web`), oraz polecenie `data-concierge openapi` dla typów frontendu. Zmienione sekcje: 1, 4, 12.
 
 ## 1. Cel i zakres
 
-Backend asystenta AI: przyjmuje prompt użytkownika i zwraca dane. Baza udostępnia dane wyłącznie przez procedury, które zwracają **surowe wiersze**. Łączenie zbiorów, dodatkowe filtry, grupowanie, sumy i pivoty liczy backend w DuckDB, a nie kolejne procedury. Nie przygotowujemy z góry procedur na wszystkie kombinacje pytań: agent sam decyduje, jakich danych potrzebuje, i zapisuje obliczenie jako zapytanie SQL nad pobranymi wynikami. Frontend jest poza zakresem tego ćwiczenia, a interfejsem jest funkcja lub endpoint `prompt → JSON`.
+Backend asystenta AI: przyjmuje prompt użytkownika i zwraca dane. Baza udostępnia dane wyłącznie przez procedury, które zwracają **surowe wiersze**. Łączenie zbiorów, dodatkowe filtry, grupowanie, sumy i pivoty liczy backend w DuckDB, a nie kolejne procedury. Nie przygotowujemy z góry procedur na wszystkie kombinacje pytań: agent sam decyduje, jakich danych potrzebuje, i zapisuje obliczenie jako zapytanie SQL nad pobranymi wynikami. Interfejsem backendu jest funkcja lub endpoint `prompt → JSON`. Interfejs w przeglądarce (etap 3) korzysta z tego samego endpointu i opisuje go [`003-interfejs-uzytkownika.md`](003-interfejs-uzytkownika.md).
 
 Szczęśliwa ścieżka v1:
 
@@ -45,7 +46,7 @@ Przykładowe prośby:
 | P4 | „Pokaż strukturę materiałową produktu HL Mountain Frame” | inna dziedzina, istniejąca procedura `uspGetBillOfMaterials`, dowód, że projekt nie jest „pod sprzedaż” |
 | P5 | „Sprzedaż po miesiącach w 2024 dla klientów z Berlina” | dwie procedury i `JOIN` ich wyników: lista klientów z miasta jako filtr zamówień, bez nowej procedury i bez parametru miasta w `api.SalesOrder_List` |
 
-Poza zakresem v1: frontend, zapisy, procesy w tle, zatwierdzanie. Sekcja 12 pokazuje, jak v1 zostawia na nie miejsce. Ochronę przed prompt injection opisuje sekcja 8.2.
+Poza zakresem v1: frontend (od etapu 3 w dokumencie 003), zapisy, procesy w tle, zatwierdzanie. Sekcja 12 pokazuje, jak v1 zostawia na nie miejsce. Ochronę przed prompt injection opisuje sekcja 8.2.
 
 ## 2. Wymagania
 
@@ -76,7 +77,7 @@ Poza zakresem v1: frontend, zapisy, procesy w tle, zatwierdzanie. Sekcja 12 poka
 
 ```mermaid
 flowchart LR
-    C["Klient wywołujący<br/>(test, CLI, później UI)"]
+    C["Klient wywołujący<br/>(test, CLI, przeglądarka)"]
     API["Backend API<br/>ask(prompt, user) → JSON"]
     LOOP["Pętla agenta<br/>(Pydantic AI)"]
     LLM[("Model<br/>(na start Claude API)")]
@@ -102,7 +103,7 @@ flowchart LR
 
 | Komponent | Odpowiedzialność |
 |-----------|------------------|
-| **Backend API** | `ask(prompt, user, session_id?) → Response`. Buduje `RequestContext` (user_id, rola z konfiguracji, id korelacji). Trzyma sesje w pamięci procesu za interfejsem `SessionRepository`: sesja ma właściciela, historię wiadomości Pydantic AI i własne połączenie DuckDB z uchwytami, więc uchwyty z poprzedniej tury są dostępne po pytaniu doprecyzowującym. Restart procesu czyści sesje, a nieznany albo cudzy `session_id` daje `error` z informacją o wygasłej sesji, bez wołania agenta. Datę bieżącą dokleja do promptu jako wiersz `Current date: RRRR-MM-DD`. W v1 to metoda `AskService.ask`, CLI (`data-concierge ask` na jedną turę, `data-concierge chat` na rozmowę ze standardowego wejścia: tekst dla użytkownika, a z `--diagnostic` odpowiedź JSON każdej tury) i cienki endpoint HTTP (`POST /ask`, `GET /health`, aplikacja z fabryki `data_concierge.bootstrap:create_app`). |
+| **Backend API** | `ask(prompt, user, session_id?) → Response`. Buduje `RequestContext` (user_id, rola z konfiguracji, id korelacji). Trzyma sesje w pamięci procesu za interfejsem `SessionRepository`: sesja ma właściciela, historię wiadomości Pydantic AI i własne połączenie DuckDB z uchwytami, więc uchwyty z poprzedniej tury są dostępne po pytaniu doprecyzowującym. Restart procesu czyści sesje, a nieznany albo cudzy `session_id` daje `error` z informacją o wygasłej sesji, bez wołania agenta. Datę bieżącą dokleja do promptu jako wiersz `Current date: RRRR-MM-DD`. W v1 to metoda `AskService.ask`, CLI (`data-concierge ask` na jedną turę, `data-concierge chat` na rozmowę ze standardowego wejścia: tekst dla użytkownika, a z `--diagnostic` odpowiedź JSON każdej tury) i cienki endpoint HTTP (`POST /ask`, `GET /health`, aplikacja z fabryki `data_concierge.bootstrap:create_app`). Ta sama aplikacja serwuje pod `/` zbudowany interfejs w przeglądarce (moduł `web`, dokument 003), a `data-concierge openapi` zapisuje schemat API, z którego powstają typy frontendu. |
 | **Pętla agenta** | Agent Pydantic AI: wysyła rozmowę do modelu, wykonuje wywołania narzędzi, pilnuje limitu kroków, kończy wynikiem `present_result` (typ `AgentAnswer`). Bez logiki biznesowej. |
 | **Strażnik** | `PromptGuard`: osobne wywołanie modelu bez narzędzi, które ocenia prompt przed agentem i zwraca tylko werdykt (sekcja 8.2). |
 | **Katalog agenta** | Plik YAML: opisy procedur pod agenta, parametry, kolumny wyniku z typami i rolami (sekcja 5). |
@@ -806,7 +807,7 @@ ORDER BY month
 | Kontrola liczb w komentarzu | Wartości z danych idą do tekstu kotwicami, a zestaw ewaluacyjny mierzy liczby wpisane poza nimi. Kontrola byłaby skanowaniem szablonu poza kotwicami (sekcja 7.5, 002, sekcja 12). |
 | Strażnik wejścia lub akcji | Strażnik wejścia to krok przed fazą narzędzi (sekcja 8.2). Pętla jest cienka, więc strażnik akcji byłby dodatkowym krokiem po wyborze narzędzia. |
 | Limity kroków, tokenów, rate limiting | Limity kroków i wierszy już są. `task_budget` w Claude API to opcja na limit tokenów w pętli. |
-| Frontend | Kontrakt odpowiedzi (sekcja 9) zawiera wszystko, czego UI potrzebuje: dane z typami, komentarz, pytania doprecyzowujące, proweniencję. |
+| Frontend | Od etapu 3: interfejs React w `frontend/` na tym samym kontrakcie odpowiedzi (sekcja 9), bez jego zmian w kroku 3A. Wykresy (3B) i postęp tury (3C) opisuje [`003-interfejs-uzytkownika.md`](003-interfejs-uzytkownika.md). |
 | Inne modele (OpenAI, Azure, lokalne) | Zmiana `dostawca:model` w konfiguracji Pydantic AI i dostrojenie promptu. Narzędzia, katalog i obliczenia bez zmian. Jakość wywoływania narzędzi i pisania SQL przez mniejsze modele trzeba zmierzyć tym samym zestawem testów. |
 | Filtrowanie i łączenie w backendzie | Działa od v1: agent filtruje i łączy uchwyty w `query` (sekcja 7). |
 | Silniejsza izolacja SQL od modelu | Zablokowane połączenie i kontrole z sekcji 7.3 od v1. Magazyn wyników ma jeden interfejs (`ResultStore`) i jedno miejsce wykonania zapytań, więc da się przenieść DuckDB sesji do osobnego procesu albo kontenera bez sieci i dysku, albo zastąpić go osobną bazą SQL Server z kontem bez uprawnień do tabel i tabelami tymczasowymi sesji (sekcja 7.4a). |

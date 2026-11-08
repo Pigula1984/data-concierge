@@ -20,3 +20,6 @@ logs/
 
 # Evaluation run archives (uv run pytest -m eval tests/evals)
 evals/runs/
+
+# Frontend dependencies (frontend/, npm ci)
+node_modules/

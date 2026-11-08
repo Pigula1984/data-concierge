@@ -1,6 +1,6 @@
 # Data Concierge
 
-Backend asystenta danych (POC). Przyjmuje prompt użytkownika po polsku i wybiera procedury składowane z katalogu. Wyniki liczy deterministycznie w DuckDB, a odpowiedź zwraca jako JSON z tabelami, komentarzem i pochodzeniem danych. Model (Claude Haiku 5.5 przez Pydantic AI) decyduje, które procedury wywołać i jakie zapytanie napisać nad wynikami. Nie widzi przy tym wierszy danych: liczby do komentarza wstawia backend.
+Asystent danych (POC): backend z interfejsem w przeglądarce. Przyjmuje prompt użytkownika po polsku i wybiera procedury składowane z katalogu. Wyniki liczy deterministycznie w DuckDB, a odpowiedź zwraca jako JSON z tabelami, komentarzem i pochodzeniem danych. Model (Claude Haiku 5.5 przez Pydantic AI) decyduje, które procedury wywołać i jakie zapytanie napisać nad wynikami. Nie widzi przy tym wierszy danych: liczby do komentarza wstawia backend.
 
 Działa na bazie demonstracyjnej Microsoft `AdventureWorks2025` (SQL Server).
 
@@ -8,6 +8,7 @@ Dokumenty:
 
 - [`docs/architecture/001-architektura-data-concierge.md`](docs/architecture/001-architektura-data-concierge.md): architektura całości.
 - [`docs/architecture/002-dostep-modelu-do-danych.md`](docs/architecture/002-dostep-modelu-do-danych.md): co z danych trafia do dostawcy modelu (tryby `none` i `minimal`, kotwice, kolumny wrażliwe) i wyniki ewaluacji.
+- [`docs/architecture/003-interfejs-uzytkownika.md`](docs/architecture/003-interfejs-uzytkownika.md): interfejs w przeglądarce (rozmowa, tabele, później wykresy).
 - [`db/README.md`](db/README.md): procedury, konto bazodanowe i wdrożenie.
 
 ## Wymagania
@@ -15,6 +16,7 @@ Dokumenty:
 - Windows z lokalnym SQL Server (usługa `MSSQLSERVER`) i bazą `AdventureWorks2025` odtworzoną z kopii Microsoftu. Instancja musi mieć **tryb mieszany uwierzytelniania** (konto agenta to login SQL), co opisuje [`db/README.md`](db/README.md).
 - `sqlcmd` i ODBC Driver 18 for SQL Server.
 - Python 3.14 i [uv](https://docs.astral.sh/uv/).
+- Node.js 22.12 lub nowszy z npm, tylko do zbudowania interfejsu w przeglądarce.
 - Klucz API Anthropic.
 
 ## Instalacja
@@ -50,6 +52,8 @@ Przy starcie usługa sprawdza katalog `catalog/agent-procedures.yaml` z metadany
 
 ## Uruchomienie
 
+Krótki scenariusz krok po kroku (start i zatrzymanie serwera z interfejsem w przeglądarce): [`docs/uruchomienie.md`](docs/uruchomienie.md).
+
 ### Wiersz poleceń
 
 Jedno pytanie:
@@ -82,6 +86,20 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/ask -ContentType "appl
 ```
 
 Kolejną wiadomość w tej samej rozmowie wysyłasz z `session_id` z poprzedniej odpowiedzi. `GET /health` zwraca `{"status": "ok"}`. Błąd przetwarzania to status `error` w odpowiedzi HTTP 200, a 422 dostaje tylko niepoprawne żądanie.
+
+### Interfejs w przeglądarce
+
+Okno rozmowy z tabelami w siatce (sortowanie, filtry, polski format liczb). Ten sam serwer HTTP serwuje go pod `/`, więc po zbudowaniu wystarczy uruchomić uvicorn jak wyżej i otworzyć `http://127.0.0.1:8000/`.
+
+```powershell
+cd frontend
+npm ci
+npm run build
+```
+
+Strona woła `POST /ask` jak każdy inny klient: wysyła tylko nowy prompt, `user_id` z pola w nagłówku i `session_id`, a historię rozmowy trzyma backend. Odświeżenie strony zaczyna nową rozmowę. Przycisk kandydata w pytaniu doprecyzowującym wysyła sam identyfikator (np. `Wybieram 12698.`), bo opis kandydata jest tylko dla użytkownika. Bez zbudowanego interfejsu `/` podpowiada, jak go zbudować, a API działa bez zmian. Katalog zbudowanej aplikacji zmienia `DC_WEB_DIST_PATH`.
+
+Praca nad interfejsem: `npm run dev` w `frontend/` uruchamia serwer deweloperski Vite (`http://localhost:5173`) z przeładowaniem, który przekazuje `/ask` i `/health` do uvicorna na porcie 8000. Typy kontraktu w TypeScript powstają z OpenAPI backendu (`npm run api:types`, pod spodem `uv run data-concierge openapi`), a `npm run api:check` sprawdza, że są aktualne. Architektura: [`003-interfejs-uzytkownika.md`](docs/architecture/003-interfejs-uzytkownika.md), standard kodu: [`typescript-react.md`](docs/standards/typescript-react.md).
 
 ### Odpowiedź
 
@@ -163,6 +181,16 @@ uv run pytest                    # testy jednostkowe, bez bazy i modelu
 uv run pytest -m integration     # z lokalnym SQL Server
 ```
 
+Interfejs (w katalogu `frontend/`):
+
+```powershell
+npm run lint
+npm run format:check
+npm run typecheck
+npm run test                     # Vitest, bez backendu
+npm run api:check                # typy kontraktu zgodne z backendem
+```
+
 Zestaw ewaluacyjny (37 przypadków) idzie przez prawdziwy model i bazę, a każdy przebieg kosztuje kilka centów:
 
 ```powershell
@@ -176,7 +204,8 @@ Raport z trafnością według grup oraz miarami (ponowienia, liczby wpisane poza
 
 | Katalog | Zawartość |
 |---------|-----------|
-| `src/data_concierge/` | moduły `core`, `catalog`, `procedures`, `results`, `query`, `agent`, `api`, `audit`; w każdym warstwy controller → service → repository |
+| `src/data_concierge/` | moduły `core`, `catalog`, `procedures`, `results`, `query`, `agent`, `api`, `audit`, `web`; w każdym warstwy controller → service → repository |
+| `frontend/` | interfejs w przeglądarce: React, TypeScript, Vite, siatka AG Grid |
 | `catalog/agent-procedures.yaml` | katalog procedur pisany pod agenta: kiedy użyć, parametry, kolumny z rolami i wrażliwością |
 | `db/` | skrypty T-SQL i `deploy.ps1` |
 | `evals/` | przypadki ewaluacji; przebiegi w `evals/runs/` (poza gitem) |
@@ -188,7 +217,7 @@ Zasady pracy nad kodem (język, standardy, uv i ruff, cykl Compound Engineering)
 ## Ograniczenia POC
 
 - Brak uwierzytelniania: `user_id` przekazuje wywołujący, a procedury przyjmują `@UserId` bez sprawdzania.
-- Sesje żyją w pamięci jednego procesu i znikają przy restarcie.
+- Sesje żyją w pamięci jednego procesu i znikają przy restarcie. Interfejs w przeglądarce pokazuje wtedy komunikat o wygasłej sesji i przycisk „Nowa rozmowa”.
 - Tylko odczyt: brak procedur zapisu.
 - Treści komentarza (np. ocen typu „duża część przychodu”) nic nie sprawdza. Ewaluacja mierzy tylko liczby wpisane poza kotwicami.
 - Ochrona przed prompt injection jest na poziomie POC (001, sekcja 8.2, i [raport](docs/reports/2026-11-01-ochrona-przed-prompt-injection.md)). Role i właściciel sesji pokazują zasadę, ale bez uwierzytelniania nie są prawdziwą granicą. Wrażliwość kolumn odporna na aliasy w zapytaniach jest odłożona (002, sekcje 10 i 12).
