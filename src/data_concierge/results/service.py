@@ -90,6 +90,17 @@ class ResultService:
         """True when the handle or any ancestor came from a procedure result cut at max_rows."""
         return any(self._cut_by_procedure(stored.lineage) for stored in self.lineage(handle))
 
+    def distinct_count(self, handle: Handle, column: str) -> int:
+        """Different values of a column, a missing value counting as one (a chart draws it as
+        a category of its own). The model gets this number, never the values."""
+        name = quote_identifier(column)
+        (count,) = self._single_row(
+            f"SELECT count(DISTINCT {name}) + CAST(count(*) > count({name}) AS INTEGER) "
+            f"FROM {quote_identifier(handle)}"
+        )
+        assert isinstance(count, int)
+        return count
+
     def summarize(self, handle: Handle) -> ResultSummary:
         stored = self._store.describe(handle)
         return ResultSummary(

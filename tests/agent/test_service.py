@@ -123,6 +123,28 @@ async def test_answer_with_an_unknown_handle_is_sent_back_for_correction(
     assert [table.handle for table in turn.answer.tables] == ["r1"]
 
 
+async def test_chart_that_cannot_be_drawn_is_sent_back_for_correction(
+    service: Callable[[FunctionModel], AgentService],
+    scripted: Callable[..., FunctionModel],
+    deps: AgentDeps,
+) -> None:
+    table = [{"handle": "r2", "title": "Sprzedaż po miesiącach"}]
+    chart = {"handle": "r2", "kind": "line", "x": "month", "title": "Sprzedaż"}
+    model = scripted(
+        ToolCallPart("sales_order_list", YEAR_2024),
+        ToolCallPart("query", {"sql": MONTHLY_SQL}),
+        present(tables=table, chart={**chart, "y": ["revenue"]}),
+        present(tables=table, chart={**chart, "y": ["net_sales"]}),
+    )
+
+    turn = await service(model).run("Sprzedaż po miesiącach na wykresie", [], deps)
+
+    (retry,) = retry_prompts(turn.messages)
+    assert "chart: r2 has no column revenue; columns: month, net_sales" in str(retry.content)
+    assert turn.answer.chart is not None
+    assert turn.answer.chart.y == ("net_sales",)
+
+
 async def test_clarification_status_without_a_question_is_sent_back(
     service: Callable[[FunctionModel], AgentService],
     scripted: Callable[..., FunctionModel],

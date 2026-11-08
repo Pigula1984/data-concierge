@@ -12,6 +12,7 @@ from pydantic_ai.usage import UsageLimits
 
 from data_concierge.agent.anchors import Anchors
 from data_concierge.agent.audit import AuditCapability
+from data_concierge.agent.charts import ChartPolicy
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import OUTPUT_TOOL, AgentAnswer, AgentTurn, CandidatesFrom
 from data_concierge.agent.output import OutputPolicy
@@ -52,6 +53,7 @@ class AgentService:
         )
         self._model_name = model if isinstance(model, str) else model.model_name
         self._max_candidates = settings.model_max_rows
+        self._max_response_rows = settings.max_response_rows
         self._agent.output_validator(self._check_answer)
         self._limits = UsageLimits(request_limit=settings.max_agent_steps)
 
@@ -106,8 +108,9 @@ class AgentService:
 
     def _check_answer(self, ctx: RunContext[AgentDeps], answer: AgentAnswer) -> AgentAnswer:
         """The texts hold no link, returned handles exist, a clarification request has its
-        question, its candidates come from a small handle and every anchor names a value. An
-        error answer is not checked: the user gets a generic message."""
+        question, its candidates come from a small handle, a chart can be drawn from its table
+        and every anchor names a value. An error answer is not checked: the user gets a generic
+        message."""
         if answer.status == "error":
             return answer
         OutputPolicy(ctx.deps.audit).check(answer.texts, "tools")
@@ -122,6 +125,9 @@ class AgentService:
             raise ModelRetry("status needs_clarification requires `clarification` with a question")
         if answer.clarification is not None and answer.clarification.candidates_from is not None:
             self._check_candidates(ctx.deps.results, answer.clarification.candidates_from)
+        chart_problems = ChartPolicy(ctx.deps.results, self._max_response_rows).problems(answer)
+        if chart_problems:
+            raise ModelRetry("; ".join(chart_problems))
         anchors = Anchors(ctx.deps.results)
         problems = [problem for text in answer.texts for problem in anchors.problems(text)]
         if problems:
