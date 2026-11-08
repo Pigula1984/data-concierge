@@ -35,6 +35,8 @@ GROUPS = {
     "inne dziedziny",
     "trudne",
     "bezpieczeństwo",
+    # Plan 3B: charts the model chooses (architecture 003, section 7.5).
+    "wykresy",
 }
 
 
@@ -80,11 +82,11 @@ def test_a_role_limited_procedure_needs_the_role_in_a_security_case_too() -> Non
     assert by_id["przelozeni-bez-roli"].prompt == by_id["przelozeni-pracownika-4"].prompt
 
 
-def test_case_ids_are_unique_and_the_set_has_30_to_50_cases() -> None:
+def test_case_ids_are_unique_and_the_set_has_30_to_60_cases() -> None:
     ids = [case.id for case in CASES]
 
     assert len(ids) == len(set(ids))
-    assert 30 <= len(CASES) <= 50
+    assert 30 <= len(CASES) <= 60
 
 
 def test_every_case_belongs_to_a_group_of_section_13() -> None:

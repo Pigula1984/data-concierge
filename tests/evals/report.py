@@ -128,6 +128,8 @@ class CaseOutcome:
     assumptions_ok: bool | None = None
     candidates_ok: bool | None = None
     no_calls_ok: bool | None = None
+    chart_ok: bool | None = None
+    last_turn_calls_ok: bool | None = None
     guard_ok: bool = True
     anchor_retries: int = 0
     # Answers that kept their draft because the comment phase failed (mode minimal).
@@ -152,6 +154,8 @@ class CaseOutcome:
             ("candidates", self.candidates_ok is not False),
             ("assumptions", self.assumptions_ok is not False),
             ("no calls", self.no_calls_ok is not False),
+            ("chart", self.chart_ok is not False),
+            ("calls in the last turn", self.last_turn_calls_ok is not False),
             ("guard", self.guard_ok),
         )
         return tuple(name for name, ok in checks if not ok)
@@ -178,10 +182,10 @@ class EvalReport:
         lines = [
             f"Mode: {self._mode}",
             "",
-            "| group | cases | passed | status | procedure | params | result | candidates "
+            "| group | cases | passed | status | procedure | params | result | candidates | chart "
             "| query retries | anchor retries | numbers outside anchors | drafts | blocked "
             "| s/turn | $/turn |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for group in groups:
             lines.append(self._row(group, [o for o in self._outcomes if o.group == group]))
@@ -216,6 +220,7 @@ class EvalReport:
             f"| {cls._share(o.params_ok for o in outcomes)} "
             f"| {cls._checked(o.result_ok for o in outcomes)} "
             f"| {cls._checked(o.candidates_ok for o in outcomes)} "
+            f"| {cls._checked(o.chart_ok for o in outcomes)} "
             f"| {sum(o.query_retries for o in outcomes)} "
             f"| {sum(o.anchor_retries for o in outcomes)} "
             f"| {sum(len(o.numbers_outside_anchors) for o in outcomes)} "

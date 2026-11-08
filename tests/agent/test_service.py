@@ -475,6 +475,7 @@ async def test_instructions_of_both_modes_teach_anchors_candidates_and_amount_sc
     assert "{r4[1].CustomerName}" in text
     assert "CAST((SELECT sum(net_sales) FROM r2) AS DECIMAL(38,2)) AS annual_total" in text
     assert "at most 50 rows" in text
+    assert "A chart only when the user asks for one" in text
     assert "preview" not in text
 
 
