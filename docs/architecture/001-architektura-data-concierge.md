@@ -1,6 +1,6 @@
 # Data Concierge: opis architektury backendu (wersja 3, happy-flow tylko do odczytu)
 
-Status: v1 wdrożona według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.11, data: 2026-11-04. Etap 2 (dostęp modelu do danych, wdrożony) opisuje [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md), a etap 3 (interfejs w przeglądarce) [`003-interfejs-uzytkownika.md`](003-interfejs-uzytkownika.md).
+Status: v1 wdrożona według planu [`docs/plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md`](../plans/2026-10-11-1011-feat-etapy-wdrozenia-v1-plan.md). Wersja 3.12, data: 2026-11-08. Etap 2 (dostęp modelu do danych, wdrożony) opisuje [`002-dostep-modelu-do-danych.md`](002-dostep-modelu-do-danych.md), a etap 3 (interfejs w przeglądarce) [`003-interfejs-uzytkownika.md`](003-interfejs-uzytkownika.md).
 Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (sekcja 14), research bibliotek z 2026-10-11, prototyp parsera DuckDB z 2026-10-12, sprawdzenie danych i metadanych w lokalnej bazie AdventureWorks2025.
 
 > **Historia zmian.**
@@ -23,6 +23,7 @@ Podstawa: notatki z `docs/prompts/podsumowanie-agent.md`, research źródłowy (
 > **v3.9 (uzupełnienie, 2026-10-27):** `data-concierge chat` wypisuje rozmowę jako tekst dla użytkownika (komentarz, tabele, założenia, pytanie z kandydatami), bez `session_id` i proweniencji w każdej turze. Na końcu podaje polecenie `audit` dla sesji rozmowy. Odpowiedź JSON każdej tury daje `chat --diagnostic`, a `ask` wypisuje JSON jak dotąd (sekcja 4).
 > **v3.10 (2026-11-01):** ochrona przed prompt injection na poziomie POC według planu [`2026-11-01-1541-feat-ochrona-przed-prompt-injection-plan.md`](../plans/2026-11-01-1541-feat-ochrona-przed-prompt-injection-plan.md). Backend jest granicą: role i odmowa procedur, właściciel sesji, limit długości promptu, tekst osób trzecich ukryty przed modelem, szkic zamiast komentarza w historii, kontrola adresów URL i znacznika instrukcji. Strażnik Haiku przed agentem jest dodatkową warstwą. Zmienione sekcje: 1, 4, 8.1, 8.2 (nowa), 9, 12, 13.
 > **v3.11 (2026-11-04):** interfejs w przeglądarce, krok 3A, według planu [`2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md`](../plans/2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md) i dokumentu [`003-interfejs-uzytkownika.md`](003-interfejs-uzytkownika.md): aplikacja React w `frontend/` na `POST /ask` bez zmian kontraktu, serwowana przez tę samą aplikację FastAPI pod `/` (moduł `web`), oraz polecenie `data-concierge openapi` dla typów frontendu. Zmienione sekcje: 1, 4, 12.
+> **v3.12 (2026-11-08):** wykresy wybierane przez model, krok 3B, według planu [`2026-11-08-1015-feat-wykresy-wybierane-przez-model-plan.md`](../plans/2026-11-08-1015-feat-wykresy-wybierane-przez-model-plan.md): pole `chart` w `AgentAnswer` i w odpowiedzi, sprawdzane przez backend, rysowane przez stronę z tabeli o tym samym uchwycie. Zmieniona sekcja: 9.
 
 ## 1. Cel i zakres
 
@@ -660,6 +661,7 @@ Pętla kończy się wynikiem `AgentAnswer` (narzędzie wyjściowe `present_resul
   ],
   "assumptions": ["sprzedaż = SubTotal (netto)", "okres: 2024-01-01 – 2024-12-31"],
   "clarification": null,
+  "chart": null,
   "provenance": [
     {"step": "procedure", "name": "api.SalesOrder_List", "params": {"DateFrom": "2024-01-01", "DateTo": "2025-01-01", "CustomerID": null}, "rows": 14244, "handle": "r1"},
     {"step": "query", "sources": ["r1"], "submitted_sql": "WITH months AS (…) SELECT … ORDER BY m.month", "sql": "WITH months AS (…) SELECT … ORDER BY m.month", "rows": 12, "handle": "r2"},
@@ -677,6 +679,7 @@ Pętla kończy się wynikiem `AgentAnswer` (narzędzie wyjściowe `present_resul
 - **`provenance`** ma krok `procedure` dla każdego wywołania procedury i krok `query` z listą `sources`, SQL od modelu (`submitted_sql`) i SQL wykonanym (`sql`). Kroki są w kolejności nadania uchwytów, a wspólny przodek kilku tabel pojawia się raz.
 - **Błędy:** `ask` nie rzuca wyjątku z powodu nieudanej tury. Błąd przetwarzania daje `status: error` z ogólnym komunikatem i identyfikatorem zgłoszenia, a szczegóły trafiają do logu. Endpoint HTTP zwraca wtedy 200, a 422 tylko dla żądania, którego nie da się zwalidować (np. bez `prompt`). Jedynym wyjątkiem jest za długi prompt, czyli walidacja wejścia (`PromptTooLongError`): HTTP zwraca 422, a CLI komunikat błędu.
 - **`clarification`** zawiera pytanie i listę kandydatów z id, np. trzech klientów „Mohamed Pal”. Kandydatów buduje backend z uchwytu, który wskazał model (`candidates_from`): `id` z kolumny `id_column`, a opis z pozostałych kolumn wiersza, także wrażliwych, bo trafia do użytkownika, a nie do modelu (002, sekcja 4.3). Kolejne wywołanie `ask` z tym samym `session_id` i odpowiedzią użytkownika kontynuuje rozmowę.
+- **`chart`** to wykres jednej ze zwróconych tabel, gdy użytkownik o niego poprosił, np. `{"handle": "r2", "kind": "line", "x": "month", "y": ["net_sales"], "series": null, "title": "Sprzedaż netto po miesiącach"}`. Rodzaje: `line`, `bar`, `stacked_bar`, `pie`, `scatter`. Dane klient bierze z tabeli o tym samym uchwycie, więc nie idą dwa razy. Backend sprawdza wykres przed odpowiedzią (kolumny, typy, liczba wierszy i kategorii, obcięcie tabeli). Projekt i kontrole opisuje 003, sekcja 7.
 - **Koniec tury bez wymuszania narzędzia:** Sonnet 5.5 i Opus 5.5 nie pozwalają wymusić wywołania konkretnego narzędzia (`tool_choice` `any` lub `tool` zwraca błąd 400) [8], a Pydantic AI nie wymusza narzędzia przy włączonym myśleniu. Projekt na tym nie polega: odpowiedź to `output_type` agenta, a gdy model odpowie czymś, co nie pasuje do schematu, Pydantic AI prosi go o poprawkę [6]. Po wyczerpaniu ponowień backend zwraca `error` i loguje przypadek.
 
 ## 10. Przykłady przepływu

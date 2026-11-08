@@ -1,6 +1,6 @@
 # Data Concierge: interfejs użytkownika (etap 3)
 
-Status: **krok 3A wdrożony** według planu [`2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md`](../plans/2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md); kroki 3B i 3C to projekt. Data: 2026-11-04. [`001-architektura-data-concierge.md`](001-architektura-data-concierge.md) odsyła tu w sekcjach 1, 4 i 12. Odejścia od pierwotnego projektu i ustalenia z implementacji są w sekcji 13.
+Status: **kroki 3A i 3B wdrożone** według planów [`2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md`](../plans/2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md) i [`2026-11-08-1015-feat-wykresy-wybierane-przez-model-plan.md`](../plans/2026-11-08-1015-feat-wykresy-wybierane-przez-model-plan.md); krok 3C to projekt. Data: 2026-11-08. [`001-architektura-data-concierge.md`](001-architektura-data-concierge.md) odsyła tu w sekcjach 1, 4 i 12. Odejścia od pierwotnego projektu i ustalenia z implementacji są w sekcjach 13 (3A), 14 (poprawki po sprawdzeniu w przeglądarce) i 15 (3B).
 
 ## 1. Cel i zakres
 
@@ -308,3 +308,21 @@ Właściciel poprosił o sprawdzenie strony w Chrome przez Playwright. Lista kon
 - **Pole promptu** czyści się po wysłaniu, bo prompt pojawia się w rozmowie. Gdy tura się nie uda (odmowa, błąd połączenia), tekst wraca do pola.
 - **Opis kandydata** pomija wartość tekstową, której wszystkie słowa padły już we wcześniejszej wartości, np. kolor i rozmiar po nazwie „HL Mountain Frame - Black, 38” (002, sekcja 4.3).
 - **Ikona strony** (`favicon.svg`).
+
+## 15. Uzupełnienia z implementacji kroku 3B (2026-11-08)
+
+Sekcja 7 opisuje projekt, a ta sekcja to, co z niego wyszło w kodzie. Podsumowanie, wyniki ewaluacji i możliwe rozszerzenia są w raporcie [`2026-11-08-wykresy.md`](../reports/2026-11-08-wykresy.md).
+
+- **Kontrakt:** jedno pole `chart` w `AgentAnswer` i w `Response` (001, sekcja 9). Lista wykresów to rozszerzenie na później.
+- **Kontrole** (`agent/charts.py`, klasa `ChartPolicy`):
+  - wykres tylko przy statusie `ok` i na tabeli z `tables`;
+  - tabela nie może być obcięta ani przez limit procedury, ani przez limit odpowiedzi;
+  - limity według rodzaju: liniowy i punktowy do 1000 wierszy, słupkowy do 50 kategorii, kołowy do 8 wierszy, do 12 serii;
+  - kołowy wymaga tekstowej kolumny `x`, punktowy liczbowej. Słupkowy skumulowany wymaga serii albo co najmniej dwóch miar.
+
+  Ta sama tabela reguł jest na stronie (`ChartKinds`) dla przełącznika rodzaju.
+- **Rysowanie:** ECharts 6.1.0 importowany modułowo (`EChartsHost`). Opcje buduje `ChartOptionsBuilder`, bez `dataset`: serie mają dane wprost, bo format długi (kolumna `series`) i tak trzeba rozłożyć na serie. Dymek ma domyślny układ ECharts, który zamienia nazwy na tekst, i tylko `valueFormatter` dla liczb.
+- **Bez polskiej lokalizacji ECharts.** Plik `langPL` rejestruje się przez pełny pakiet `echarts`, którego nie importujemy. Jedyny napis widoczny dla użytkownika to podpis przycisku PNG („Zapisz jako PNG”), ustawiony wprost.
+- **Tytuł wykresu** jest nagłówkiem nad wykresem (JSX), a nie tytułem ECharts, więc ma ten sam styl co tytuły tabel i jest zwykłym tekstem.
+- **Rozmiar paczki:** ECharts dodał ok. 610 KB do zbudowanego JS (z 1,47 MB do 2,08 MB, gzip z 419 KB do 627 KB).
+- **Terminal i audyt:** `data-concierge chat` wypisuje jedną linię „Wykres liniowy: tytuł (x; y)”, a `audit` pokazuje wykres w zdarzeniu `response`.
