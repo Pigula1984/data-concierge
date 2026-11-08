@@ -1,4 +1,6 @@
 import type { CellValue, ResponseChart, ResponseColumn, ResponseTable } from "../api/ApiClient";
+import type { ChartOption } from "./ChartOptionsBuilder";
+import type { ChartHost, ChartSurface } from "./EChartsHost";
 
 const MONTH_COLUMNS: ResponseColumn[] = [
   { name: "month", type: "date" },
@@ -55,4 +57,40 @@ export function chart(overrides: Partial<ResponseChart> = {}): ResponseChart {
     title: "Sprzedaż netto po miesiącach",
     ...overrides,
   };
+}
+
+/** A drawn chart that records the options it was given. */
+export class FakeSurface implements ChartSurface {
+  readonly options: ChartOption[] = [];
+  disposed = false;
+
+  setOption(option: ChartOption): void {
+    this.options.push(option);
+  }
+
+  resize(): void {
+    // Nothing to lay out without a canvas.
+  }
+
+  dispose(): void {
+    this.disposed = true;
+  }
+}
+
+/** Creates fake charts, since jsdom has no canvas for ECharts. */
+export class FakeHost implements ChartHost {
+  readonly surfaces: FakeSurface[] = [];
+
+  create(): ChartSurface {
+    const surface = new FakeSurface();
+    this.surfaces.push(surface);
+    return surface;
+  }
+
+  /** The series types of the latest options of the latest chart. */
+  lastSeriesTypes(): string[] {
+    const option = this.surfaces.at(-1)?.options.at(-1);
+    const series = (option?.series ?? []) as { type: string }[];
+    return series.map((one) => one.type);
+  }
 }

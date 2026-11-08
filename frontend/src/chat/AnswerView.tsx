@@ -1,4 +1,7 @@
+import { Fragment } from "react";
+
 import type { AnswerStatus, AskResponse, Candidate } from "../api/ApiClient";
+import { ChartView } from "../chart/ChartView";
 import { ResultGrid } from "../grid/ResultGrid";
 import { ClarificationView } from "./ClarificationView";
 import { ProvenanceView } from "./ProvenanceView";
@@ -39,7 +42,12 @@ export function AnswerView({
         </button>
       )}
       {response.tables.map((table) => (
-        <ResultGrid key={table.handle} table={table} />
+        <Fragment key={table.handle}>
+          <ResultGrid table={table} />
+          {response.chart?.handle === table.handle && (
+            <ChartView chart={response.chart} table={table} />
+          )}
+        </Fragment>
       ))}
       {response.assumptions.length > 0 && (
         <ul className="assumptions" aria-label="Założenia">
