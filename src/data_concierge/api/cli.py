@@ -18,7 +18,14 @@ from fastapi import FastAPI
 from pydantic import JsonValue
 
 from data_concierge.agent.formatting import ValueFormatter
-from data_concierge.api.schemas import Clarification, Response, ResponseColumn, ResponseTable
+from data_concierge.api.schemas import (
+    ChartKind,
+    Clarification,
+    Response,
+    ResponseChart,
+    ResponseColumn,
+    ResponseTable,
+)
 from data_concierge.api.service import AskService
 from data_concierge.audit.models import AuditEvent, AuditEventKind
 from data_concierge.audit.service import AuditTrail
@@ -27,6 +34,15 @@ from data_concierge.core.errors import PromptTooLongError
 from data_concierge.core.settings import Settings
 from data_concierge.core.types import ColumnKind, ColumnRole
 from data_concierge.results.models import JsonScalar
+
+# Chart kinds as the user reads them in the terminal (plan 3B, R11).
+CHART_KIND_NAMES: dict[ChartKind, str] = {
+    "line": "liniowy",
+    "bar": "słupkowy",
+    "stacked_bar": "słupkowy skumulowany",
+    "pie": "kołowy",
+    "scatter": "punktowy",
+}
 
 
 class CommandLine:
@@ -170,6 +186,8 @@ class ConversationPrinter(ResponsePrinter):
         lines += ["", response.message]
         for table in response.tables:
             lines += ["", *self._table(table)]
+        if response.chart:
+            lines += ["", self._chart(response.chart)]
         if response.clarification:
             lines += ["", *self._clarification(response.message, response.clarification)]
         if response.assumptions:
@@ -186,6 +204,13 @@ class ConversationPrinter(ResponsePrinter):
     def _write(self, lines: list[str]) -> None:
         self._stdout.write("".join(line + "\n" for line in lines))
         self._stdout.flush()
+
+    @staticmethod
+    def _chart(chart: ResponseChart) -> str:
+        """The terminal draws no chart, so it names it: kind, title and columns."""
+        series = "" if chart.series is None else f"; seria: {chart.series}"
+        columns = f"{chart.x}; {', '.join(chart.y)}{series}"
+        return f"Wykres {CHART_KIND_NAMES[chart.kind]}: {chart.title} ({columns})"
 
     def _clarification(self, message: str, clarification: Clarification) -> list[str]:
         lines = [] if clarification.question == message else [clarification.question]
@@ -393,6 +418,14 @@ class AuditTrailPrinter:
         ]
         for table in self._dicts(response.get("tables")):
             lines.append(f"table {table['handle']}: {table['title']} ({table['row_count']} rows)")
+        chart = response.get("chart")
+        if isinstance(chart, dict):
+            by = "" if chart.get("series") is None else f" by {chart['series']}"
+            y = ", ".join(str(name) for name in self._list(chart.get("y")))
+            lines.append(
+                f"chart: {chart['kind']} of {chart['handle']}, {chart['x']}; {y}{by}: "
+                f"{chart['title']}"
+            )
         for assumption in self._list(response.get("assumptions")):
             lines.append(f"assumption: {assumption}")
         clarification = response.get("clarification")
