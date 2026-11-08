@@ -77,10 +77,19 @@ class ChartPolicy:
             listed = ", ".join(returned) or "none"
             return [f"chart: {chart.handle} is not one of the returned tables ({listed})"]
         stored = self._results.describe(chart.handle)
-        if self._results.is_truncated(chart.handle) or stored.row_count > self._max_rows:
+        # `query` cannot read a procedure result cut at its row limit, so only the procedure
+        # can be called again; a table over the response limit can be aggregated.
+        if self._results.is_truncated(chart.handle):
             return [
-                f"chart: {chart.handle} is cut at a row limit, so a chart would miss data; "
-                "aggregate it in query first (e.g. by month) and chart that handle"
+                f"chart: {chart.handle} comes from a procedure result cut at its row limit, so a "
+                "chart would miss data; call the procedure with narrower parameters or answer "
+                "without a chart"
+            ]
+        if stored.row_count > self._max_rows:
+            return [
+                f"chart: {chart.handle} has {stored.row_count} rows, more than a response shows "
+                f"({self._max_rows}); aggregate it in query first (e.g. by month) and chart that "
+                "handle"
             ]
         missing = self._missing_columns(chart, stored.table_schema)
         if missing:
@@ -110,6 +119,8 @@ class ChartPolicy:
                 found.append(f"chart: y column {name} must be numeric (int or decimal)")
         if not chart.y:
             found.append("chart: give at least one y column")
+        if len({name.casefold() for name in chart.y}) != len(chart.y):
+            found.append("chart: each y column once")
         if rule.single_y and len(chart.y) != 1:
             found.append(f"chart: {chart.kind} needs exactly one y column")
         if chart.series is not None and not rule.allows_series:
@@ -143,6 +154,7 @@ class ChartPolicy:
                     f"chart: {chart.kind} needs at most {rule.max_categories} categories in "
                     f"{chart.x}, {handle} has {count}; aggregate in query"
                 )
+        found += self._repeat_problems(chart, stored)
         if chart.series is not None and rule.allows_series:
             series = self._column(stored, chart.series).name
             count = self._results.distinct_count(handle, series)
@@ -151,6 +163,27 @@ class ChartPolicy:
                     f"chart: at most {MAX_SERIES} series, {chart.series} has {count} values"
                 )
         return found
+
+    def _repeat_problems(self, chart: ChartRequest, stored: StoredResult) -> list[str]:
+        """Every kind but scatter draws one point per x (per x and series): a repeated key
+        would hide rows, so the table must hold each key once."""
+        if chart.kind == "scatter":
+            return []
+        keys = [self._column(stored, chart.x).name]
+        if chart.series is not None:
+            keys.append(self._column(stored, chart.series).name)
+        count = self._results.distinct_count(chart.handle, *keys)
+        if count == stored.row_count:
+            return []
+        named = " and ".join([chart.x, *([chart.series] if chart.series is not None else [])])
+        verb = "repeats" if chart.series is None else "repeat"
+        advice = (
+            "aggregate in query or set series" if chart.series is None else "aggregate in query"
+        )
+        return [
+            f"chart: {named} {verb} in {chart.handle} ({count} distinct of {stored.row_count} "
+            f"rows); {advice}"
+        ]
 
     @staticmethod
     def _column(stored: StoredResult, name: str) -> Column:

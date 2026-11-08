@@ -53,6 +53,24 @@ describe("ChartKinds", () => {
     expect(kinds.compatible(chart({ series: "category" }), long)).toEqual([]);
   });
 
+  it("offers only a scatter when x values repeat", () => {
+    const repeated = table(
+      [
+        { name: "order_count", type: "int" },
+        { name: "net_sales", type: "decimal(38,2)" },
+      ],
+      [
+        [3, "10.00"],
+        [3, "12.00"],
+        [5, "20.00"],
+      ],
+    );
+
+    expect(kinds.compatible(chart({ x: "order_count", kind: "scatter" }), repeated)).toEqual([
+      "scatter",
+    ]);
+  });
+
   it("names each kind in Polish", () => {
     expect(ChartKinds.label("stacked_bar")).toBe("Słupkowy skumulowany");
   });

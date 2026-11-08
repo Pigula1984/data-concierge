@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -51,6 +52,29 @@ describe("ChartView", () => {
 
     expect(screen.getByRole("heading", { name: hostile })).toBeInTheDocument();
     expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("hides the kind switcher when the table allows no other kind", () => {
+    drawn(new FakeHost(), chart(), months({ truncated: true }));
+
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("draws on the chart that stays after StrictMode mounts the view twice", () => {
+    const host = new FakeHost();
+
+    render(
+      <StrictMode>
+        <ChartHostContext.Provider value={host}>
+          <ChartView chart={chart()} table={months()} />
+        </ChartHostContext.Provider>
+      </StrictMode>,
+    );
+
+    expect(host.surfaces.length).toBeGreaterThan(1);
+    expect(host.surfaces[0]?.disposed).toBe(true);
+    expect(host.surfaces.at(-1)?.disposed).toBe(false);
+    expect(host.surfaces.at(-1)?.options).not.toHaveLength(0);
   });
 
   it("releases the chart when the answer goes away", () => {

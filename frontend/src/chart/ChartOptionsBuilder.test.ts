@@ -19,6 +19,14 @@ function drawn(option: ChartOption): DrawnSeries[] {
   return option.series as DrawnSeries[];
 }
 
+function xAxisOf(option: ChartOption): { type?: string; data: string[] } {
+  return option.xAxis as { type?: string; data: string[] };
+}
+
+function legendShown(option: ChartOption): boolean {
+  return (option.legend as { show: boolean }).show;
+}
+
 function tooltipValue(option: ChartOption, value: number): string {
   const tooltip = option.tooltip as { valueFormatter: (value: unknown) => string };
   return tooltip.valueFormatter(value);
@@ -34,8 +42,8 @@ describe("ChartOptionsBuilder", () => {
     expect(line?.name).toBe("net_sales");
     expect(line?.data).toHaveLength(12);
     expect(line?.data[0]).toBe(2000000.5);
-    expect((option.xAxis as { data: string[] }).data[0]).toBe("2024-01-01");
-    expect((option.legend as { show: boolean }).show).toBe(false);
+    expect(xAxisOf(option).data[0]).toBe("2024-01-01");
+    expect(legendShown(option)).toBe(false);
   });
 
   it("draws one series per measure and shows the legend", () => {
@@ -45,7 +53,7 @@ describe("ChartOptionsBuilder", () => {
       ["bar", "net_sales"],
       ["bar", "order_count"],
     ]);
-    expect((option.legend as { show: boolean }).show).toBe(true);
+    expect(legendShown(option)).toBe(true);
   });
 
   it("splits a long table into one series per value of the series column", () => {
@@ -81,7 +89,7 @@ describe("ChartOptionsBuilder", () => {
   it("draws a scatter on a numeric x axis", () => {
     const option = builder.build(chart({ x: "order_count" }), months(), "scatter");
 
-    expect((option.xAxis as { type: string }).type).toBe("value");
+    expect(xAxisOf(option).type).toBe("value");
     expect(drawn(option)[0]?.data[0]).toEqual([300, 2000000.5]);
   });
 
@@ -118,6 +126,6 @@ describe("ChartOptionsBuilder", () => {
 
     const option = builder.build(chart({ x: "category" }), categories([hostile]), "bar");
 
-    expect((option.xAxis as { data: string[] }).data).toEqual([hostile]);
+    expect(xAxisOf(option).data).toEqual([hostile]);
   });
 });

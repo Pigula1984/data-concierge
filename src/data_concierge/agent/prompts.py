@@ -98,7 +98,7 @@ period or category stacked_bar, shares of a whole in at most 8 parts pie, one me
 another scatter. Say in one sentence in `assumptions` why this kind, e.g. "Wykres liniowy: \
 sprzedaż w kolejnych miesiącach.". Ask only when the request does not say what to draw (which \
 of several measures). A chart of a table from an earlier turn returns that handle again \
-without calling a procedure. Too many rows or categories, or a table cut at a row limit: \
+without calling a procedure. Too many rows or categories, or more rows than a response shows: \
 aggregate it with `query` first and chart that result."""
 
 # Mode minimal: a second pass writes the final comment (architecture 002, section 5.2).

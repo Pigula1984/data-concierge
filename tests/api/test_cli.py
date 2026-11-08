@@ -212,6 +212,17 @@ async def test_chat_names_the_chart_of_an_answer_in_one_line() -> None:
     assert "Wykres" not in second
 
 
+async def test_chat_names_the_series_column_of_a_chart() -> None:
+    chart = ResponseChart(
+        handle="r1", kind="line", x="month", y=("net_sales",), series="category", title="Kategorie"
+    )
+    answer = ok().model_copy(update={"chart": chart})
+
+    _, output = await run(StubAskService(answer), "chat", "--user", "7", stdin="a\n")
+
+    assert "Wykres liniowy: Kategorie (month; net_sales; seria: category)" in output
+
+
 async def test_chat_aligns_table_columns_and_groups_only_decimals() -> None:
     answer = Response(status="ok", session_id="s1", message="Gotowe.", tables=(sales_table(2),))
 

@@ -394,3 +394,23 @@ def test_answer_without_a_chart_has_none(
     call("sales_order_list", YEAR_2024)
 
     assert assembler.assemble(ok("r1"), session_id="s1", correlation_id="c1").chart is None
+
+
+def test_chart_series_is_spelled_as_in_the_table(
+    assembler: ResponseAssembler, deps: AgentDeps, call: Callable[[str, Mapping[str, object]], str]
+) -> None:
+    call("sales_order_list", YEAR_2024)
+    deps.queries.run(
+        'SELECT CAST(date_trunc(\'month\', "OrderDate") AS DATE) AS month, "CustomerType" '
+        'AS customer_type, sum("SubTotal") AS net_sales FROM r1 GROUP BY 1, 2 ORDER BY 1, 2'
+    )
+    chart = ChartRequest(
+        handle="r2", kind="line", x="month", y=("net_sales",), series="CUSTOMER_TYPE", title="T"
+    )
+
+    response = assembler.assemble(
+        ok("r2").model_copy(update={"chart": chart}), session_id="s1", correlation_id="c1"
+    )
+
+    assert response.chart is not None
+    assert response.chart.series == "customer_type"

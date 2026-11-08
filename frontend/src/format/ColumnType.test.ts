@@ -8,6 +8,11 @@ describe("ColumnType.parse", () => {
 
     expect(type.kind).toBe("decimal");
     expect(type.isNumber).toBe(true);
+    expect(type.scale).toBe(6);
+  });
+
+  it("gives other kinds a scale of 0", () => {
+    expect(ColumnType.parse("int").scale).toBe(0);
   });
 
   it.each(["int", "string", "date", "datetime", "bool"] as const)("reads the kind %s", (kind) => {

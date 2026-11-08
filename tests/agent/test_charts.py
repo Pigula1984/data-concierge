@@ -30,16 +30,20 @@ CATEGORIES_SQL = (
     f"('Accessories', 0.75), ('{SECRET}', 0.10)) AS t(category, net_sales) ORDER BY category"
 )
 LONG_SQL = (
-    "SELECT CAST(range AS DATE) AS month, 'c' || c AS category, CAST(c AS DECIMAL(38,2)) AS "
-    "net_sales FROM range(DATE '2024-01-01', DATE '2025-01-01', INTERVAL 1 MONTH), "
-    "range(13) AS r(c) ORDER BY month, category"
+    "SELECT CAST(range AS DATE) AS month, CASE WHEN c = 0 THEN '" + SECRET + "' ELSE 'c' || c "
+    "END AS category, CAST(c AS DECIMAL(38,2)) AS net_sales FROM range(DATE '2024-01-01', "
+    "DATE '2025-01-01', INTERVAL 1 MONTH), range(13) AS r(c) ORDER BY month, category"
 )
 MANY_CATEGORIES_SQL = (
-    "SELECT 'k' || range AS category, CAST(range AS DECIMAL(38,2)) AS net_sales "
-    "FROM range(60) ORDER BY category"
+    "SELECT CASE WHEN range = 0 THEN '" + SECRET + "' ELSE 'k' || range END AS category, "
+    "CAST(range AS DECIMAL(38,2)) AS net_sales FROM range(60) ORDER BY category"
 )
 MANY_POINTS_SQL = (
     "SELECT range AS n, CAST(range AS DECIMAL(38,2)) AS net_sales FROM range(1001) ORDER BY n"
+)
+REPEATED_SQL = (
+    "SELECT * FROM (VALUES (DATE '2024-01-01', 'Bikes', 1.00), (DATE '2024-01-01', 'Bikes', "
+    "2.00), (DATE '2024-01-01', 'Clothing', 3.00)) AS t(month, category, net_sales) ORDER BY ALL"
 )
 ORDERS_SCHEMA = TableSchema(
     columns=(
@@ -52,7 +56,7 @@ ORDERS_SCHEMA = TableSchema(
 @pytest.fixture
 def results() -> ResultService:
     """r1 months, r2 categories, r3 months x 13 categories, r4 60 categories, r5 1001 points,
-    r6 orders cut at the procedure's row limit."""
+    r6 orders cut at the procedure's row limit, r7 a month and category given twice."""
     service = ResultService(DuckDBResultStore())
     queries = QueryService(service, QueryPolicy())
     for sql in (MONTHS_SQL, CATEGORIES_SQL, LONG_SQL, MANY_CATEGORIES_SQL, MANY_POINTS_SQL):
@@ -65,6 +69,7 @@ def results() -> ResultService:
     )
     lineage = ProcedureLineage(procedure="api.SalesOrder_List", params={}, truncated=True)
     service.save(ResultTable(data=orders, schema=ORDERS_SCHEMA, lineage=lineage))
+    queries.run(REPEATED_SQL)
     return service
 
 
@@ -186,9 +191,40 @@ def test_an_answer_without_a_chart_has_no_problems(results: ResultService) -> No
         ),
         pytest.param(
             answer("line", "r6", "OrderDate", ("SubTotal",)),
-            "chart: r6 is cut at a row limit, so a chart would miss data; aggregate it in query "
-            "first (e.g. by month) and chart that handle",
+            "chart: r6 comes from a procedure result cut at its row limit, so a chart would miss "
+            "data; call the procedure with narrower parameters or answer without a chart",
             id="truncated",
+        ),
+        pytest.param(
+            answer("line", "r1", "month", ()),
+            "chart: give at least one y column",
+            id="no-y",
+        ),
+        pytest.param(
+            answer("pie", "r2", "category", ("net_sales",), series="category"),
+            "chart: pie takes no series",
+            id="pie-series",
+        ),
+        pytest.param(
+            answer("line", "r1", "month", ("net_sales",) + ("order_count",) * 12),
+            "chart: at most 12 series, got 13 y columns",
+            id="many-y",
+        ),
+        pytest.param(
+            answer("stacked_bar", "r1", "month", ("net_sales", "NET_SALES")),
+            "chart: each y column once",
+            id="repeated-y",
+        ),
+        pytest.param(
+            answer("bar", "r3", "month", ("net_sales",)),
+            "chart: month repeats in r3 (12 distinct of 156 rows); aggregate in query or set "
+            "series",
+            id="repeated-x",
+        ),
+        pytest.param(
+            answer("line", "r7", "month", ("net_sales",), series="category"),
+            "chart: month and category repeat in r7 (2 distinct of 3 rows); aggregate in query",
+            id="repeated-x-and-series",
         ),
     ],
 )
@@ -204,13 +240,29 @@ def test_a_table_over_the_response_limit_has_no_chart(results: ResultService) ->
     )
 
     assert found == [
-        "chart: r1 is cut at a row limit, so a chart would miss data; aggregate it in query "
-        "first (e.g. by month) and chart that handle"
+        "chart: r1 has 12 rows, more than a response shows (10); aggregate it in query first "
+        "(e.g. by month) and chart that handle"
     ]
 
 
-def test_messages_never_carry_values_from_the_data(results: ResultService) -> None:
-    found = problems(results, answer("pie", "r2", "category", ("category",), series="category"))
+@pytest.mark.parametrize(
+    "chart_answer",
+    [
+        pytest.param(answer("bar", "r4", "category", ("net_sales",)), id="categories"),
+        pytest.param(answer("line", "r3", "month", ("net_sales",), series="category"), id="series"),
+        pytest.param(answer("bar", "r3", "month", ("net_sales",)), id="repeats"),
+        pytest.param(answer("pie", "r2", "category", ("category",)), id="pie"),
+    ],
+)
+def test_messages_never_carry_values_from_the_data(
+    results: ResultService, chart_answer: AgentAnswer
+) -> None:
+    # Each table holds SECRET among the values the message counts.
+    found = problems(results, chart_answer)
 
     assert found
     assert not any(SECRET in problem for problem in found)
+
+
+def test_a_scatter_may_repeat_its_x(results: ResultService) -> None:
+    assert problems(results, answer("scatter", "r3", "net_sales", ("net_sales",))) == []

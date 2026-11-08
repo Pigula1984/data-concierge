@@ -31,9 +31,6 @@ interface Series {
   values: (number | null)[];
 }
 
-// Decimals of a measure: "decimal(38,2)" draws its values with two decimal places.
-const DECIMAL_SCALE = /^decimal\(\s*\d+\s*,\s*(\d+)\s*\)$/;
-
 /**
  * Turns a chart of the response and the rows of its table into ECharts options. Values from
  * the data reach ECharts only as data and names: the tooltip keeps its default markup, which
@@ -67,7 +64,7 @@ export class ChartOptionsBuilder {
       case "pie":
         return { ...common, ...this.pie(chart, table, series) };
       case "scatter":
-        return { ...common, ...this.scatter(chart, table, series) };
+        return { ...common, ...this.scatter(chart, table) };
       default:
         return { ...common, ...this.categorical(chart, table, series, kind) };
     }
@@ -122,12 +119,12 @@ export class ChartOptionsBuilder {
     };
   }
 
-  private scatter(chart: ResponseChart, table: ResponseTable, series: Series[]): ChartOption {
+  private scatter(chart: ResponseChart, table: ResponseTable): ChartOption {
     const x = this.columnIndex(table, chart.x);
     const y = this.columnIndex(table, chart.y[0] ?? "");
     const points = this.groups(chart, table).map(([group, rows]): ScatterSeriesOption => ({
       type: "scatter",
-      name: chart.series == null ? (series[0]?.name ?? "") : this.text(chart.series, table, group),
+      name: chart.series == null ? (chart.y[0] ?? "") : this.text(chart.series, table, group),
       data: rows.map((row) => [this.number(row[x] ?? null), this.number(row[y] ?? null)]),
     }));
     return {
@@ -196,7 +193,7 @@ export class ChartOptionsBuilder {
       0,
       ...chart.y.map((name) => {
         const type = table.columns.find((column) => column.name === name)?.type ?? "";
-        return Number(DECIMAL_SCALE.exec(type)?.[1] ?? 0);
+        return ColumnType.parse(type).scale;
       }),
     );
     const format = new Intl.NumberFormat("pl-PL", {

@@ -5,6 +5,7 @@ import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from cases import CaseChecker, ChartRule, Expectation, ExpectedCall, ResultRule
@@ -26,6 +27,7 @@ from data_concierge.agent.guard import GUARD_TOOL, GuardAnswer
 from data_concierge.agent.models import OUTPUT_TOOL
 from data_concierge.api.schemas import (
     Candidate,
+    ChartKind,
     Clarification,
     Response,
     ResponseChart,
@@ -445,8 +447,10 @@ def test_run_archive_writes_each_case_and_the_report(tmp_path: Path) -> None:
     assert report.read_text(encoding="utf-8") == "| group |\n"
 
 
-def charted(kind: str = "line", x: str = "month", y: tuple[str, ...] = ("net_sales",)) -> Response:
-    chart = ResponseChart(handle="r2", kind=kind, x=x, y=y, title="Sprzedaż")  # type: ignore[arg-type]
+def charted(
+    kind: ChartKind = "line", x: str = "month", y: tuple[str, ...] = ("net_sales",)
+) -> Response:
+    chart = ResponseChart(handle="r2", kind=kind, x=x, y=y, title="Sprzedaż")
     return answer(MONTHLY).model_copy(update={"chart": chart})
 
 
@@ -462,15 +466,16 @@ def charted(kind: str = "line", x: str = "month", y: tuple[str, ...] = ("net_sal
         pytest.param(
             ChartRule(kinds=("line",), y=("order_count",)), charted(), False, id="other-y"
         ),
+        pytest.param(ChartRule(kinds=("line",), x="quarter"), charted(), False, id="other-x"),
         pytest.param(ChartRule(kinds=("line",)), answer(MONTHLY), False, id="no-chart"),
         pytest.param("none", answer(MONTHLY), True, id="none-expected"),
         pytest.param("none", charted(), False, id="unwanted-chart"),
     ],
 )
 def test_chart_rule_checks_the_kind_and_the_named_columns(
-    catalog: Catalog, rule: ChartRule | str, response: Response, expected: bool
+    catalog: Catalog, rule: ChartRule | Literal["none"], response: Response, expected: bool
 ) -> None:
-    expectation = Expectation(status=("ok",), chart=rule)  # type: ignore[arg-type]
+    expectation = Expectation(status=("ok",), chart=rule)
 
     assert CaseChecker(catalog).chart_match(expectation, response) is expected
 

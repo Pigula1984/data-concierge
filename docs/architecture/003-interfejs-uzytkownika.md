@@ -316,7 +316,9 @@ Sekcja 7 opisuje projekt, a ta sekcja to, co z niego wyszło w kodzie. Podsumowa
 - **Kontrakt:** jedno pole `chart` w `AgentAnswer` i w `Response` (001, sekcja 9). Lista wykresów to rozszerzenie na później.
 - **Kontrole** (`agent/charts.py`, klasa `ChartPolicy`):
   - wykres tylko przy statusie `ok` i na tabeli z `tables`;
-  - tabela nie może być obcięta ani przez limit procedury, ani przez limit odpowiedzi;
+  - tabela nie może być obcięta. Dla tabeli z procedury obciętej przez jej limit model dostaje radę, żeby wywołać procedurę z węższymi parametrami (`query` takiej tabeli nie czyta), a dla tabeli dłuższej niż limit odpowiedzi radę, żeby zagregować ją zapytaniem;
+  - każda wartość `x` (każda para `x` i serii) występuje raz, poza wykresem punktowym. Inaczej strona narysowałaby jeden punkt za kilka wierszy;
+  - każda miara raz;
   - limity według rodzaju: liniowy i punktowy do 1000 wierszy, słupkowy do 50 kategorii, kołowy do 8 wierszy, do 12 serii;
   - kołowy wymaga tekstowej kolumny `x`, punktowy liczbowej. Słupkowy skumulowany wymaga serii albo co najmniej dwóch miar.
 

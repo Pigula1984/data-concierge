@@ -40,7 +40,21 @@ export class ChartKinds {
     if (seriesCount > MAX_SERIES) {
       return [];
     }
-    return ORDER.filter((kind) => this.allows(kind, chart, table, x.kind));
+    // Every kind but scatter draws one point per x (per x and series), so a repeated key would
+    // hide rows; the backend refuses such a chart from the model for the same reason.
+    const uniqueKeys = this.keyCount(chart, table) === table.rows.length;
+    return ORDER.filter(
+      (kind) => (kind === "scatter" || uniqueKeys) && this.allows(kind, chart, table, x.kind),
+    );
+  }
+
+  private keyCount(chart: ResponseChart, table: ResponseTable): number {
+    const x = table.columns.findIndex((column) => column.name === chart.x);
+    const series = table.columns.findIndex((column) => column.name === chart.series);
+    const keys = table.rows.map((row) =>
+      JSON.stringify([row[x] ?? null, series < 0 ? null : (row[series] ?? null)]),
+    );
+    return new Set(keys).size;
   }
 
   private allows(

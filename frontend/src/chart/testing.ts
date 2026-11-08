@@ -90,6 +90,7 @@ export class FakeHost implements ChartHost {
   /** The series types of the latest options of the latest chart. */
   lastSeriesTypes(): string[] {
     const option = this.surfaces.at(-1)?.options.at(-1);
+    // The option type is ECharts' wide union; the fake reads only each series' type.
     const series = (option?.series ?? []) as { type: string }[];
     return series.map((one) => one.type);
   }
