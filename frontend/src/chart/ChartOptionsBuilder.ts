@@ -42,6 +42,7 @@ const DECIMAL_SCALE = /^decimal\(\s*\d+\s*,\s*(\d+)\s*\)$/;
  */
 export class ChartOptionsBuilder {
   private readonly formatter: ValueFormatter;
+  private readonly axisNumber = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 2 });
 
   constructor(formatter: ValueFormatter) {
     this.formatter = formatter;
@@ -206,7 +207,7 @@ export class ChartOptionsBuilder {
   }
 
   private axisText(value: number): string {
-    return new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 2 }).format(value);
+    return this.axisNumber.format(value);
   }
 
   private number(value: CellValue): number | null {

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from data_concierge.agent.models import AgentAnswer, ChartRequest
 from data_concierge.api.schemas import ChartKind
 from data_concierge.core.types import Column, ColumnKind, TableSchema
-from data_concierge.results.models import Handle, StoredResult
+from data_concierge.results.models import StoredResult
 from data_concierge.results.service import ResultService
 
 NUMERIC = frozenset({ColumnKind.INT, ColumnKind.DECIMAL})
@@ -125,7 +125,7 @@ class ChartPolicy:
     def _size_problems(self, chart: ChartRequest, stored: StoredResult) -> list[str]:
         rule = RULES[chart.kind]
         found: list[str] = []
-        handle: Handle = chart.handle
+        handle = chart.handle
         if rule.max_rows is not None and stored.row_count > rule.max_rows:
             advice = (
                 "aggregate the rest in query or choose bar"

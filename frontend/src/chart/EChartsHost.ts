@@ -25,17 +25,8 @@ export interface ChartHost {
 
 /** ECharts with only the charts and components the page draws (plan 3B, KTD5). */
 export class EChartsHost implements ChartHost {
-  private static registered = false;
-
   create(element: HTMLElement): ChartSurface {
-    EChartsHost.register();
-    return init(element, undefined, { renderer: "canvas" });
-  }
-
-  private static register(): void {
-    if (EChartsHost.registered) {
-      return;
-    }
+    // ECharts registers each module once, so repeating this for every chart is harmless.
     registerModules([
       LineChart,
       BarChart,
@@ -47,7 +38,7 @@ export class EChartsHost implements ChartHost {
       TooltipComponent,
       CanvasRenderer,
     ]);
-    EChartsHost.registered = true;
+    return init(element, undefined, { renderer: "canvas" });
   }
 }
 
