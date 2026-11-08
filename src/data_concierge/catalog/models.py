@@ -97,6 +97,8 @@ class CatalogEntry(_CatalogModel):
     # so the tools stay the same for every role.
     allowed_roles: tuple[str, ...] = ()
     summary: str
+    # The step the user sees while the procedure runs, e.g. "Pobieram zamówienia sprzedaży".
+    progress: str | None = None
     use_when: tuple[str, ...] = ()
     not_for: tuple[str, ...] = ()
     grain: str | None = None

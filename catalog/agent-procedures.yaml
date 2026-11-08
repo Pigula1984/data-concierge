@@ -5,9 +5,12 @@
 # `sensitive: true` keeps a column's values from the model in every mode (architecture 002, 5.3):
 # names, business identifiers and text that people outside the company can write.
 # `allowed_roles` limits a procedure to these roles; the backend checks it at every call (8.2).
+# `progress` is the step the user sees while the procedure runs (architecture 003, section 8);
+# it never holds the call's parameters.
 
 - procedure: api.Customer_Search
   tool: customer_search
+  progress: Szukam klientów
   summary: Klienci (osoby i sklepy), których nazwa pasuje do podanego tekstu, z numerem konta, terytorium i liczbą zamówień.
   use_when:
     - prośba wskazuje klienta po nazwie, a potrzebny jest jego CustomerID
@@ -40,6 +43,7 @@
 
 - procedure: api.Customer_List
   tool: customer_list
+  progress: Pobieram listę klientów
   summary: Klienci (osoby i sklepy) z adresem, opcjonalnie zawężeni do miasta, kraju i typu klienta.
   use_when:
     - pytanie o listę klientów z miejscowości, regionu lub kraju
@@ -87,6 +91,7 @@
 
 - procedure: api.SalesOrder_List
   tool: sales_order_list
+  progress: Pobieram zamówienia sprzedaży
   summary: Zamówienia sprzedaży (nagłówki) w okresie, opcjonalnie dla jednego klienta.
   use_when:
     - pytanie dotyczy sprzedaży, obrotów lub zamówień w czasie
@@ -134,6 +139,7 @@
 
 - procedure: api.SalesOrderLine_List
   tool: sales_order_line_list
+  progress: Pobieram pozycje zamówień
   summary: Pozycje zamówień sprzedaży w okresie z produktem, podkategorią i kategorią, opcjonalnie dla jednego klienta lub jednej kategorii.
   use_when:
     - sprzedaż w podziale na produkty, podkategorie lub kategorie
@@ -190,6 +196,7 @@
 
 - procedure: api.Product_Search
   tool: product_search
+  progress: Szukam produktów
   summary: Produkty, których nazwa pasuje do podanego tekstu, z numerem, kolorem, rozmiarem, podkategorią i kategorią.
   use_when:
     - prośba wskazuje produkt po nazwie, a potrzebny jest jego ProductID (np. do struktury materiałowej)
@@ -232,6 +239,7 @@
 
 - procedure: dbo.uspGetBillOfMaterials
   tool: get_bill_of_materials
+  progress: Pobieram strukturę materiałową
   summary: Struktura materiałowa (BOM) produktu na dany dzień, wszystkie poziomy komponentów.
   use_when:
     - pytanie o strukturę materiałową, komponenty lub części produktu
@@ -262,6 +270,7 @@
 
 - procedure: dbo.uspGetWhereUsedProductID
   tool: get_where_used_product
+  progress: Szukam, gdzie użyto komponentu
   summary: Produkty i zespoły, w których użyto danego komponentu, na dany dzień.
   use_when:
     - pytanie, gdzie lub w czym użyto komponentu
@@ -292,6 +301,7 @@
 
 - procedure: dbo.uspGetEmployeeManagers
   tool: get_employee_managers
+  progress: Pobieram przełożonych pracownika
   allowed_roles: [hr]
   summary: Łańcuch przełożonych pracownika aż do szczytu organizacji.
   use_when:
@@ -317,6 +327,7 @@
 
 - procedure: dbo.uspGetManagerEmployees
   tool: get_manager_employees
+  progress: Pobieram podwładnych kierownika
   allowed_roles: [hr]
   summary: Wszyscy podwładni kierownika, bezpośredni i pośredni.
   use_when:
