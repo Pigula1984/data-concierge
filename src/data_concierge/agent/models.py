@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from pydantic import BaseModel, Field
 from pydantic_ai.messages import ModelMessage
 
-from data_concierge.api.schemas import AnswerStatus
+from data_concierge.api.schemas import AnswerStatus, ChartKind
 from data_concierge.results.models import Handle
 
 OUTPUT_TOOL = "present_result"
@@ -25,6 +25,26 @@ class CandidatesFrom(BaseModel, frozen=True):
         "number and territory"
     )
     id_column: str = Field(description="Column with the id of the candidate, e.g. CustomerID")
+
+
+# Field descriptions reach the model in the `present_result` definition (architecture 003,
+# section 7.2); the backend checks the columns and row counts (ChartPolicy).
+class ChartRequest(BaseModel, frozen=True):
+    handle: Handle = Field(description="Handle of one of the returned tables, e.g. r2")
+    kind: ChartKind = Field(
+        description="line: values over time; bar: compare categories; stacked_bar: parts of "
+        "each category or period, with series or several y; pie: shares of a whole, at most 8 "
+        "rows; scatter: one numeric column against another"
+    )
+    x: str = Field(description="Column on the x axis, or the slice names of a pie")
+    y: tuple[str, ...] = Field(
+        description="Numeric columns to draw, one series each; exactly one for pie and scatter"
+    )
+    series: str | None = Field(
+        default=None,
+        description="Column whose values split one y into series (long format), e.g. category",
+    )
+    title: str = Field(description="Chart title for the user, in Polish; data values by anchor")
 
 
 class ClarificationRequest(BaseModel, frozen=True):
@@ -61,13 +81,17 @@ class AgentAnswer(BaseModel, frozen=True):
     clarification: ClarificationRequest | None = Field(
         default=None, description="Required when the status is needs_clarification"
     )
+    chart: ChartRequest | None = Field(
+        default=None, description="Only when the user asks for a chart: one chart of a table"
+    )
 
     @property
     def texts(self) -> tuple[str, ...]:
         """Every text the user reads, where anchors may stand (architecture 002, 6.1)."""
         question = (self.clarification.question,) if self.clarification is not None else ()
         titles = tuple(table.title for table in self.tables)
-        return (self.message, *titles, *self.assumptions, *question)
+        chart = (self.chart.title,) if self.chart is not None else ()
+        return (self.message, *titles, *chart, *self.assumptions, *question)
 
 
 @dataclass(frozen=True, slots=True)

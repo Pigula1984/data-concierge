@@ -10,10 +10,17 @@ from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import (
     AgentAnswer,
     CandidatesFrom,
+    ChartRequest,
     ClarificationRequest,
     TableRef,
 )
-from data_concierge.api.schemas import Candidate, Clarification, ProcedureStep, QueryStep
+from data_concierge.api.schemas import (
+    Candidate,
+    Clarification,
+    ProcedureStep,
+    QueryStep,
+    ResponseChart,
+)
 from data_concierge.catalog.models import Catalog
 
 YEAR_2024 = {"date_from": "2024-01-01", "date_to": "2025-01-01"}
@@ -349,3 +356,41 @@ def test_anchors_in_every_text_are_filled_and_their_handles_join_provenance(
     assert response.tables[0].title == "Klienci (2)"
     assert response.assumptions == ("zamówień: 3",)
     assert [step.handle for step in response.provenance] == ["r1", "r2", "r3"]
+
+
+def test_chart_names_its_table_columns_and_fills_its_title(
+    assembler: ResponseAssembler, deps: AgentDeps, call: Callable[[str, Mapping[str, object]], str]
+) -> None:
+    call("sales_order_list", YEAR_2024)
+    deps.queries.run(MONTHLY_SQL)
+    answer = ok("r2").model_copy(
+        update={
+            "chart": ChartRequest(
+                handle="r2",
+                kind="line",
+                x="MONTH",
+                y=("Net_Sales",),
+                title="Sprzedaż netto w {r2#rows} miesiącach",
+            )
+        }
+    )
+
+    response = assembler.assemble(answer, session_id="s1", correlation_id="c1")
+
+    # Column names in the spelling of the table, so the page finds them among its columns.
+    assert response.chart == ResponseChart(
+        handle="r2",
+        kind="line",
+        x="month",
+        y=("net_sales",),
+        series=None,
+        title="Sprzedaż netto w 2 miesiącach",
+    )
+
+
+def test_answer_without_a_chart_has_none(
+    assembler: ResponseAssembler, deps: AgentDeps, call: Callable[[str, Mapping[str, object]], str]
+) -> None:
+    call("sales_order_list", YEAR_2024)
+
+    assert assembler.assemble(ok("r1"), session_id="s1", correlation_id="c1").chart is None

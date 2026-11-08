@@ -17,7 +17,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
-from data_concierge.agent.models import AgentAnswer, TableRef
+from data_concierge.agent.models import AgentAnswer, ChartRequest, TableRef
 from data_concierge.catalog.models import Catalog
 from data_concierge.core.errors import CommentError
 from data_concierge.core.settings import ModelDataAccess, Settings
@@ -98,6 +98,27 @@ async def test_comment_sees_returned_and_anchored_tables_without_sensitive_colum
     assert "Najlepszy klient: {r4[1].CustomerName}" in request
     assert "SENTINEL-NAME" not in request
     assert "SENTINEL-ACCOUNT" not in request
+
+
+async def test_comment_sees_the_chart_of_the_draft(
+    agent_settings: Settings, results: ResultService, sentinel_deps: AgentDeps
+) -> None:
+    # So the comment does not describe a chart other than the one the user gets.
+    model = CommentModel("Gotowe.")
+    charted = draft().model_copy(
+        update={
+            "chart": ChartRequest(
+                handle="r3", kind="bar", x="month", y=("net_sales",), title="Po miesiącach"
+            )
+        }
+    )
+
+    await CommentService(FunctionModel(model), agent_settings).write(
+        "Pokaż to na wykresie", charted, results, sentinel_deps.audit
+    )
+
+    (request,) = model.requests
+    assert '\\"kind\\":\\"bar\\"' in request
 
 
 async def test_tables_reach_the_model_as_a_tool_result_and_not_in_the_prompt(

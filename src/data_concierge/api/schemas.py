@@ -12,6 +12,7 @@ from data_concierge.core.types import ColumnType
 from data_concierge.results.models import Handle, Rows
 
 type AnswerStatus = Literal["ok", "no_data", "needs_clarification", "unsupported", "error"]
+type ChartKind = Literal["line", "bar", "stacked_bar", "pie", "scatter"]
 
 
 class Candidate(BaseModel, frozen=True):
@@ -48,6 +49,18 @@ class ResponseTable(BaseModel, frozen=True):
     truncated: bool
 
 
+class ResponseChart(BaseModel, frozen=True):
+    """A chart of one returned table: the page draws it from the rows of that table, so the
+    data is not sent twice (architecture 003, section 7.2)."""
+
+    handle: Handle
+    kind: ChartKind
+    x: str
+    y: tuple[str, ...]
+    series: str | None = None
+    title: str
+
+
 class ProcedureStep(BaseModel, frozen=True):
     """A procedure call; injected parameters such as `@UserId` are not listed."""
 
@@ -82,5 +95,6 @@ class Response(BaseModel, frozen=True):
     tables: tuple[ResponseTable, ...] = ()
     assumptions: tuple[str, ...] = ()
     clarification: Clarification | None = None
+    chart: ResponseChart | None = None
     # Every ancestor of the returned tables, each once, in handle order (section 7.6).
     provenance: tuple[ProvenanceStep, ...] = ()
