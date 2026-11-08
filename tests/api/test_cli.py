@@ -18,6 +18,7 @@ from data_concierge.api.schemas import (
     Clarification,
     ProcedureStep,
     Response,
+    ResponseChart,
     ResponseColumn,
     ResponseTable,
 )
@@ -196,6 +197,30 @@ async def test_chat_prints_the_answer_without_session_ids_or_provenance() -> Non
     assert "s1" not in turn
     assert "api.SalesOrder_List" not in turn
     assert closing.strip() == "uv run data-concierge audit s1"
+
+
+async def test_chat_names_the_chart_of_an_answer_in_one_line() -> None:
+    chart = ResponseChart(
+        handle="r1", kind="bar", x="month", y=("net_sales", "order_count"), title="Po miesiącach"
+    )
+    answer = ok().model_copy(update={"tables": (sales_table(1),), "chart": chart})
+
+    _, output = await run(StubAskService(answer, ok()), "chat", "--user", "7", stdin="a\nb\n")
+
+    first, second = output.split("> b")
+    assert "Wykres słupkowy: Po miesiącach (month; net_sales, order_count)" in first
+    assert "Wykres" not in second
+
+
+async def test_chat_names_the_series_column_of_a_chart() -> None:
+    chart = ResponseChart(
+        handle="r1", kind="line", x="month", y=("net_sales",), series="category", title="Kategorie"
+    )
+    answer = ok().model_copy(update={"chart": chart})
+
+    _, output = await run(StubAskService(answer), "chat", "--user", "7", stdin="a\n")
+
+    assert "Wykres liniowy: Kategorie (month; net_sales; seria: category)" in output
 
 
 async def test_chat_aligns_table_columns_and_groups_only_decimals() -> None:
@@ -387,6 +412,29 @@ async def test_audit_prints_table_sizes_not_rows(
     assert f"table r1: Zamówienia 2024 ({table.row_count} rows)" in output
     order_ids = [str(row[0]) for row in table.rows]
     assert not any(order_id in output for order_id in order_ids if len(order_id) > 3)
+
+
+async def test_audit_names_the_chart_of_the_response(
+    ask_service: Callable[..., AskService],
+    scripted: Callable[..., FunctionModel],
+    audit_log: JsonlAuditLog,
+) -> None:
+    chart = {
+        "handle": "r1",
+        "kind": "line",
+        "x": "OrderDate",
+        "y": ["SubTotal"],
+        "title": "Zamówienia",
+    }
+    model = scripted(
+        ToolCallPart("sales_order_list", {"date_from": "2024-06-01", "date_to": "2024-06-02"}),
+        present(tables=[{"handle": "r1", "title": "Zamówienia 2024"}], chart=chart),
+    )
+    response = await ask_service(model, audit_log=audit_log).ask("Zamówienia", user_id=7)
+
+    _, output = audit(audit_log, response.session_id)
+
+    assert "chart: line of r1, OrderDate; SubTotal: Zamówienia" in output
 
 
 def test_audit_of_an_unknown_id_says_so_and_exits_with_1(

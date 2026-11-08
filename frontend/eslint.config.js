@@ -27,6 +27,14 @@ export default defineConfig(
           message: "Render backend texts and data as plain text; never inject HTML.",
         },
       ],
+      // ECharts is registered piece by piece in src/chart/EChartsHost.ts, which keeps the
+      // bundle to the charts and components the page draws.
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [{ name: "echarts", message: "Import from echarts/core and its modules." }],
+        },
+      ],
     },
   },
   {

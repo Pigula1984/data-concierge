@@ -60,7 +60,9 @@ async def test_case(
     seconds: list[float] = []
     numbers: list[str] = []
     prompts = (case.prompt, *case.followups)
+    calls_before_last_turn = 0
     for prompt in prompts:
+        calls_before_last_turn = len(recorder.calls)
         session_id = response.session_id if response is not None else None
         started = perf_counter()
         with capture_run_messages() as messages:
@@ -100,6 +102,10 @@ async def test_case(
         ),
         candidates_ok=candidates_ok,
         no_calls_ok=checker.no_calls_match(expect, recorder.calls),
+        chart_ok=checker.chart_match(expect, response),
+        last_turn_calls_ok=(
+            len(recorder.calls) == calls_before_last_turn if expect.no_calls_in_last_turn else None
+        ),
         guard_ok=checker.guard_match(
             expect, eval_guard_model.verdicts, len(prompts), len(eval_model.responses)
         ),

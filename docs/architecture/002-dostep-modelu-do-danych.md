@@ -65,6 +65,8 @@ Bez `preview`. Ze statystyk zostaje tylko min i max kolumn `time`. Pole `ids` ma
 - zakres `data_range` z katalogu, czyli min i max dat wspólne dla wszystkich użytkowników, czytane przy starcie;
 - `row_count`, bo bez niego model nie rozpozna pustego wyniku (`no_data`), wielu trafień wyszukiwania (`needs_clarification`) ani obcięcia. To liczba wierszy wyniku, a nie miara z danych, choć dla listy zamówień oznacza liczbę zamówień.
 
+**Wykresy (krok 3B) nie poszerzają tego zakresu.** Model wybiera rodzaj wykresu i kolumny ze schematu i liczby wierszy. Gdy wykres się nie mieści, backend odsyła mu tylko liczby wierszy, kategorii lub serii, nigdy wartości (003, sekcja 7.2). Dane wykresu idą od backendu prosto do strony.
+
 ### 4.2. Klucze między procedurami
 
 Prośba „sprzedaż klienta Aaron Wright w 2024” wymaga przekazania `CustomerID` z wyniku `customer_search` do parametru `customer_id` w `sales_order_list`. Bez wartości model tego nie zrobi. Rozważone drogi:

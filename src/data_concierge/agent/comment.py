@@ -101,7 +101,9 @@ class CommentService:
     @staticmethod
     def _exchange(prompt: str, draft: AgentAnswer, tables: str) -> list[ModelMessage]:
         """The request, a call of `read_tables` and its result; the agent answers the result."""
-        template = draft.model_dump_json(include={"status", "message", "tables", "assumptions"})
+        template = draft.model_dump_json(
+            include={"status", "message", "tables", "assumptions", "chart"}
+        )
         request = COMMENT_REQUEST.format(prompt=prompt, draft=template)
         call = ToolCallPart(READ_TABLES_TOOL, {})
         result = ToolReturnPart(READ_TABLES_TOOL, tables, tool_call_id=call.tool_call_id)

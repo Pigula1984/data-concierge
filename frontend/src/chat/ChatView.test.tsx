@@ -2,6 +2,8 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import { ChartHostContext } from "../chart/EChartsHost";
+import { FakeHost, chart, months } from "../chart/testing";
 import { ChatView } from "./ChatView";
 import { PendingReply, ScriptedClient, answer } from "./testing";
 
@@ -84,6 +86,25 @@ describe("ChatView", () => {
     expect(await screen.findByText("Sprzedaż netto: 1 234,50.")).toBeInTheDocument();
     expect(screen.getByText("Okres: 2024.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Sprzedaż po miesiącach" })).toBeInTheDocument();
+  });
+
+  it("draws the chart right after its table and switches it without the backend", async () => {
+    const reply = answer({ tables: [months()], chart: chart() });
+    const client = new ScriptedClient({ kind: "response", response: reply });
+    const host = new FakeHost();
+    render(
+      <ChartHostContext.Provider value={host}>
+        <ChatView client={client} userId={7} />
+      </ChartHostContext.Provider>,
+    );
+
+    await send("Pokaż sprzedaż po miesiącach na wykresie");
+
+    const headings = (await screen.findAllByRole("heading")).map((heading) => heading.textContent);
+    expect(headings.slice(-2)).toEqual(["Tabela", "Sprzedaż netto po miesiącach"]);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Rodzaj wykresu/ }), "bar");
+    expect(host.lastSeriesTypes()).toEqual(["bar"]);
+    expect(client.requests).toHaveLength(1);
   });
 
   it("marks an answer with a status other than ok", async () => {

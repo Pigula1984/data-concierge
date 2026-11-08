@@ -89,7 +89,9 @@ Kolejną wiadomość w tej samej rozmowie wysyłasz z `session_id` z poprzedniej
 
 ### Interfejs w przeglądarce
 
-Okno rozmowy z tabelami w siatce (sortowanie, filtry, polski format liczb). Ten sam serwer HTTP serwuje go pod `/`, więc po zbudowaniu wystarczy uruchomić uvicorn jak wyżej i otworzyć `http://127.0.0.1:8000/`.
+Okno rozmowy z tabelami w siatce (sortowanie, filtry, polski format liczb) i wykresami. Ten sam serwer HTTP serwuje go pod `/`, więc po zbudowaniu wystarczy uruchomić uvicorn jak wyżej i otworzyć `http://127.0.0.1:8000/`.
+
+Wykres pojawia się, gdy o niego poprosisz, np. `pokaż na wykresie sprzedaż po miesiącach w 2024` albo po raporcie `pokaż to na wykresie`. Model wybiera rodzaj (liniowy, słupkowy, słupkowy skumulowany, kołowy, punktowy) i wyjaśnia wybór w założeniach. Pod wykresem możesz zmienić rodzaj bez pytania modelu, a ikona w rogu zapisuje wykres jako PNG.
 
 ```powershell
 cd frontend
@@ -111,11 +113,12 @@ Praca nad interfejsem: `npm run dev` w `frontend/` uruchamia serwer deweloperski
   "tables": [{"handle": "r2", "title": "…", "columns": ["…"], "rows": ["…"], "row_count": 12, "truncated": false}],
   "assumptions": ["Miara: sprzedaż netto (SubTotal, bez podatku i frachtu).", "Okres: 2024-01-01 – 2024-12-31."],
   "clarification": null,
+  "chart": null,
   "provenance": [{"step": "procedure", "name": "api.SalesOrder_List", "…": "…"}, {"step": "query", "sql": "…", "…": "…"}]
 }
 ```
 
-`status` to `ok`, `no_data`, `needs_clarification` (z pytaniem i kandydatami w `clarification`), `unsupported` albo `error`. Kwoty w tabelach są tekstem, żeby nie tracić precyzji. `provenance` ma każde wywołanie procedury z parametrami i każde zapytanie DuckDB, więc wynik da się odtworzyć bez modelu. Pełny kontrakt opisuje 001, sekcja 9.
+`status` to `ok`, `no_data`, `needs_clarification` (z pytaniem i kandydatami w `clarification`), `unsupported` albo `error`. Kwoty w tabelach są tekstem, żeby nie tracić precyzji. `chart` opisuje wykres jednej z tabel (rodzaj, uchwyt, kolumny, tytuł), gdy użytkownik o niego poprosił. `provenance` ma każde wywołanie procedury z parametrami i każde zapytanie DuckDB, więc wynik da się odtworzyć bez modelu. Pełny kontrakt opisuje 001, sekcja 9.
 
 ## Tryby dostępu modelu do danych
 

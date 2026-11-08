@@ -5,6 +5,8 @@ import pyarrow as pa
 
 from data_concierge.core.settings import ModelExposure
 from data_concierge.core.types import Column, ColumnRole, ColumnType, TableSchema
+from data_concierge.query.policy import QueryPolicy
+from data_concierge.query.service import QueryService
 from data_concierge.results.models import (
     ColumnStats,
     ProcedureLineage,
@@ -221,3 +223,15 @@ def test_truncation_of_a_procedure_result_is_inherited_by_derived_handles() -> N
     assert service.export(derived, max_rows=100).truncated is True
     assert service.is_truncated(other) is False
     assert [stored.handle for stored in service.lineage(derived)] == [source, other, derived]
+
+
+def test_distinct_count_counts_missing_values_as_one_category() -> None:
+    service, _ = _service()
+    service.save(_orders(10, territories=3))
+    QueryService(service, QueryPolicy()).run(
+        'SELECT CASE WHEN "SubTotal" < 2 THEN NULL ELSE "Territory" END AS territory '
+        'FROM r1 ORDER BY "SubTotal"'
+    )
+
+    # T00..T02 plus the missing value: a chart draws missing as a category of its own.
+    assert service.distinct_count("r2", "territory") == 4

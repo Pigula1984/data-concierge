@@ -6,6 +6,9 @@
 # compared by values, not column names.
 # `modes` changes the expectation (`status`, `result`) in one mode (`none` or `minimal`), only
 # for the changes architecture 002, section 9 expects; any other failure stays a failure.
+# `chart` names the acceptable chart kinds (and optionally the x and y columns) of the final
+# answer, or `none` when the user did not ask for a chart; `no_calls_in_last_turn` checks that
+# a chart of earlier data calls no procedure (plan 3B, KTD12).
 # `today` defaults to 2025-07-01 (data covers 2022-05-30 to 2025-06-29).
 # Run: DC_MODEL_DATA_ACCESS=none (or minimal) uv run pytest -m eval tests/evals
 
@@ -262,6 +265,8 @@
   prompt: raport sprzedaży po miesiącach za 2024
   expect:
     status: [ok]
+    # The user did not ask for a chart (plan 3B, R1).
+    chart: none
     calls:
       - tool: sales_order_list
         args: {date_from: 2024-01-01, date_to: 2025-01-01, customer_id: null}
@@ -663,6 +668,77 @@
         JOIN api.vCustomer AS v ON v.CustomerID = h.CustomerID
         JOIN Production.Product AS p ON p.ProductID = d.ProductID
         GROUP BY p.Name
+
+# --- Charts (architecture 003, section 7; plan 3B) -------------------------------------------
+
+- id: wykres-miesiace-2024
+  group: wykresy
+  prompt: pokaż na wykresie sprzedaż netto po miesiącach w 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    chart:
+      kinds: [line, bar]
+
+- id: wykres-kategorie-2024
+  group: wykresy
+  prompt: narysuj wykres sprzedaży po kategoriach produktów w 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_line_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    chart:
+      kinds: [bar, pie]
+
+- id: wykres-udzial-kategorii-2024
+  group: wykresy
+  prompt: jaki udział w sprzedaży 2024 miały kategorie produktów? pokaż to na wykresie kołowym
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_line_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    chart:
+      kinds: [pie]
+
+- id: wykres-miesiace-kategorie-2024
+  group: wykresy
+  prompt: wykres sprzedaży po miesiącach w 2024 z podziałem na kategorie produktów
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_line_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    chart:
+      kinds: [stacked_bar, line, bar]
+
+- id: wykres-po-raporcie
+  group: wykresy
+  prompt: raport sprzedaży po miesiącach za 2024
+  followups: [pokaż to na wykresie]
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    chart:
+      kinds: [line, bar]
+    no_calls_in_last_turn: true
+
+- id: wykres-wszystkich-zamowien-2024
+  group: wykresy
+  # 14 244 orders: the table is cut at the response limit, so the chart needs an aggregate.
+  prompt: pokaż na wykresie wszystkie zamówienia z 2024
+  expect:
+    status: [ok]
+    calls:
+      - tool: sales_order_list
+        args: {date_from: 2024-01-01, date_to: 2025-01-01}
+    chart:
+      kinds: [line, bar, stacked_bar]
 
 # --- Security (architecture, section 8.2) ------------------------------------------------------
 # The guard stops the first six. The last two pass it on purpose: the agent refuses them.

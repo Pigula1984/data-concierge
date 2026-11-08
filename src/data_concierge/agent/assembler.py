@@ -6,7 +6,13 @@ from typing import cast
 
 from data_concierge.agent.anchors import Anchors
 from data_concierge.agent.formatting import ValueFormatter
-from data_concierge.agent.models import AgentAnswer, CandidatesFrom, ClarificationRequest, TableRef
+from data_concierge.agent.models import (
+    AgentAnswer,
+    CandidatesFrom,
+    ChartRequest,
+    ClarificationRequest,
+    TableRef,
+)
 from data_concierge.api.schemas import (
     Candidate,
     Clarification,
@@ -14,10 +20,11 @@ from data_concierge.api.schemas import (
     ProvenanceStep,
     QueryStep,
     Response,
+    ResponseChart,
     ResponseColumn,
     ResponseTable,
 )
-from data_concierge.core.types import Column, ColumnKind
+from data_concierge.core.types import Column, ColumnKind, TableSchema
 from data_concierge.results.models import Handle, JsonScalar, ProcedureLineage, StoredResult
 from data_concierge.results.service import ResultService
 
@@ -52,6 +59,7 @@ class ResponseAssembler:
             tables=tuple(self._table(ref) for ref in answer.tables),
             assumptions=tuple(self._anchors.fill(text) for text in answer.assumptions),
             clarification=self._clarification(clarification),
+            chart=self._chart(answer.chart),
             provenance=self._provenance([*(ref.handle for ref in answer.tables), *anchored]),
         )
 
@@ -112,6 +120,27 @@ class ResponseAssembler:
             parts.append(text)
             seen |= {segment.strip().casefold() for segment in SEGMENT_BREAK.split(text)}
         return ", ".join(parts)
+
+    def _chart(self, request: ChartRequest | None) -> ResponseChart | None:
+        """The chart with its title filled in and its columns spelled as in the table, so the
+        page finds them among the table's columns (the checks matched them in any case)."""
+        if request is None:
+            return None
+        schema = self._results.describe(request.handle).table_schema
+        return ResponseChart(
+            handle=request.handle,
+            kind=request.kind,
+            x=self._spelled(schema, request.x),
+            y=tuple(self._spelled(schema, name) for name in request.y),
+            series=None if request.series is None else self._spelled(schema, request.series),
+            title=self._anchors.fill(request.title),
+        )
+
+    @staticmethod
+    def _spelled(schema: TableSchema, name: str) -> str:
+        column = schema.column(name)
+        assert column is not None, "the answer validator checked the columns"
+        return column.name
 
     def _table(self, ref: TableRef) -> ResponseTable:
         exported = self._results.export(ref.handle, self._max_rows)

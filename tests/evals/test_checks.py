@@ -5,9 +5,10 @@ import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 import pytest
-from cases import CaseChecker, Expectation, ExpectedCall, ResultRule
+from cases import CaseChecker, ChartRule, Expectation, ExpectedCall, ResultRule
 from harness import RecordingGuardModel, RecordingModel
 from pydantic_ai import Agent, ModelRetry, ToolOutput
 from pydantic_ai.messages import (
@@ -26,8 +27,10 @@ from data_concierge.agent.guard import GUARD_TOOL, GuardAnswer
 from data_concierge.agent.models import OUTPUT_TOOL
 from data_concierge.api.schemas import (
     Candidate,
+    ChartKind,
     Clarification,
     Response,
+    ResponseChart,
     ResponseColumn,
     ResponseTable,
 )
@@ -267,7 +270,8 @@ def test_report_names_the_mode_counts_each_group_and_lists_failed_cases() -> Non
 
     assert text.startswith("Mode: minimal")
     assert (
-        "| listy | 2 | 1 | 1/2 | 2/2 | 2/2 | 1/1 | 0/1 | 2 | 1 | 1 | 1 | 1 | 5.0 | 0.0100 |" in text
+        "| listy | 2 | 1 | 1/2 | 2/2 | 2/2 | 1/1 | 0/1 | - | 2 | 1 | 1 | 1 | 1 | 5.0 | 0.0100 |"
+        in text
     )
     assert "Turns: 3, time: 15 s, cost: $0.03" in text
     assert "Guard: 1 turns blocked, time: 1 s (0.2 s/turn), cost: unknown" in text
@@ -441,3 +445,45 @@ def test_run_archive_writes_each_case_and_the_report(tmp_path: Path) -> None:
         "sql": "SELECT 1",
     }
     assert report.read_text(encoding="utf-8") == "| group |\n"
+
+
+def charted(
+    kind: ChartKind = "line", x: str = "month", y: tuple[str, ...] = ("net_sales",)
+) -> Response:
+    chart = ResponseChart(handle="r2", kind=kind, x=x, y=y, title="Sprzedaż")
+    return answer(MONTHLY).model_copy(update={"chart": chart})
+
+
+@pytest.mark.parametrize(
+    ("rule", "response", "expected"),
+    [
+        pytest.param(ChartRule(kinds=("line",)), charted(), True, id="kind"),
+        pytest.param(ChartRule(kinds=("bar", "pie")), charted("pie"), True, id="one-of-kinds"),
+        pytest.param(ChartRule(kinds=("bar",)), charted("line"), False, id="other-kind"),
+        pytest.param(
+            ChartRule(kinds=("line",), x="MONTH", y=("Net_Sales",)), charted(), True, id="names"
+        ),
+        pytest.param(
+            ChartRule(kinds=("line",), y=("order_count",)), charted(), False, id="other-y"
+        ),
+        pytest.param(ChartRule(kinds=("line",), x="quarter"), charted(), False, id="other-x"),
+        pytest.param(ChartRule(kinds=("line",)), answer(MONTHLY), False, id="no-chart"),
+        pytest.param("none", answer(MONTHLY), True, id="none-expected"),
+        pytest.param("none", charted(), False, id="unwanted-chart"),
+    ],
+)
+def test_chart_rule_checks_the_kind_and_the_named_columns(
+    catalog: Catalog, rule: ChartRule | Literal["none"], response: Response, expected: bool
+) -> None:
+    expectation = Expectation(status=("ok",), chart=rule)
+
+    assert CaseChecker(catalog).chart_match(expectation, response) is expected
+
+
+def test_a_case_without_a_chart_rule_does_not_check_charts(catalog: Catalog) -> None:
+    assert CaseChecker(catalog).chart_match(Expectation(status=("ok",)), charted()) is None
+
+
+def test_a_wrong_chart_and_calls_in_the_last_turn_fail_the_case() -> None:
+    assert outcome(chart_ok=False).failed_checks == ("chart",)
+    assert outcome(last_turn_calls_ok=False).failed_checks == ("calls in the last turn",)

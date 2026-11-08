@@ -16,7 +16,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field
 
-from data_concierge.api.schemas import AnswerStatus, Response, ResponseTable
+from data_concierge.api.schemas import AnswerStatus, ChartKind, Response, ResponseTable
 from data_concierge.catalog.models import Catalog
 from data_concierge.core.settings import ModelDataAccess
 from data_concierge.core.sqlserver import SqlRows
@@ -59,6 +59,15 @@ class ResultRule(_CaseModel):
     columns: tuple[str, ...] = ()
 
 
+class ChartRule(_CaseModel):
+    """The chart of the final answer: one of `kinds` (the model may choose among several good
+    ones) and, when given, the x and y columns, compared ignoring case like the result rules."""
+
+    kinds: tuple[ChartKind, ...]
+    x: str | None = None
+    y: tuple[str, ...] = ()
+
+
 class Expectation(_CaseModel):
     status: tuple[AnswerStatus, ...]
     calls: tuple[ExpectedCall, ...] = ()
@@ -74,6 +83,10 @@ class Expectation(_CaseModel):
     no_calls: bool = False
     # The verdict of the guard on every prompt of the case; `unavailable` is never expected.
     guard: Literal["allowed", "blocked"] = "allowed"
+    # The chart of the final answer; "none" when the user did not ask for one.
+    chart: ChartRule | Literal["none"] | None = None
+    # The last prompt reuses tables of an earlier turn, e.g. "pokaż to na wykresie".
+    no_calls_in_last_turn: bool = False
 
     @property
     def results(self) -> tuple[ResultRule, ...]:
@@ -148,6 +161,19 @@ class CaseChecker:
         checks the verdicts, and that a blocked prompt really kept the agent from running."""
         stopped = expected.guard == "allowed" or agent_responses == 0
         return list(verdicts) == [expected.guard] * turns and stopped
+
+    @staticmethod
+    def chart_match(expected: Expectation, response: Response) -> bool | None:
+        """None when the case does not expect it."""
+        rule = expected.chart
+        if rule is None:
+            return None
+        chart = response.chart
+        if rule == "none" or chart is None:
+            return rule == "none" and chart is None
+        x_ok = rule.x is None or rule.x.casefold() == chart.x.casefold()
+        y_ok = not rule.y or {n.casefold() for n in rule.y} == {n.casefold() for n in chart.y}
+        return chart.kind in rule.kinds and x_ok and y_ok
 
     @staticmethod
     def assumptions_match(expected: Sequence[Sequence[str]], response: Response) -> bool:
