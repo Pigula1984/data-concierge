@@ -103,9 +103,9 @@ def test_every_wrong_anchor_is_described_with_the_handle_columns(anchors: Anchor
     )
 
     assert problems == [
-        "{r2.net_sales}: r2 has 12 rows; for one of them name the row, e.g. "
-        "{r2[1].net_sales}; for a total or a best value run a query that returns it in one row "
-        "and anchor that handle",
+        "{r2.net_sales}: r2 has 12 rows; for a total or a best value run a query that returns "
+        "it in one row and anchor that handle; a row anchor such as {r2[1].net_sales} is the "
+        "value of that one row only",
         "{r9.total}: unknown handle r9; available handles: r1, r2",
         "{r2[13].month}: r2 has 12 rows",
         "{r2.Netsales}: r2 has no column Netsales; columns: month, net_sales",
@@ -130,6 +130,67 @@ def test_attempted_anchor_outside_the_grammar_is_a_problem(anchors: Anchors, tex
     assert anchors.problems(f"Wynik: {text}.") == [
         f"{text}: not an anchor; write {{rN.column}}, {{rN[1].column}} or {{rN#rows}}"
     ]
+
+
+@pytest.mark.parametrize(
+    ("text", "snippet"),
+    [
+        # The draft of session cdce542c: row 1 of a quarterly table presented as the year.
+        pytest.param(
+            "Łączna sprzedaż w roku: {r2[1].net_sales} ... (miesiące: {r2#rows}).",
+            "{r2[1].net_sales} ...",
+            id="ellipsis",
+        ),
+        pytest.param(
+            "Łączna sprzedaż: {r1.annual_total}... (szczegóły w tabeli).",
+            "{r1.annual_total}...",
+            id="ellipsis-no-space",
+        ),
+        pytest.param("Razem: {r2[1].net_sales}\N{HORIZONTAL ELLIPSIS}", None, id="ellipsis-char"),
+        # An eval draft of 2026-10-25 that reached the user as four numbers joined by "+".
+        pytest.param(
+            "Łącznie w roku: {r2[1].net_sales} + {r2[2].net_sales}.",
+            "{r2[1].net_sales} + {r2[2].net_sales}",
+            id="sum",
+        ),
+        pytest.param(
+            "Łącznie: {r2[1].net_sales} + ... + {r2[12].net_sales}.",
+            "{r2[1].net_sales} + ...",
+            id="sum-with-ellipsis",
+        ),
+        pytest.param("Razem: {r1.annual_total} = {r2#rows}.", None, id="equals"),
+    ],
+)
+def test_anchors_combined_into_a_value_no_row_holds_are_a_problem(
+    anchors: Anchors, text: str, snippet: str | None
+) -> None:
+    problems = anchors.problems(text)
+
+    assert len(problems) == 1
+    assert problems[0].endswith(
+        "the backend neither adds anchors nor fills in the rows an ellipsis stands for; for a "
+        "total run a query that returns it in one row and anchor that handle"
+    )
+    if snippet is not None:
+        assert problems[0].startswith(f"{snippet}: ")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "Okres: {r2[1].month} \N{EN DASH} {r2[12].month}, "
+            "od {r2[1].month} - do {r2[12].month}.",
+            id="range",
+        ),
+        pytest.param("Miesiące z danymi: {r2#rows}/{r2#rows}.", id="count"),
+        pytest.param("Miesiące:\n* {r2[1].month}\n* {r2[2].month}", id="list"),
+    ],
+)
+def test_anchors_side_by_side_without_arithmetic_are_not_a_problem(
+    anchors: Anchors, text: str
+) -> None:
+    assert anchors.problems(text) == []
 
 
 def test_filling_a_wrong_anchor_raises(anchors: Anchors) -> None:
