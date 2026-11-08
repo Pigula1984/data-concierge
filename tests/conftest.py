@@ -26,6 +26,7 @@ from pydantic_ai.tools import ToolDefinition
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.guard import GUARD_TOOL, PromptGuard
+from data_concierge.agent.progress_capability import ProgressCapability
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
@@ -428,6 +429,7 @@ def ask_service(
     repository: FakeProcedureRepository,
     scripted: Callable[..., FunctionModel],
     guard_model: FunctionModel,
+    catalog: Catalog,
 ) -> Callable[..., AskService]:
     """`ask_service(model, comments, audit_log, roles, guard)`: the tools phase and the comment
     phase scripted apart, the audit log of the turns, the configured roles and the guard's
@@ -440,7 +442,8 @@ def ask_service(
         roles: Mapping[int, str] | None = None,
         guard: FunctionModel | None = None,
     ) -> AskService:
-        agent = AgentService(model, agent_tools, instructions, agent_settings)
+        progress = ProgressCapability.for_catalog(catalog)
+        agent = AgentService(model, agent_tools, instructions, agent_settings, progress)
         comment = CommentService(comments or scripted(), agent_settings)
         factory = DuckDBSessionFactory(repository, agent_settings)
         sessions = InMemorySessionRepository()

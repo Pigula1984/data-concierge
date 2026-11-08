@@ -15,6 +15,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.guard import PromptGuard
+from data_concierge.agent.progress_capability import ProgressCapability
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
@@ -125,6 +126,7 @@ class CompositionRoot:
             ToolRegistry(catalog, tool_factory, strict, exposure).tools(),
             AgentInstructions(catalog, data_ranges, exposure, settings.model_max_rows).text(),
             settings,
+            ProgressCapability.for_catalog(catalog),
         )
         comments = CommentService(model, settings)
         sessions = sessions if sessions is not None else InMemorySessionRepository()

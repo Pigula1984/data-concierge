@@ -12,6 +12,7 @@ from pydantic import JsonValue
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
+from data_concierge.agent.progress import ProgressListener
 from data_concierge.api.cli import AuditTrailPrinter, CommandLine, ConversationPrinter, main
 from data_concierge.api.schemas import (
     Candidate,
@@ -45,7 +46,13 @@ class StubAskService(AskService):
         self.dropped: set[str] = set()
         self.calls: list[tuple[str, int, str | None]] = []
 
-    async def ask(self, prompt: str, user_id: int, session_id: str | None = None) -> Response:
+    async def ask(
+        self,
+        prompt: str,
+        user_id: int,
+        session_id: str | None = None,
+        listener: ProgressListener | None = None,
+    ) -> Response:
         """With `drop_on_error`, an error response drops its session, as after an engine failure."""
         self.calls.append((prompt, user_id, session_id))
         response = self.responses.pop(0)

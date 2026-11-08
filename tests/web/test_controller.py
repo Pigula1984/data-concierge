@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from data_concierge.agent.progress import ProgressListener
 from data_concierge.api.schemas import Response
 from data_concierge.api.service import AskService
 from data_concierge.bootstrap import CompositionRoot
@@ -20,7 +21,13 @@ class StubAskService(AskService):
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    async def ask(self, prompt: str, user_id: int, session_id: str | None = None) -> Response:
+    async def ask(
+        self,
+        prompt: str,
+        user_id: int,
+        session_id: str | None = None,
+        listener: ProgressListener | None = None,
+    ) -> Response:
         self.prompts.append(prompt)
         return Response(status="ok", session_id="s1", message="Gotowe.")
 
