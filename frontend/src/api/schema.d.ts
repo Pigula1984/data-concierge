@@ -33,7 +33,9 @@ export interface paths {
         /**
          * Ask Stream
          * @description Server-sent events: each step of the turn as it begins (`step`, `text`), then the same
-         *     response as `POST /ask` (architecture 003, section 8).
+         *     response as `POST /ask` (architecture 003, section 8). When the turn fails unexpectedly,
+         *     where `POST /ask` answers 500, the stream ends without a response; a client treats that as
+         *     a failed turn.
          */
         post: operations["ask_stream_ask_stream_post"];
         delete?: never;
