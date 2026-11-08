@@ -95,7 +95,7 @@ export class ApiClient {
       }
     } finally {
       reader.releaseLock();
-      // The response has arrived; the rest of the stream, if any, is not needed.
+      // Nothing more is read; cancelling a stream that already ended does nothing.
       void body.cancel().catch(() => undefined);
     }
   }

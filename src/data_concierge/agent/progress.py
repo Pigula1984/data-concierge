@@ -33,6 +33,7 @@ class TurnProgress:
     GUARD = "Sprawdzam prośbę…"
     FIRST_ROUND = "Analizuję prośbę…"
     NEXT_ROUND = "Analizuję wyniki…"
+    PROCEDURE = "Pobieram dane"
     QUERY = "Liczę zestawienie…"
     DESCRIBE = "Sprawdzam wynik…"
     RETRY = "Poprawiam odpowiedź…"
@@ -52,7 +53,7 @@ class TurnProgress:
     def procedure_text(progress: str | None, procedure: str) -> str:
         """`Pobieram zamówienia sprzedaży (api.SalesOrder_List)…`; a procedure without a
         catalog `progress` still names what runs."""
-        return f"{progress or 'Pobieram dane'} ({procedure})…"
+        return f"{progress or TurnProgress.PROCEDURE} ({procedure})…"
 
     def guard(self) -> None:
         self._report("guard", self.GUARD)
