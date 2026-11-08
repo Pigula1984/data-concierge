@@ -46,7 +46,9 @@ describe("ChatView", () => {
     await send("Raport");
 
     expect(screen.getByRole("button", { name: "Wyślij" })).toBeDisabled();
+    // The prompt has moved into the conversation, so the field does not show it twice.
     expect(screen.getByRole("textbox", { name: "Twoja prośba" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Twoja prośba" })).toHaveValue("");
     expect(screen.getByRole("status")).toHaveTextContent("Czekam na odpowiedź");
 
     await act(async () => {

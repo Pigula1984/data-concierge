@@ -27,6 +27,11 @@ export class ValueFormatter {
     return this.decimal(String(value));
   }
 
+  /** A count of rows in a sentence, grouped like an amount: "14 244". */
+  count(value: number): string {
+    return this.decimal(String(value));
+  }
+
   /** Missing values first; numbers by value; text in Polish alphabetical order. */
   compare(left: CellValue, right: CellValue, type: ColumnType): number {
     if (left === null || right === null) {

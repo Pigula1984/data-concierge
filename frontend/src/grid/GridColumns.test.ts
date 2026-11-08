@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CellValue, ResponseTable } from "../api/ApiClient";
 import { ValueFormatter } from "../format/ValueFormatter";
-import { GridColumns, type GridRow } from "./GridColumns";
+import { GridColumns, type ColumnWidths, type GridRow } from "./GridColumns";
 
 const TABLE: ResponseTable = {
   handle: "r2",
@@ -46,9 +46,22 @@ describe("GridColumns", () => {
       "agNumberColumnFilter",
       "agNumberColumnFilter",
     ]);
-    expect([decimal?.type, integer?.type]).toEqual(["rightAligned", "rightAligned"]);
+    // Only the cells and the label move right; the header icons stay on the right edge like in
+    // every other column, so they are not read as part of the column to the left.
+    expect([decimal?.cellClass, integer?.cellClass]).toEqual([
+      "ag-right-aligned-cell",
+      "ag-right-aligned-cell",
+    ]);
+    expect([decimal?.headerClass, integer?.headerClass]).toEqual([
+      "result-grid__number-header",
+      "result-grid__number-header",
+    ]);
     expect([text?.filter, date?.filter]).toEqual(["agTextColumnFilter", "agTextColumnFilter"]);
-    expect(text?.type).toBeUndefined();
+    expect([text?.cellClass, text?.headerClass, text?.type]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 
   it("filters numeric columns by number, since decimals arrive as text", () => {
@@ -73,4 +86,23 @@ describe("GridColumns", () => {
 
     expect(sorted).toEqual(["-5.00", "9.50", "10.00"]);
   });
+
+  it.each([
+    [[120, 150], 1000, true],
+    [[400, 500, 300], 1000, false],
+  ])(
+    "stretches columns %j sized to their values only into free space (%i px)",
+    (widths, available, stretched) => {
+      const calls: string[] = [];
+      // Only the two calls the method makes; the grid's Column has many more members.
+      const api = {
+        getColumns: () => widths.map((width) => ({ getActualWidth: () => width })),
+        sizeColumnsToFit: () => calls.push("fit"),
+      } as unknown as ColumnWidths;
+
+      columns.fillWidth(api, available);
+
+      expect(calls).toEqual(stretched ? ["fit"] : []);
+    },
+  );
 });

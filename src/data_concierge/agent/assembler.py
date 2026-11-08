@@ -1,6 +1,7 @@
 """ResponseAssembler: the model's answer turned into the response of section 9."""
 
-from collections.abc import Sequence
+import re
+from collections.abc import Iterable, Sequence
 from typing import cast
 
 from data_concierge.agent.anchors import Anchors
@@ -16,11 +17,14 @@ from data_concierge.api.schemas import (
     ResponseColumn,
     ResponseTable,
 )
-from data_concierge.results.models import Handle, ProcedureLineage, StoredResult
+from data_concierge.core.types import Column, ColumnKind
+from data_concierge.results.models import Handle, JsonScalar, ProcedureLineage, StoredResult
 from data_concierge.results.service import ResultService
 
 ERROR_MESSAGE = "Nie udało się przygotować odpowiedzi. Identyfikator zgłoszenia: {correlation_id}."
 REFUSAL_MESSAGE = "Tej prośby nie wykonam. Odpowiadam tylko na pytania o dane firmy z katalogu."
+# Segments of a candidate description value: between commas, or around a spaced dash.
+SEGMENT_BREAK = re.compile(r",|\s[-\u2013]\s")
 
 
 class ResponseAssembler:
@@ -86,14 +90,28 @@ class ResponseAssembler:
             Candidate(
                 # The validator allowed only an int or text id column.
                 id=cast(int | str, row[index]),
-                description=", ".join(
-                    self._formatter.format(value, column.type, column.role)
+                description=self._description(
+                    (column, value)
                     for position, (column, value) in enumerate(zip(columns, row, strict=True))
                     if position != index
                 ),
             )
             for row in rows
         )
+
+    def _description(self, cells: Iterable[tuple[Column, JsonScalar]]) -> str:
+        """The values joined by commas. A text value that an earlier value already holds as a
+        whole segment is left out, e.g. the color after the product name "HL Mountain Frame -
+        Black, 38"; a value inside a code such as "FR-M94S-42" stays."""
+        parts: list[str] = []
+        seen: set[str] = set()
+        for column, value in cells:
+            text = self._formatter.format(value, column.type, column.role)
+            if column.type.kind is ColumnKind.STRING and text.casefold() in seen:
+                continue
+            parts.append(text)
+            seen |= {segment.strip().casefold() for segment in SEGMENT_BREAK.split(text)}
+        return ", ".join(parts)
 
     def _table(self, ref: TableRef) -> ResponseTable:
         exported = self._results.export(ref.handle, self._max_rows)

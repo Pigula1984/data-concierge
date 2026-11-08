@@ -1,10 +1,13 @@
-import type { ColDef } from "ag-grid-community";
+import type { ColDef, GridApi } from "ag-grid-community";
 
 import type { CellValue, ResponseColumn, ResponseTable } from "../api/ApiClient";
 import { ColumnType } from "../format/ColumnType";
 import type { ValueFormatter } from "../format/ValueFormatter";
 
 export type GridRow = Record<string, CellValue>;
+
+/** The part of the grid's API that sizes columns. */
+export type ColumnWidths = Pick<GridApi<GridRow>, "getColumns" | "sizeColumnsToFit">;
 
 /**
  * Turns a response table into grid columns and rows. Rows are keyed by column position, not
@@ -19,6 +22,20 @@ export class GridColumns {
 
   definitions(columns: readonly ResponseColumn[]): ColDef<GridRow, CellValue>[] {
     return columns.map((column, index) => this.definition(column, index));
+  }
+
+  /**
+   * Called once the columns are as wide as their values: a table narrower than the space it
+   * has is stretched to fill it; a wider one keeps its widths and scrolls sideways.
+   */
+  fillWidth(api: ColumnWidths, available: number): void {
+    const used = (api.getColumns() ?? []).reduce(
+      (width, column) => width + column.getActualWidth(),
+      0,
+    );
+    if (used < available) {
+      api.sizeColumnsToFit();
+    }
   }
 
   rows(table: ResponseTable): GridRow[] {
@@ -40,7 +57,10 @@ export class GridColumns {
       filterValueGetter: type.isNumber
         ? (params) => GridColumns.number(params.data?.[field] ?? null)
         : undefined,
-      type: type.isNumber ? "rightAligned" : undefined,
+      // Not the grid's "rightAligned" type: it also moves the header icons to the left edge,
+      // where they read as part of the previous column.
+      cellClass: type.isNumber ? "ag-right-aligned-cell" : undefined,
+      headerClass: type.isNumber ? "result-grid__number-header" : undefined,
     };
   }
 

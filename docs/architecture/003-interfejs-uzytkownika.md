@@ -293,6 +293,18 @@ Nie zweryfikowane: Chainlit i escapowanie w tooltipach ECharts (do sprawdzenia w
 - **CSP tylko na odpowiedziach frontendu**, ze `style-src 'unsafe-inline'` dla stylów motywu AG Grid (sekcja 9).
 - **Wersje:** TypeScript 5.9, bo `typescript-eslint` i `openapi-typescript` nie wspierają jeszcze 7.0; jsdom 29, bo 30 wymaga Node 24.15. Wszystkie wersje przypięte dokładnie w `frontend/package.json`.
 - **Rozmiar paczki:** AG Grid z `AllCommunityModule` daje ok. 1,4 MB JS (ok. 410 KB po gzip). Zawężenie modułów do sortowania, filtrów i modelu wierszy po stronie klienta to optymalizacja na później.
-- **Teksty AG Grid** (menu filtrów, podpowiedzi) są po angielsku. Polska lokalizacja siatki to osobna paczka i sprawa na później.
+- **Teksty AG Grid** (menu filtrów, podpowiedzi) są po polsku z paczki `@ag-grid-community/locale` (od 2026-11-08, wcześniej po angielsku).
 - **Montowanie pod `/`:** przy zbudowanym interfejsie zapytanie złą metodą albo z końcowym ukośnikiem (np. `GET /ask`, `GET /health/`) dostaje 404 z plików statycznych zamiast 405 albo przekierowania FastAPI. Poprawne wywołania API działają bez zmian, więc przyjmujemy to w POC.
 - **`frontend/dist` i `node_modules` są poza gitem.** Po klonie interfejs trzeba zbudować (`npm ci`, `npm run build`); bez tego `/` podpowiada polecenia.
+
+## 14. Poprawki po sprawdzeniu w przeglądarce (2026-11-08)
+
+Właściciel poprosił o sprawdzenie strony w Chrome przez Playwright. Lista kontrolna z PR #23 (P1–P5, kandydaci, 10 000 wierszy, restart serwera, audyt) przeszła. Te poprawki dotyczą wyglądu:
+
+- **Szerokość kolumn:** kolumny dostają szerokość swoich wartości (z nagłówkiem). Tabela węższa od siatki rozciąga się na całą szerokość, a szersza zachowuje szerokości i przewija się w bok. Wcześniej każda kolumna miała 200 px, więc wąskie tabele zostawiały pustą przestrzeń, a w szerokich ostatnie kolumny były schowane.
+- **Krótkie tabele** kończą się na ostatnim wierszu. AG Grid zostawia miejsce na komunikat o braku wierszy, a pustą tabelę i tak pokazujemy tekstem „Brak wierszy.”.
+- **Nagłówki kolumn liczbowych:** etykieta stoi po prawej nad wartościami, a ikona filtra zostaje przy prawej krawędzi jak w innych kolumnach. Typ `rightAligned` przenosił ikonę na lewą krawędź, gdzie wyglądała na część poprzedniej kolumny.
+- **Informacja o obcięciu** grupuje cyfry jak kwoty: „Pokazano 10 000 z 14 244 wierszy”.
+- **Pole promptu** czyści się po wysłaniu, bo prompt pojawia się w rozmowie. Gdy tura się nie uda (odmowa, błąd połączenia), tekst wraca do pola.
+- **Opis kandydata** pomija wartość tekstową, której wszystkie słowa padły już we wcześniejszej wartości, np. kolor i rozmiar po nazwie „HL Mountain Frame - Black, 38” (002, sekcja 4.3).
+- **Ikona strony** (`favicon.svg`).

@@ -40,6 +40,21 @@ body {
   height: 420px;
 }
 
+/* The grid keeps room for its "no rows" overlay under short tables; empty tables never reach
+   the grid here, so a short table ends at its last row. */
+.result-grid--fit .ag-grid-scrolling-rows {
+  min-height: 0 !important;
+}
+
+/* A number column's label sits right, above its values; its icons stay on the right edge. */
+.result-grid__number-header .ag-header-cell-label {
+  justify-content: flex-end;
+}
+
+.result-grid__number-header .ag-header-cell-text {
+  margin-right: 4px;
+}
+
 .app-header {
   display: flex;
   flex-wrap: wrap;

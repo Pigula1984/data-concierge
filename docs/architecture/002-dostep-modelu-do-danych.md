@@ -86,7 +86,7 @@ W v1 model sam przepisywał kandydatów (`Candidate.id`, `description`) z wiersz
  "candidates_from": {"handle": "r2", "id_column": "CustomerID"}}
 ```
 
-Backend buduje listę `candidates` w odpowiedzi: `id` z kolumny `id_column`, a `description` z wartości pozostałych kolumn uchwytu złączonych przecinkami. Kolumna `id_column` musi być liczbą albo tekstem i nie może być wrażliwa, bo wybór użytkownika wraca do modelu jako `id`. Kształt opisu model ustala zapytaniem `query`, np. `SELECT "CustomerID", "AccountNumber", "Territory", count(*) AS order_count …`. Kontrakt odpowiedzi (001, sekcja 9) się nie zmienia.
+Backend buduje listę `candidates` w odpowiedzi: `id` z kolumny `id_column`, a `description` z wartości pozostałych kolumn uchwytu złączonych przecinkami. Wartość tekstowa, której wszystkie słowa padły już we wcześniejszej wartości, jest pomijana, np. kolor i rozmiar po nazwie produktu, która je zawiera. Kolumna `id_column` musi być liczbą albo tekstem i nie może być wrażliwa, bo wybór użytkownika wraca do modelu jako `id`. Kształt opisu model ustala zapytaniem `query`, np. `SELECT "CustomerID", "AccountNumber", "Territory", count(*) AS order_count …`. Kontrakt odpowiedzi (001, sekcja 9) się nie zmienia.
 
 Ten sam mechanizm działa w trybie ograniczonym. To jedna ścieżka zamiast dwóch, a model nie przepisuje danych (D8).
 
