@@ -70,7 +70,7 @@ Rozmowa: każdy wiersz standardowego wejścia to kolejna wiadomość w tej samej
 
 `uv run data-concierge chat --user 1` bez potoku czyta wiadomości z klawiatury. Koniec rozmowy to `Ctrl+Z`, potem `Enter`.
 
-`chat` pokazuje samą rozmowę: komentarz, tabele (pierwsze 20 wierszy), założenia i pytanie doprecyzowujące z kandydatami. Na końcu wypisuje polecenie `audit` z `session_id` rozmowy. `chat --diagnostic` wypisuje zamiast tego pełną odpowiedź JSON każdej tury, z `session_id` i `provenance`.
+`chat` pokazuje samą rozmowę: w trakcie tury jej kroki (np. „Pobieram zamówienia sprzedaży (api.SalesOrder_List)…”), potem komentarz, tabele (pierwsze 20 wierszy), założenia i pytanie doprecyzowujące z kandydatami. Na końcu wypisuje polecenie `audit` z `session_id` rozmowy. `chat --diagnostic` wypisuje zamiast tego pełną odpowiedź JSON każdej tury, z `session_id` i `provenance`.
 
 `ask` zawsze wypisuje odpowiedź JSON. Kod wyjścia `ask` to 1 przy statusie `error`.
 
@@ -99,7 +99,7 @@ npm ci
 npm run build
 ```
 
-Strona woła `POST /ask` jak każdy inny klient: wysyła tylko nowy prompt, `user_id` z pola w nagłówku i `session_id`, a historię rozmowy trzyma backend. Odświeżenie strony zaczyna nową rozmowę. Przycisk kandydata w pytaniu doprecyzowującym wysyła sam identyfikator (np. `Wybieram 12698.`), bo opis kandydata jest tylko dla użytkownika. Bez zbudowanego interfejsu `/` podpowiada, jak go zbudować, a API działa bez zmian. Katalog zbudowanej aplikacji zmienia `DC_WEB_DIST_PATH`.
+Strona woła `POST /ask/stream`: ten sam kontrakt co `POST /ask`, ale z krokami tury jako zdarzeniami SSE, które strona pokazuje pod prośbą, zanim przyjdzie odpowiedź. Wysyła tylko nowy prompt, `user_id` z pola w nagłówku i `session_id`, a historię rozmowy trzyma backend. Odświeżenie strony zaczyna nową rozmowę. Przycisk kandydata w pytaniu doprecyzowującym wysyła sam identyfikator (np. `Wybieram 12698.`), bo opis kandydata jest tylko dla użytkownika. Bez zbudowanego interfejsu `/` podpowiada, jak go zbudować, a API działa bez zmian. Katalog zbudowanej aplikacji zmienia `DC_WEB_DIST_PATH`.
 
 Praca nad interfejsem: `npm run dev` w `frontend/` uruchamia serwer deweloperski Vite (`http://localhost:5173`) z przeładowaniem, który przekazuje `/ask` i `/health` do uvicorna na porcie 8000. Typy kontraktu w TypeScript powstają z OpenAPI backendu (`npm run api:types`, pod spodem `uv run data-concierge openapi`), a `npm run api:check` sprawdza, że są aktualne. Architektura: [`003-interfejs-uzytkownika.md`](docs/architecture/003-interfejs-uzytkownika.md), standard kodu: [`typescript-react.md`](docs/standards/typescript-react.md).
 
