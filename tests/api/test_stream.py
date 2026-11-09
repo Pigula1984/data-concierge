@@ -149,3 +149,73 @@ async def test_a_failed_turn_ends_the_stream_without_a_response(
 
     assert items == []
     assert "streamed turn failed" in caplog.text
+
+
+class SlowAskService(AskService):
+    """A turn that reports a step, then runs for `seconds` (forever when None)."""
+
+    def __init__(self, seconds: float | None) -> None:
+        self.seconds = seconds
+        self.finished = False
+        self.cancelled = False
+
+    async def ask(
+        self,
+        prompt: str,
+        user_id: int,
+        session_id: str | None = None,
+        listener: ProgressListener | None = None,
+    ) -> Response:
+        if listener is not None:
+            listener(ProgressEvent(step="guard", text="Sprawdzam prośbę…"))
+        try:
+            if self.seconds is None:
+                await anyio.sleep_forever()
+            else:
+                await anyio.sleep(self.seconds)
+        except anyio.get_cancelled_exc_class():
+            self.cancelled = True
+            raise
+        self.finished = True
+        return Response(status="ok", session_id="s1", message="Gotowe.")
+
+
+async def orphan(stream: TurnStream) -> None:
+    """Starts a turn and disconnects its client after the first step."""
+    events = stream.events("Raport", 7, None)
+    await anext(events)
+    await events.aclose()
+
+
+async def test_shutdown_waits_for_a_turn_whose_client_has_gone() -> None:
+    service = SlowAskService(seconds=0.1)
+    stream = TurnStream(service, drain_seconds=5)
+    await orphan(stream)
+
+    async with stream.lifespan(object()):
+        pass
+
+    assert service.finished
+    assert stream.running == 0
+
+
+async def test_shutdown_cancels_a_turn_that_outlasts_the_drain(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = SlowAskService(seconds=None)
+    stream = TurnStream(service, drain_seconds=0.05)
+    await orphan(stream)
+
+    with anyio.fail_after(5), caplog.at_level(logging.WARNING, logger="data_concierge"):
+        await stream.drain()
+
+    assert service.cancelled
+    assert stream.running == 0
+    assert "1 streamed turns cancelled on shutdown" in caplog.text
+
+
+async def test_shutdown_with_no_running_turn_returns_at_once() -> None:
+    stream = TurnStream(SlowAskService(seconds=None), drain_seconds=60)
+
+    with anyio.fail_after(1):
+        await stream.drain()

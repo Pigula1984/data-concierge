@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from pydantic_ai.models import Model, infer_model
 from pydantic_ai.providers import Provider, infer_provider
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from starlette.types import Lifespan
 
 from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.comment import CommentService
@@ -19,7 +20,7 @@ from data_concierge.agent.progress_capability import ProgressCapability
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
-from data_concierge.api.controller import router
+from data_concierge.api.controller import prompt_too_long, router
 from data_concierge.api.service import AskService
 from data_concierge.api.sessions import InMemorySessionRepository, Session, SessionRepository
 from data_concierge.api.stream import TurnStream
@@ -32,6 +33,7 @@ from data_concierge.catalog.repository import (
 )
 from data_concierge.catalog.service import CatalogService
 from data_concierge.core.context import RoleDirectory
+from data_concierge.core.errors import PromptTooLongError
 from data_concierge.core.settings import ModelExposure, Settings
 from data_concierge.core.sqlserver import SqlServerClient
 from data_concierge.procedures.repository import ProcedureRepository, SqlServerProcedureRepository
@@ -75,17 +77,19 @@ class CompositionRoot:
         self.ask_service = ask_service
 
     @staticmethod
-    def api_app() -> FastAPI:
+    def api_app(lifespan: Lifespan[FastAPI] | None = None) -> FastAPI:
         """The HTTP API routes without services; its OpenAPI schema is the contract the
         frontend's types are generated from."""
-        app = FastAPI(title="Data Concierge")
+        app = FastAPI(title="Data Concierge", lifespan=lifespan)
         app.include_router(router)
+        app.add_exception_handler(PromptTooLongError, prompt_too_long)
         return app
 
     def http_app(self, frontend: WebFrontend | None = None) -> FastAPI:
-        app = self.api_app()
+        turn_stream = TurnStream(self.ask_service)
+        app = self.api_app(turn_stream.lifespan)
         app.state.ask_service = self.ask_service
-        app.state.turn_stream = TurnStream(self.ask_service)
+        app.state.turn_stream = turn_stream
         if frontend is not None:
             frontend.mount(app)
         return app

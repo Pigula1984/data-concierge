@@ -3,12 +3,14 @@ AskService."""
 
 import json
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 
 from data_concierge.agent.progress import ProgressEvent, ProgressListener
 from data_concierge.api.schemas import Response
 from data_concierge.api.service import AskService
+from data_concierge.api.stream import TurnStream
 from data_concierge.bootstrap import CompositionRoot
 from data_concierge.core.errors import PromptTooLongError
 
@@ -131,6 +133,45 @@ def test_stream_request_without_user_is_rejected_with_422(
 
     assert reply.status_code == 422
     assert stub.calls == []
+
+
+class SlowStubAskService(StubAskService):
+    """Answers after a pause, so its turn is still running when the client goes away."""
+
+    def __init__(self, response: Response) -> None:
+        super().__init__(response)
+        self.finished = False
+
+    async def ask(
+        self,
+        prompt: str,
+        user_id: int,
+        session_id: str | None = None,
+        listener: ProgressListener | None = None,
+    ) -> Response:
+        response = await super().ask(prompt, user_id, session_id, listener)
+        await anyio.sleep(0.1)
+        self.finished = True
+        return response
+
+
+def test_server_shutdown_finishes_a_streamed_turn_whose_client_has_gone() -> None:
+    stub = SlowStubAskService(Response(status="ok", session_id="s1", message="Gotowe."))
+    app = CompositionRoot(stub).http_app()
+    stream: TurnStream = app.state.turn_stream
+
+    async def orphan() -> None:
+        events = stream.events("Raport", 7, None)
+        await anext(events)
+        await events.aclose()
+
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(orphan)
+        assert stream.running == 1
+
+    assert stub.finished
+    assert stream.running == 0
 
 
 def test_health(client: TestClient) -> None:
