@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 
-import type { AskRequest, AskResponse, TurnResult } from "../api/ApiClient";
+import type { AskRequest, AskResponse, TurnResult, TurnStep } from "../api/ApiClient";
 
 /** Sends one turn; `ApiClient` in the app, a scripted client in tests. */
 export interface TurnClient {
-  ask(request: AskRequest): Promise<TurnResult>;
+  ask(request: AskRequest, onStep: (step: TurnStep) => void): Promise<TurnResult>;
 }
 
 export type ChatEntry =
@@ -15,6 +15,8 @@ export type ChatEntry =
 export interface Conversation {
   entries: readonly ChatEntry[];
   pending: boolean;
+  /** The steps of the running turn, oldest first; the same step twice in a row shows once. */
+  steps: readonly string[];
   /** Resolves true when the backend answered, false when the prompt should stay for a retry. */
   send: (prompt: string) => Promise<boolean>;
   reset: () => void;
@@ -27,6 +29,7 @@ export interface Conversation {
 export function useConversation(client: TurnClient, userId: number): Conversation {
   const [entries, setEntries] = useState<readonly ChatEntry[]>([]);
   const [pending, setPending] = useState(false);
+  const [steps, setSteps] = useState<readonly string[]>([]);
   const sessionId = useRef<string | null>(null);
   const nextId = useRef(0);
 
@@ -39,12 +42,14 @@ export function useConversation(client: TurnClient, userId: number): Conversatio
       const promptId = nextId.current++;
       setEntries((current) => [...current, { kind: "prompt", id: promptId, text }]);
       setPending(true);
-      const result = await client.ask({
-        prompt: text,
-        user_id: userId,
-        session_id: sessionId.current,
-      });
+      const result = await client.ask(
+        { prompt: text, user_id: userId, session_id: sessionId.current },
+        (step) => {
+          setSteps((current) => (current.at(-1) === step.text ? current : [...current, step.text]));
+        },
+      );
       setPending(false);
+      setSteps([]);
       const id = nextId.current++;
       if (result.kind === "response") {
         sessionId.current = result.response.session_id;
@@ -71,5 +76,5 @@ export function useConversation(client: TurnClient, userId: number): Conversatio
     setEntries([]);
   }, [pending]);
 
-  return { entries, pending, send, reset };
+  return { entries, pending, steps, send, reset };
 }

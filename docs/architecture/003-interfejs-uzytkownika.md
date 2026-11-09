@@ -1,6 +1,6 @@
 # Data Concierge: interfejs użytkownika (etap 3)
 
-Status: **kroki 3A i 3B wdrożone** według planów [`2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md`](../plans/2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md) i [`2026-11-08-1015-feat-wykresy-wybierane-przez-model-plan.md`](../plans/2026-11-08-1015-feat-wykresy-wybierane-przez-model-plan.md); krok 3C to projekt. Data: 2026-11-08. [`001-architektura-data-concierge.md`](001-architektura-data-concierge.md) odsyła tu w sekcjach 1, 4 i 12. Odejścia od pierwotnego projektu i ustalenia z implementacji są w sekcjach 13 (3A), 14 (poprawki po sprawdzeniu w przeglądarce) i 15 (3B).
+Status: **kroki 3A, 3B i 3C wdrożone** według planów [`2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md`](../plans/2026-11-04-1810-feat-interfejs-czat-i-tabele-plan.md), [`2026-11-08-1015-feat-wykresy-wybierane-przez-model-plan.md`](../plans/2026-11-08-1015-feat-wykresy-wybierane-przez-model-plan.md) i [`2026-11-08-1513-feat-postep-tury-plan.md`](../plans/2026-11-08-1513-feat-postep-tury-plan.md). Data: 2026-11-08. [`001-architektura-data-concierge.md`](001-architektura-data-concierge.md) odsyła tu w sekcjach 1, 4 i 12. Odejścia od pierwotnego projektu i ustalenia z implementacji są w sekcjach 13 (3A), 14 (poprawki po sprawdzeniu w przeglądarce), 15 (3B) i 16 (3C).
 
 ## 1. Cel i zakres
 
@@ -230,12 +230,14 @@ Pomysły ze [`szybsza-tura`](../ideation/2026-10-28-szybsza-tura.md) czekały na
 
 **Decyzja (D3, 2026-11-04):** 3A i 3B bez streamingu, z wskaźnikiem czasu (sekcja 5). Postęp tury to osobny krok **3C**, który robimy po 3B. Szkic: endpoint strumieniowy (np. `POST /ask/stream`), który wysyła zdarzenia postępu z dekoratora narzędzi (tego samego, który zapisuje `tool_executed`) i z `AskService` (strażnik, faza komentarza), a na końcu pełny `Response`. Model nie musi streamować, więc uwaga o `RecordingModel` tego kroku nie dotyczy. Przed 3C warto zmierzyć wpływ myślenia na czas tury (pierwszy krok z dokumentu `szybsza-tura`).
 
-Format strumienia jest otwarty i do wyboru w planie 3C:
+Format strumienia był otwarty i do wyboru w planie 3C:
 
 | Wariant | Za | Przeciw |
 |---------|-----|---------|
 | Własne zdarzenia SSE (`progress`, `response`) | Najprostsze, pełna kontrola, klient czyta je `fetch` bez bibliotek | Własny format, bez gotowych klientów |
 | Format AG-UI albo Vercel AI z naszego endpointu (sekcja 4.1) | Gotowe klienty protokołu | Protokół zakłada historię po stronie klienta i strumień tekstu modelu; nasz `Response` trzeba upchnąć w zdarzeniu niestandardowym |
+
+**Decyzja (plan 3C, 2026-11-08):** własne zdarzenia SSE. Wdrożenie opisuje sekcja 16.
 
 ## 9. Bezpieczeństwo interfejsu (POC)
 
@@ -250,16 +252,17 @@ Format strumienia jest otwarty i do wyboru w planie 3C:
 
 ## 10. Zmiany w kodzie według modułów
 
-| Moduł | 3A | 3B |
-|-------|----|----|
-| `frontend/` (nowy, TypeScript) | Projekt Vite + React: `ApiClient`, typy z OpenAPI, okno czatu, siatka, formatowanie kwot, testy Vitest | `ChartOptionsBuilder`, `ChartView`, przełącznik rodzaju |
-| `web` (nowy, Python) | Cienki kontroler serwujący zbudowane pliki z `frontend/dist` pod `/` | — |
-| `bootstrap` | `http_app()` montuje moduł `web` | — |
-| `api` | Bez zmian kontraktu. Polecenie `data-concierge openapi` zapisuje schemat API bez bazy i modelu | `ResponseChart` w `Response` |
-| `agent` | — | `ChartRequest` w `AgentAnswer`, tytuł w `texts`, kontrola w `ResponseAssembler`, instrukcje o wyborze wykresu, wykres w szkicu dla fazy komentarza |
-| `audit` | — | Zdarzenie `response` zapisuje wykres razem z odpowiedzią, bez zmian w kodzie |
-| testy | Test endpointu `/` i plików statycznych | Testy kontroli specyfikacji, przypadki w zestawie ewaluacyjnym |
-| `docs/standards` | Standard TypeScript i React (sekcja 4.3) | — |
+| Moduł | 3A | 3B | 3C |
+|-------|----|----|----|
+| `frontend/` (nowy, TypeScript) | Projekt Vite + React: `ApiClient`, typy z OpenAPI, okno czatu, siatka, formatowanie kwot, testy Vitest | `ChartOptionsBuilder`, `ChartView`, przełącznik rodzaju | `SseParser`, `ApiClient` na `/ask/stream`, `TurnProgressView` zamiast `ElapsedTimer` |
+| `web` (nowy, Python) | Cienki kontroler serwujący zbudowane pliki z `frontend/dist` pod `/` | — | — |
+| `bootstrap` | `http_app()` montuje moduł `web` | — | `TurnStream` w stanie aplikacji, `ProgressCapability` z katalogu |
+| `api` | Bez zmian kontraktu. Polecenie `data-concierge openapi` zapisuje schemat API bez bazy i modelu | `ResponseChart` w `Response` | `POST /ask/stream`, `TurnStream`, słuchacz w `AskService.ask`, kroki w `data-concierge chat` |
+| `agent` | — | `ChartRequest` w `AgentAnswer`, tytuł w `texts`, kontrola w `ResponseAssembler`, instrukcje o wyborze wykresu, wykres w szkicu dla fazy komentarza | `TurnProgress`, `ProgressCapability` obok `AuditCapability` |
+| `catalog` | — | — | Opcjonalne pole `progress` |
+| `audit` | — | Zdarzenie `response` zapisuje wykres razem z odpowiedzią, bez zmian w kodzie | Bez zmian |
+| testy | Test endpointu `/` i plików statycznych | Testy kontroli specyfikacji, przypadki w zestawie ewaluacyjnym | Kolejność kroków, strumień, rozłączenie klienta, parser SSE |
+| `docs/standards` | Standard TypeScript i React (sekcja 4.3) | — | — |
 
 Zmiana schematu `present_result` zmienia raz stały początek rozmowy i cache promptu. To jednorazowy koszt przy wdrożeniu, a nie w każdej turze.
 
@@ -269,7 +272,7 @@ Zmiana schematu `present_result` zmienia raz stały początek rozmowy i cache pr
 |---|---------|--------------|
 | D1 | Technologia interfejsu | **Zdecydowane: C**, React + TypeScript + Vite w `frontend/`, typy z OpenAPI, ECharts, zbudowane pliki serwowane przez FastAPI (sekcja 4.3). |
 | D2 | Czy model pyta o rodzaj wykresu przed narysowaniem | **Zdecydowane:** rysuje od razu z uzasadnieniem w `assumptions`, a użytkownik przełącza rodzaj w interfejsie bez modelu. |
-| D3 | Streaming teraz czy później | **Zdecydowane:** krok 3C z postępem tury, po 3B. Na start wskaźnik czasu. Format strumienia (własne SSE czy AG-UI/Vercel AI) do wyboru w planie 3C (sekcja 8). |
+| D3 | Streaming teraz czy później | **Zdecydowane:** krok 3C z postępem tury, po 3B. Na start wskaźnik czasu. Format strumienia: własne zdarzenia SSE (plan 3C, sekcje 8 i 16). |
 | D4 | Serwowanie | **Zdecydowane razem z D1:** zbudowane pliki serwowane przez tę samą aplikację i domenę co `POST /ask`, bez CDN. Przy pracy lokalnej serwer Vite z proxy. |
 | D5 | Siatka | **Zdecydowane:** AG Grid React (Community), zamknięty w komponencie `ResultGrid`. TanStack Table jako ewentualna wymiana później (sekcja 6). |
 
@@ -328,3 +331,16 @@ Sekcja 7 opisuje projekt, a ta sekcja to, co z niego wyszło w kodzie. Podsumowa
 - **Tytuł wykresu** jest nagłówkiem nad wykresem (JSX), a nie tytułem ECharts, więc ma ten sam styl co tytuły tabel i jest zwykłym tekstem.
 - **Rozmiar paczki:** ECharts dodał ok. 610 KB do zbudowanego JS (z 1,47 MB do 2,08 MB, gzip z 419 KB do 627 KB).
 - **Terminal i audyt:** `data-concierge chat` wypisuje jedną linię „Wykres liniowy: tytuł (x; y)”, a `audit` pokazuje wykres w zdarzeniu `response`.
+
+## 16. Uzupełnienia z implementacji kroku 3C (2026-11-08)
+
+Krok 3C wdrożono według planu [`2026-11-08-1513-feat-postep-tury-plan.md`](../plans/2026-11-08-1513-feat-postep-tury-plan.md). Kontrakt endpointu opisuje 001, sekcja 9.
+
+- **Kroki i teksty.** Rodzaje: `guard`, `model`, `procedure`, `query`, `describe`, `retry`, `comment`. Teksty są stałymi w `TurnProgress`, a krok procedury bierze opis z pola `progress` katalogu i dopisuje nazwę techniczną, np. „Pobieram zamówienia sprzedaży (api.SalesOrder_List)…”. Argumentów wywołań krok nie zawiera, bo wybiera je model i mogą nieść dane z prośby. Pole `progress` nie trafia do tekstów dla modelu, więc instrukcje i początek rozmowy się nie zmieniły.
+- **Skąd kroki.** `AskService` zgłasza strażnika i fazę komentarza. `ProgressCapability` (capability Pydantic AI obok `AuditCapability`) zgłasza rundy modelu w `before_model_request` i narzędzia w `before_tool_execute`, czyli zanim procedura ruszy. Zdarzenie audytu `tool_executed` powstaje dopiero po narzędziu, więc się nie nadawało.
+- **Poprawka odpowiedzi.** Runda, w której model poprawia odrzucone `present_result`, daje „Poprawiam odpowiedź…”. Capability rozpoznaje ją po `RetryPromptPart` dla `present_result` w ostatnim żądaniu. Hak `on_output_validate_error` w Pydantic AI 2.55 widzi tylko błędy schematu, a kontrole backendu (kotwice, wykres, kandydaci) działają jako przetwarzanie wyjścia i ten hak je omija.
+- **Format zdarzeń.** Plan zakładał nazwy zdarzeń `progress` i `response`. FastAPI 0.143 dokłada schemat elementów strumienia do OpenAPI tylko wtedy, gdy endpoint oddaje zwykłe modele, a nie `ServerSentEvent` z nazwą. Strumień ma więc same linie `data:` z `ProgressEvent` albo `Response`, a strona rozróżnia je po polu `step`. Dzięki temu oba typy przychodzą do TypeScript z OpenAPI (`StreamItem`).
+- **Rozłączenie klienta.** FastAPI anuluje generator strumienia, gdy klient się rozłączy. Tura biegnie więc w osobnym zadaniu asyncio (`TurnStream`), a generator tylko czyta jej kolejkę. Przeładowanie strony w trakcie tury nie urywa jej: sesja dostaje historię, a audyt zdarzenie `response`.
+- **Strona.** `EventSource` nie wysyła `POST`, więc `ApiClient` czyta ciało przez `fetch` i klasę `SseParser`, bez nowej paczki. Lista kroków stoi pod prośbą z licznikiem sekund. Ten sam krok kilka razy z rzędu, np. przy równoległych wywołaniach jednej procedury, pokazuje się raz.
+- **Sprawdzenie.** W Chrome z prawdziwą bazą i modelem skryptowym (1,5 s na rundę) kroki przychodziły w trakcie tury, zarówno z buildu, jak i przez proxy Vite w trybie dev, bez buforowania.
+

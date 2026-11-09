@@ -1,13 +1,13 @@
 import { AnswerView } from "./AnswerView";
 import { CandidatePrompt } from "./CandidatePrompt";
-import { ElapsedTimer } from "./ElapsedTimer";
 import { PromptForm } from "./PromptForm";
+import { TurnProgressView } from "./TurnProgressView";
 import { useConversation, type TurnClient } from "./useConversation";
 
 const CANDIDATE_PROMPT = new CandidatePrompt();
 
 export function ChatView({ client, userId }: { client: TurnClient; userId: number }) {
-  const { entries, pending, send, reset } = useConversation(client, userId);
+  const { entries, pending, steps, send, reset } = useConversation(client, userId);
   // Only a newer answer locks the candidates; a failed or refused turn leaves them to retry.
   const lastAnswerId = entries.findLast((entry) => entry.kind === "answer")?.id;
 
@@ -49,7 +49,7 @@ export function ChatView({ client, userId }: { client: TurnClient; userId: numbe
           }
         })}
       </div>
-      {pending && <ElapsedTimer />}
+      {pending && <TurnProgressView steps={steps} />}
       <PromptForm disabled={pending} onSend={send} />
     </section>
   );

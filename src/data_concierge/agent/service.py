@@ -16,6 +16,7 @@ from data_concierge.agent.charts import ChartPolicy
 from data_concierge.agent.deps import AgentDeps
 from data_concierge.agent.models import OUTPUT_TOOL, AgentAnswer, AgentTurn, CandidatesFrom
 from data_concierge.agent.output import OutputPolicy
+from data_concierge.agent.progress_capability import ProgressCapability
 from data_concierge.audit.service import TurnAudit
 from data_concierge.core.settings import Settings
 from data_concierge.core.types import ColumnKind
@@ -37,7 +38,9 @@ class AgentService:
         tools: Sequence[Tool[AgentDeps]],
         instructions: str,
         settings: Settings,
+        progress: ProgressCapability | None = None,
     ) -> None:
+        """Without `progress`, procedure steps name the tool instead of the catalog text."""
         self._agent = Agent(
             model,
             deps_type=AgentDeps,
@@ -49,7 +52,7 @@ class AgentService:
             # An answer ends the turn before tools called in the same response run, so it can
             # only name handles whose summaries the model has already seen (section 7.5).
             end_strategy="early",
-            capabilities=[AuditCapability()],
+            capabilities=[AuditCapability(), progress or ProgressCapability({})],
         )
         self._model_name = model if isinstance(model, str) else model.model_name
         self._max_candidates = settings.model_max_rows

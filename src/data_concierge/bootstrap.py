@@ -15,12 +15,14 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from data_concierge.agent.assembler import ResponseAssembler
 from data_concierge.agent.comment import CommentService
 from data_concierge.agent.guard import PromptGuard
+from data_concierge.agent.progress_capability import ProgressCapability
 from data_concierge.agent.prompts import AgentInstructions
 from data_concierge.agent.registry import ProcedureToolFactory, ToolRegistry
 from data_concierge.agent.service import AgentService
 from data_concierge.api.controller import router
 from data_concierge.api.service import AskService
 from data_concierge.api.sessions import InMemorySessionRepository, Session, SessionRepository
+from data_concierge.api.stream import TurnStream
 from data_concierge.audit.repository import AuditLog, JsonlAuditLog, NullAuditLog
 from data_concierge.audit.service import AuditService, AuditTrail
 from data_concierge.catalog.repository import (
@@ -83,6 +85,7 @@ class CompositionRoot:
     def http_app(self, frontend: WebFrontend | None = None) -> FastAPI:
         app = self.api_app()
         app.state.ask_service = self.ask_service
+        app.state.turn_stream = TurnStream(self.ask_service)
         if frontend is not None:
             frontend.mount(app)
         return app
@@ -125,6 +128,7 @@ class CompositionRoot:
             ToolRegistry(catalog, tool_factory, strict, exposure).tools(),
             AgentInstructions(catalog, data_ranges, exposure, settings.model_max_rows).text(),
             settings,
+            ProgressCapability.for_catalog(catalog),
         )
         comments = CommentService(model, settings)
         sessions = sessions if sessions is not None else InMemorySessionRepository()

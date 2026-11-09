@@ -12,6 +12,7 @@ from pydantic import JsonValue
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
+from data_concierge.agent.progress import ProgressEvent, ProgressListener
 from data_concierge.api.cli import AuditTrailPrinter, CommandLine, ConversationPrinter, main
 from data_concierge.api.schemas import (
     Candidate,
@@ -44,13 +45,23 @@ class StubAskService(AskService):
         self.drop_on_error = drop_on_error
         self.dropped: set[str] = set()
         self.calls: list[tuple[str, int, str | None]] = []
+        self.steps: tuple[ProgressEvent, ...] = ()
 
-    async def ask(self, prompt: str, user_id: int, session_id: str | None = None) -> Response:
+    async def ask(
+        self,
+        prompt: str,
+        user_id: int,
+        session_id: str | None = None,
+        listener: ProgressListener | None = None,
+    ) -> Response:
         """With `drop_on_error`, an error response drops its session, as after an engine failure."""
         self.calls.append((prompt, user_id, session_id))
         response = self.responses.pop(0)
         if isinstance(response, PromptTooLongError):
             raise response
+        if listener is not None:
+            for step in self.steps:
+                listener(step)
         if self.drop_on_error and response.status == "error":
             self.dropped.add(response.session_id)
         return response
@@ -197,6 +208,46 @@ async def test_chat_prints_the_answer_without_session_ids_or_provenance() -> Non
     assert "s1" not in turn
     assert "api.SalesOrder_List" not in turn
     assert closing.strip() == "uv run data-concierge audit s1"
+
+
+STEPS = (
+    ProgressEvent(step="guard", text="Sprawdzam prośbę…"),
+    ProgressEvent(step="procedure", text="Pobieram zamówienia sprzedaży (api.SalesOrder_List)…"),
+)
+
+
+async def test_chat_prints_the_steps_of_a_turn_between_the_prompt_and_the_answer() -> None:
+    service = StubAskService(ok())
+    service.steps = STEPS
+
+    _, output = await run(service, "chat", "--user", "7", stdin="Sprzedaż\n")
+
+    lines = output.splitlines()
+    assert lines[:4] == [
+        "> Sprzedaż",
+        "  Sprawdzam prośbę…",
+        "  Pobieram zamówienia sprzedaży (api.SalesOrder_List)…",
+        "",
+    ]
+    assert lines[4] == "Gotowe."
+
+
+async def test_chat_diagnostic_prints_only_the_response_json() -> None:
+    service = StubAskService(ok())
+    service.steps = STEPS
+
+    _, output = await run(service, "chat", "--user", "7", "--diagnostic", stdin="Sprzedaż\n")
+
+    assert [document["message"] for document in documents(output)] == ["Gotowe."]
+
+
+async def test_ask_prints_no_steps() -> None:
+    service = StubAskService(ok())
+    service.steps = STEPS
+
+    _, output = await run(service, "ask", "Sprzedaż", "--user", "7")
+
+    assert "Sprawdzam" not in output
 
 
 async def test_chat_names_the_chart_of_an_answer_in_one_line() -> None:
@@ -593,8 +644,10 @@ def test_openapi_writes_the_api_contract_without_settings(
 
     schema = json.loads(output.read_text(encoding="utf-8"))
     assert code == 0
-    assert set(schema["paths"]) == {"/ask", "/health"}
-    assert {"Response", "ResponseTable", "AskRequest"} <= set(schema["components"]["schemas"])
+    assert set(schema["paths"]) == {"/ask", "/ask/stream", "/health"}
+    assert {"Response", "ResponseTable", "AskRequest", "ProgressEvent"} <= set(
+        schema["components"]["schemas"]
+    )
     assert b"\r\n" not in output.read_bytes()
 
 

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from data_concierge.agent.progress import ProgressListener
 from data_concierge.api.schemas import Response
 from data_concierge.api.service import AskService
 from data_concierge.bootstrap import CompositionRoot
@@ -20,7 +21,13 @@ class StubAskService(AskService):
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    async def ask(self, prompt: str, user_id: int, session_id: str | None = None) -> Response:
+    async def ask(
+        self,
+        prompt: str,
+        user_id: int,
+        session_id: str | None = None,
+        listener: ProgressListener | None = None,
+    ) -> Response:
         self.prompts.append(prompt)
         return Response(status="ok", session_id="s1", message="Gotowe.")
 
@@ -84,7 +91,7 @@ def test_without_a_build_the_root_says_how_to_build_it(tmp_path: Path) -> None:
 def test_the_build_hint_is_not_part_of_the_api_schema(tmp_path: Path) -> None:
     schema = client_for(tmp_path / "missing").get("/openapi.json").json()
 
-    assert set(schema["paths"]) == {"/ask", "/health"}
+    assert set(schema["paths"]) == {"/ask", "/ask/stream", "/health"}
 
 
 @pytest.mark.parametrize("path", ["/", "/assets/app.js"])

@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from pydantic import JsonValue
 
 from data_concierge.agent.formatting import ValueFormatter
+from data_concierge.agent.progress import ProgressEvent
 from data_concierge.api.schemas import (
     ChartKind,
     Clarification,
@@ -96,7 +97,7 @@ class CommandLine:
         except PromptTooLongError as exc:
             self._stderr.write(f"{exc}\n")
             return 1
-        JsonPrinter(self._stdout).answer(prompt, response)
+        JsonPrinter(self._stdout).answer(response)
         return 1 if response.status == "error" else 0
 
     async def chat(self, user_id: int, printer: ResponsePrinter) -> int:
@@ -106,12 +107,15 @@ class CommandLine:
         try:
             for line in self._stdin:
                 if prompt := line.strip():
+                    printer.begin(prompt)
                     try:
-                        response = await self._service.ask(prompt, user_id, session_id)
+                        response = await self._service.ask(
+                            prompt, user_id, session_id, printer.step
+                        )
                     except PromptTooLongError as exc:
                         self._stderr.write(f"{exc}\n")
                     else:
-                        printer.answer(prompt, response)
+                        printer.answer(response)
                         if response.session_id not in session_ids:
                             session_ids.append(response.session_id)
                         # A dropped session cannot be continued, so the next line starts a new one.
@@ -133,7 +137,15 @@ class ResponsePrinter(Protocol):
         """Called before the next prompt is read."""
         ...
 
-    def answer(self, prompt: str, response: Response) -> None: ...
+    def begin(self, prompt: str) -> None:
+        """Called when a prompt is sent, before its steps."""
+        ...
+
+    def step(self, event: ProgressEvent) -> None:
+        """A step of the turn, as it begins (architecture 003, section 8)."""
+        ...
+
+    def answer(self, response: Response) -> None: ...
 
     def close(self, session_ids: Sequence[str]) -> None:
         """Called at the end of standard input with every session of the conversation."""
@@ -151,7 +163,15 @@ class JsonPrinter(ResponsePrinter):
         pass
 
     @override
-    def answer(self, prompt: str, response: Response) -> None:
+    def begin(self, prompt: str) -> None:
+        pass
+
+    @override
+    def step(self, event: ProgressEvent) -> None:
+        """The JSON output stays one document per turn."""
+
+    @override
+    def answer(self, response: Response) -> None:
         self._stdout.write(response.model_dump_json(indent=2) + "\n")
         self._stdout.flush()
 
@@ -161,12 +181,14 @@ class JsonPrinter(ResponsePrinter):
 
 
 class ConversationPrinter(ResponsePrinter):
-    """Prints what the user reads: the message, the tables as aligned text, the assumptions
-    and the clarification question. Provenance and session ids stay in `--diagnostic` and the
-    audit log; the session ids are printed once, at the end, for `data-concierge audit`."""
+    """Prints what the user reads: the steps of the turn while it runs, then the message, the
+    tables as aligned text, the assumptions and the clarification question. Provenance and
+    session ids stay in `--diagnostic` and the audit log; the session ids are printed once, at
+    the end, for `data-concierge audit`."""
 
     MAX_TABLE_ROWS = 20
     PROMPT_MARK = "> "
+    STEP_INDENT = "  "
 
     def __init__(self, stdout: TextIO, interactive: bool) -> None:
         self._stdout = stdout
@@ -181,9 +203,17 @@ class ConversationPrinter(ResponsePrinter):
             self._stdout.flush()
 
     @override
-    def answer(self, prompt: str, response: Response) -> None:
-        lines = [] if self._interactive else [self.PROMPT_MARK + prompt]
-        lines += ["", response.message]
+    def begin(self, prompt: str) -> None:
+        if not self._interactive:
+            self._write([self.PROMPT_MARK + prompt])
+
+    @override
+    def step(self, event: ProgressEvent) -> None:
+        self._write([self.STEP_INDENT + event.text])
+
+    @override
+    def answer(self, response: Response) -> None:
+        lines = ["", response.message]
         for table in response.tables:
             lines += ["", *self._table(table)]
         if response.chart:

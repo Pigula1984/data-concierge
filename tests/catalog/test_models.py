@@ -50,3 +50,9 @@ def test_api_procedures_receive_the_user_id_except_data_range(catalog: Catalog) 
         injected = [param.name for param in entry.params if param.inject is not None]
         expects_user_id = entry.procedure.startswith("api.") and entry.exposed
         assert injected == (["UserId"] if expects_user_id else []), entry.procedure
+
+
+def test_every_exposed_procedure_has_a_progress_step(catalog: Catalog) -> None:
+    missing = [entry.tool for entry in catalog.exposed_entries if not entry.progress]
+
+    assert missing == []
