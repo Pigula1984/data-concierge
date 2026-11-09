@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 
 from data_concierge.agent.progress import ProgressEvent
 from data_concierge.api.schemas import Response
@@ -16,10 +17,16 @@ type StreamItem = ProgressEvent | Response
 class TurnStream:
     """Runs each turn in its own task, so a client that disconnects ends only its stream: the
     turn still saves its session and its audit, like a turn of `POST /ask` (architecture 003,
-    section 8). The stream reads the turn's steps from a queue and ends with its response."""
+    section 8). The stream reads the turn's steps from a queue and ends with its response.
 
-    def __init__(self, service: AskService) -> None:
+    On server shutdown the app's lifespan drains the turns still running, so a turn whose client
+    has gone still saves its session and audit, unless it outlasts `drain_seconds`."""
+
+    DRAIN_SECONDS = 60.0
+
+    def __init__(self, service: AskService, drain_seconds: float = DRAIN_SECONDS) -> None:
         self._service = service
+        self._drain_seconds = drain_seconds
         # The event loop keeps only weak references to tasks, so running turns are kept here.
         self._running: set[asyncio.Task[None]] = set()
 
@@ -41,6 +48,28 @@ class TurnStream:
             yield item
             if isinstance(item, Response):
                 return
+
+    @asynccontextmanager
+    async def lifespan(self, _app: object) -> AsyncIterator[None]:
+        """The app's lifespan: drains the running turns when the server shuts down."""
+        yield
+        await self.drain()
+
+    async def drain(self) -> None:
+        """Waits up to `drain_seconds` for the running turns, then cancels the rest."""
+        if not self._running:
+            return
+        _, pending = await asyncio.wait(set(self._running), timeout=self._drain_seconds)
+        if not pending:
+            return
+        logger.warning(
+            "%d streamed turns cancelled on shutdown after %.0f s",
+            len(pending),
+            self._drain_seconds,
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.wait(pending)
 
     async def _turn(
         self,

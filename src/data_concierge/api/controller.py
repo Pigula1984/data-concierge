@@ -7,14 +7,14 @@ is status `error` in a 200 response, because a turn never raises.
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse
 from pydantic import BaseModel
 
 from data_concierge.api.schemas import Response
 from data_concierge.api.service import AskService
 from data_concierge.api.stream import StreamItem, TurnStream
-from data_concierge.core.errors import PromptTooLongError
 
 
 class AskRequest(BaseModel, frozen=True):
@@ -35,10 +35,7 @@ def ask_service(request: Request) -> AskService:
 # module-level: a FastAPI handler.
 @router.post("/ask")
 async def ask(body: AskRequest, service: Annotated[AskService, Depends(ask_service)]) -> Response:
-    try:
-        return await service.ask(body.prompt, body.user_id, body.session_id)
-    except PromptTooLongError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    return await service.ask(body.prompt, body.user_id, body.session_id)
 
 
 # module-level: a FastAPI dependency; the composition root puts the stream in the app state.
@@ -51,10 +48,7 @@ def turn_stream(request: Request) -> TurnStream:
 def checked_request(
     body: AskRequest, service: Annotated[AskService, Depends(ask_service)]
 ) -> AskRequest:
-    try:
-        service.check_prompt(body.prompt)
-    except PromptTooLongError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    service.check_prompt(body.prompt)
     return body
 
 
@@ -70,6 +64,12 @@ async def ask_stream(
     a failed turn."""
     async for item in stream.events(body.prompt, body.user_id, body.session_id):
         yield item
+
+
+# module-level: a FastAPI exception handler, registered with the app; one place for both endpoints.
+async def prompt_too_long(_request: Request, exc: Exception) -> JSONResponse:
+    """A prompt over the limit gets 422 with the reason as text, like FastAPI's HTTPException."""
+    return JSONResponse({"detail": str(exc)}, status.HTTP_422_UNPROCESSABLE_CONTENT)
 
 
 # module-level: a FastAPI handler.

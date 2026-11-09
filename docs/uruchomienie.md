@@ -75,7 +75,7 @@ Scenariusz krok po kroku dla interfejsu w przeglądarce. Polecenia są dla Power
 
 ## Zatrzymywanie
 
-1. **Serwer.** W oknie uvicorna naciśnij `Ctrl+C`. To zatrzymuje także interfejs, bo ten sam serwer go serwuje. Kartę przeglądarki możesz zamknąć albo zostawić.
+1. **Serwer.** W oknie uvicorna naciśnij `Ctrl+C`. To zatrzymuje także interfejs, bo ten sam serwer go serwuje. Jeśli jakaś tura jeszcze trwa, np. po przeładowaniu strony, serwer czeka na nią do 60 s, żeby zapisała sesję i log audytowy. Kartę przeglądarki możesz zamknąć albo zostawić.
 2. **SQL Server (opcjonalnie).** Usługa może działać dalej. Jeśli chcesz ją wyłączyć, w PowerShellu jako administrator:
 
    ```powershell
